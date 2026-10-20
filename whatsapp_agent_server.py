@@ -1,17 +1,19 @@
 """
 ShieldBot AI - WhatsApp Autonomous Agent Server
-Powered by Google Gemini (gemini-3.8-flash with auto-fallback to gemini-2.5-flash)
+Powered by Google Gemini (gemini-3.8-flash with auto-retry and resilient fallback)
 Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering Systems
 """
 
 import os
 import sqlite3
 import re
+import time
 from datetime import datetime
 from fastapi import FastAPI, Request
 import httpx
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 
 app = FastAPI(title="ShieldBot AI - WhatsApp Agent")
 
@@ -25,9 +27,12 @@ KOSHERPLAY_API_TOKEN = os.getenv("KOSHERPLAY_API_TOKEN", "").strip()
 # ----------------- Gemini Client Setup -----------------
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-ACTIVE_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash"]
+# Active models: gemini-3.8-flash is the primary supported model
+ACTIVE_MODELS = ["gemini-3.8-flash"]
+
 DB_PATH = "agent_memory.db"
 
+# ----------------- Database Initialization -----------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -80,7 +85,9 @@ def init_db():
 
 init_db()
 
+# ----------------- Helper Functions -----------------
 def send_whatsapp_message(phone: str, text: str) -> bool:
+    """Sends outgoing message via Green-API or compatible WhatsApp Gateway."""
     clean_phone = re.sub(r"[^0-9]", "", phone)
     if not clean_phone or not WHATSAPP_API_URL:
         print(f"[WhatsApp DryRun] To {clean_phone}: {text}")
@@ -101,6 +108,7 @@ def send_whatsapp_message(phone: str, text: str) -> bool:
         return False
 
 def get_learned_knowledge() -> str:
+    """Fetches custom knowledge rules taught by the admin."""
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT keywords, answer FROM learned_kb").fetchall()
     conn.close()
@@ -109,6 +117,7 @@ def get_learned_knowledge() -> str:
     return "\n".join([f"- מילות זיהוי ({r[0]}): ענה: {r[1]}" for r in rows])
 
 def lookup_subscriber(phone: str) -> dict:
+    """Checks subscriber status in NetSpark & KosherPlay databases."""
     digits = re.sub(r"[^0-9]", "", phone)
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute(
@@ -130,6 +139,7 @@ def lookup_subscriber(phone: str) -> dict:
         }
     return {"found": False}
 
+# ----------------- Routes -----------------
 @app.get("/")
 def health_check():
     return {
@@ -142,11 +152,15 @@ def health_check():
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(req: Request):
+    """
+    Main Webhook receiving incoming WhatsApp messages from Green-API or Meta Cloud API.
+    """
     try:
         payload = await req.json()
     except Exception:
         return {"ok": False, "error": "Invalid JSON"}
 
+    # Extract Sender Phone & Message Text
     sender_data = payload.get("senderData", {})
     sender_phone = sender_data.get("chatId", "").replace("@c.us", "") or payload.get("senderPhone", "")
     message_data = payload.get("messageData", {})
@@ -158,6 +172,7 @@ async def whatsapp_webhook(req: Request):
 
     print(f"[Incoming WhatsApp] From {sender_phone}: {message_text}")
 
+    # 1. Admin Learning Loop: Admin answering an escalated question
     clean_admin = re.sub(r"[^0-9]", "", ADMIN_WHATSAPP_PHONE)
     clean_sender = re.sub(r"[^0-9]", "", sender_phone)
 
@@ -188,6 +203,7 @@ async def whatsapp_webhook(req: Request):
         send_whatsapp_message(sender_phone, "✅ התשובה נשמרה במאגר הידע של הסוכן ונשלחה ללקוח!")
         return {"ok": True, "admin_action": "knowledge_saved"}
 
+    # 2. Check Subscriber Status in DB
     sub_info = lookup_subscriber(sender_phone)
     subscriber_context = (
         f"פרטי מנוי מאומת: שם {sub_info['name']}, מערכת {sub_info['system']}, "
@@ -198,6 +214,7 @@ async def whatsapp_webhook(req: Request):
 
     learned_rules = get_learned_knowledge()
 
+    # 3. Call Gemini with automatic retry for 503 temporary demand spikes
     reply_text = None
     used_model = None
 
@@ -240,35 +257,51 @@ async def whatsapp_webhook(req: Request):
 
 הנחיות מענה ושירות:
 - ענה ישירות לשאלת הלקוח בסבר פנים יפות.
+- אם הלקוח שואל על כשר פליי: פרט את שני המסלולים (בסיסי ב-250 ₪ חד פעמי מול מורחב ב-180 ₪ התקנה + 200/300 ₪ לשנה), והסבר בבירור מה כולל כל מסלול ואת ההבדל במדיניות החלפת מכשיר.
 - אם הלקוח מבקש לשנות רמת סינון בנטספרק, אשר שהרמה שונתה בהצלחה במכשיר.
 - אם הלקוח מבקש לפתוח אתר מסוים (כגון btl.gov.il, אתרי ממשלה, בנקים), אשר שהאתר נוסף לרשימה המאושרת במכשירו.
 - אם לקוח מתעניין במסלול הבסיסי, ציין את יתרון המחיר החד-פעמי (250 ₪), אך הדגש שבמסלול המורחב (180 ₪ התקנה + 200 ₪ לשנה) מקבלים 20,000 אפליקציות, יוטיוב וספוטיפי כשרים, ובעיקר: כשיחליף מכשיר בעתיד הרישיון נשמר לו ויעבור בחינם (ישלם רק 180 ₪ התקנה במקום רישיון מחדש).
 - אם נשאלת שאלה חריגה שאינך יודע בוודאות, ציין שפנייתו הועברה לבדיקת מנהל המערכת ונחזור אליו בהקדם.
 """
         for model_candidate in ACTIVE_MODELS:
-            try:
-                response = client.models.generate_content(
-                    model=model_candidate,
-                    contents=f"לקוח מספר {sender_phone} כתב בווצאפ: {message_text}",
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        temperature=0.2,
+            # Try up to 3 attempts with brief backoff for 503 high demand spikes
+            for attempt in range(1, 4):
+                try:
+                    response = client.models.generate_content(
+                        model=model_candidate,
+                        contents=f"לקוח מספר {sender_phone} כתב בווצאפ: {message_text}",
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                            temperature=0.2,
+                        )
                     )
-                )
-                if response and response.text:
-                    reply_text = response.text.strip()
-                    used_model = model_candidate
-                    print(f"[Gemini Success] Answered with model: {model_candidate}")
+                    if response and response.text:
+                        reply_text = response.text.strip()
+                        used_model = model_candidate
+                        print(f"[Gemini Success] Answered with model: {model_candidate} (attempt {attempt})")
+                        break
+                except APIError as api_err:
+                    print(f"[Gemini APIError on {model_candidate} - attempt {attempt}]: {api_err}")
+                    # If 503 (temporary high demand spike), wait briefly and retry
+                    if api_err.code == 503 and attempt < 3:
+                        time.sleep(1.5 * attempt)
+                        continue
                     break
-            except Exception as exc:
-                print(f"[Gemini Error on {model_candidate}]: {exc}")
+                except Exception as exc:
+                    print(f"[Gemini Unexpected Error on {model_candidate} - attempt {attempt}]: {exc}")
+                    break
+            
+            if reply_text:
+                break
 
+    # Fallback if AI generation temporarily unavailable
     if not reply_text:
         reply_text = (
             f"שלום! קיבלתי את הודעתך בנוגע ל-{message_text[:30]}. "
             f"הבקשה נקלטה במוקד השירות וההגנה (נטספרק וכשר פליי) ונציג יחזור אליך בהקדם."
         )
 
+    # 4. Save Request to DB for Reports
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
@@ -286,5 +319,6 @@ async def whatsapp_webhook(req: Request):
     conn.commit()
     conn.close()
 
+    # 5. Send WhatsApp Reply back to customer
     send_whatsapp_message(sender_phone, reply_text)
     return {"ok": True, "reply": reply_text, "model": used_model}
