@@ -301,7 +301,18 @@ async def whatsapp_webhook(req: Request):
             f"הבקשה נקלטה במוקד השירות וההגנה (נטספרק וכשר פליי) ונציג יחזור אליך בהקדם."
         )
 
-    # 4. Save Request to DB for Reports
+    # 4. Check if escalation to Admin is required (Unknown question)
+    is_escalation = (
+        "מנהל המערכת" in reply_text
+        or "אבדוק מול" in reply_text
+        or "לבדיקת מנהל" in reply_text
+        or "נחזור אליך בהקדם" in reply_text
+    )
+
+    request_status = "pending" if is_escalation else "handled"
+    action_note = f"מענה אוטונומי ({used_model or 'fallback'})"
+
+    # Save Request to DB for Reports
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
@@ -310,9 +321,9 @@ async def whatsapp_webhook(req: Request):
             sender_phone,
             sub_info.get("system", "כללי"),
             message_text,
-            f"מענה אוטונומי ({used_model or 'fallback'})",
+            action_note,
             "הצעה מותאמת לפי מסלול",
-            "handled",
+            request_status,
             datetime.now().isoformat()
         )
     )
@@ -321,4 +332,17 @@ async def whatsapp_webhook(req: Request):
 
     # 5. Send WhatsApp Reply back to customer
     send_whatsapp_message(sender_phone, reply_text)
-    return {"ok": True, "reply": reply_text, "model": used_model}
+
+    # 6. If escalated, immediately ping the Admin on WhatsApp
+    if is_escalation and clean_admin and clean_sender != clean_admin:
+        admin_alert = (
+            f"❓ *שאלה חדשה מלקוח שהסוכן לא ידע לענות:*\n"
+            f"📱 לקוח: {sender_phone} ({sub_info.get('name', 'לא רשום')})\n"
+            f"💬 שאלה: \"{message_text}\"\n\n"
+            f"כדי לענות ללקוח וללמד את הסוכן לפעמים הבאות, השב להודעה זו בפורמט:\n"
+            f"תשובה: [התשובה שלך ללקוח] | מילות מפתח: [מילים לזיהוי]"
+        )
+        send_whatsapp_message(clean_admin, admin_alert)
+        print(f"[Admin Escalation Sent] Alerted admin ({clean_admin}) for inquiry from {sender_phone}")
+
+    return {"ok": True, "reply": reply_text, "model": used_model, "escalated": is_escalation}
