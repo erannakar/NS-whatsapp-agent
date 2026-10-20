@@ -1,0 +1,1 @@
+fastapi>=0.110.0\nuvicorn>=0.28.0\ngoogle-genai>=0.1.1\nhttpx>=0.27.0\npydantic>=2.0.0\n
