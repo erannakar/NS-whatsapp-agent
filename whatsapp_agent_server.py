@@ -41,11 +41,13 @@ init_db()
 
 def send_whatsapp_message(phone: str, text: str):
     if not WHATSAPP_API_URL:
+        print("[Warning] WHATSAPP_API_URL is not set!")
         return
     try:
-        httpx.post(WHATSAPP_API_URL, json={"chatId": f"{phone}@c.us", "message": text}, timeout=10)
+        r = httpx.post(WHATSAPP_API_URL, json={"chatId": f"{phone}@c.us", "message": text}, timeout=10)
+        print(f"[WhatsApp Sent] To: {phone}, Status: {r.status_code}")
     except Exception as exc:
-        print(f"Error: {exc}")
+        print(f"[WhatsApp Error]: {exc}")
 
 @app.get("/")
 def health():
@@ -62,18 +64,24 @@ async def whatsapp_webhook(req: Request):
     if not sender_phone or not message_text:
         return {"ok": True}
 
+    print(f"[Incoming WhatsApp] From {sender_phone}: {message_text}")
+
+    reply_text = "שלום! פנייתך התקבלה במוקד."
     if client:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=f"לקוח {sender_phone}: {message_text}",
-            config=types.GenerateContentConfig(
-                system_instruction="אתה נציג שירות ומכירות מקצועי של חברת סינון והגנה (נטספרק וכשר פליי). ענה בעברית אדיבה וקצרה.",
-                temperature=0.2,
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=f"לקוח {sender_phone}: {message_text}",
+                config=types.GenerateContentConfig(
+                    system_instruction="אתה נציג שירות ומכירות מקצועי של חברת סינון והגנה (נטספרק וכשר פליי). ענה בעברית אדיבה וקצרה.",
+                    temperature=0.2,
+                )
             )
-        )
-        reply_text = response.text or "פנייתך התקבלה ומטופלת."
-    else:
-        reply_text = "שלום! פנייתך התקבלה במוקד."
+            if response and response.text:
+                reply_text = response.text
+        except Exception as exc:
+            print(f"[Gemini Error]: {exc}")
+            reply_text = "שלום! פנייתך התקבלה במוקד ההגנה והסינון (נטספרק וכשר פליי). כיצד נוכל לעזור?"
 
     send_whatsapp_message(sender_phone, reply_text)
     return {"ok": True, "reply": reply_text}
