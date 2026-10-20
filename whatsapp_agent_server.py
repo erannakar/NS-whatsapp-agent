@@ -1,1 +1,79 @@
-import os\nimport sqlite3\nfrom datetime import datetime\nfrom fastapi import FastAPI, Request\nimport httpx\nfrom google import genai\nfrom google.genai import types\n\napp = FastAPI(title="ShieldBot AI - WhatsApp Agent")\n\nGEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")\nWHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL", "")\nADMIN_WHATSAPP_PHONE = os.getenv("ADMIN_WHATSAPP_PHONE", "972500000000")\n\nclient = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None\nDB_PATH = "agent_memory.db"\n\ndef init_db():\n    conn = sqlite3.connect(DB_PATH)\n    c = conn.cursor()\n    c.execute("""CREATE TABLE IF NOT EXISTS learned_kb (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        keywords TEXT,\n        answer TEXT,\n        created_at TEXT\n    )""")\n    c.execute("""CREATE TABLE IF NOT EXISTS customer_requests (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        phone TEXT,\n        system_name TEXT,\n        request_text TEXT,\n        action_taken TEXT,\n        upsell_offer TEXT,\n        status TEXT,\n        created_at TEXT\n    )""")\n    conn.commit()\n    conn.close()\n\ninit_db()\n\ndef send_whatsapp_message(phone: str, text: str):\n    if not WHATSAPP_API_URL:\n        return\n    try:\n        httpx.post(WHATSAPP_API_URL, json={"chatId": f"{phone}@c.us", "message": text}, timeout=10)\n    except Exception as exc:\n        print(f"Error: {exc}")\n\n@app.get("/")\ndef health():\n    return {"status": "ok", "agent": "ShieldBot AI"}\n\n@app.post("/webhook/whatsapp")\nasync def whatsapp_webhook(req: Request):\n    payload = await req.json()\n    sender_data = payload.get("senderData", {})\n    sender_phone = sender_data.get("chatId", "").replace("@c.us", "") or payload.get("senderPhone", "")\n    message_data = payload.get("messageData", {})\n    message_text = message_data.get("textMessageData", {}).get("textMessage", "") or payload.get("text", "")\n\n    if not sender_phone or not message_text:\n        return {"ok": True}\n\n    if client:\n        response = client.models.generate_content(\n            model="gemini-2.5-flash",\n            contents=f"לקוח {sender_phone}: {message_text}",\n            config=types.GenerateContentConfig(\n                system_instruction="אתה נציג שירות ומכירות מקצועי של חברת סינון והגנה (נטספרק וכשר פליי). ענה בעברית אדיבה וקצרה.",\n                temperature=0.2,\n            )\n        )\n        reply_text = response.text or "פנייתך התקבלה ומטופלת."\n    else:\n        reply_text = "שלום! פנייתך התקבלה במוקד."\n\n    send_whatsapp_message(sender_phone, reply_text)\n    return {"ok": True, "reply": reply_text}\n
+import os
+import sqlite3
+from datetime import datetime
+from fastapi import FastAPI, Request
+import httpx
+from google import genai
+from google.genai import types
+
+app = FastAPI(title="ShieldBot AI - WhatsApp Agent")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL", "")
+ADMIN_WHATSAPP_PHONE = os.getenv("ADMIN_WHATSAPP_PHONE", "972500000000")
+
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+DB_PATH = "agent_memory.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS learned_kb (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        keywords TEXT,
+        answer TEXT,
+        created_at TEXT
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS customer_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone TEXT,
+        system_name TEXT,
+        request_text TEXT,
+        action_taken TEXT,
+        upsell_offer TEXT,
+        status TEXT,
+        created_at TEXT
+    )""")
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def send_whatsapp_message(phone: str, text: str):
+    if not WHATSAPP_API_URL:
+        return
+    try:
+        httpx.post(WHATSAPP_API_URL, json={"chatId": f"{phone}@c.us", "message": text}, timeout=10)
+    except Exception as exc:
+        print(f"Error: {exc}")
+
+@app.get("/")
+def health():
+    return {"status": "ok", "agent": "ShieldBot AI"}
+
+@app.post("/webhook/whatsapp")
+async def whatsapp_webhook(req: Request):
+    payload = await req.json()
+    sender_data = payload.get("senderData", {})
+    sender_phone = sender_data.get("chatId", "").replace("@c.us", "") or payload.get("senderPhone", "")
+    message_data = payload.get("messageData", {})
+    message_text = message_data.get("textMessageData", {}).get("textMessage", "") or payload.get("text", "")
+
+    if not sender_phone or not message_text:
+        return {"ok": True}
+
+    if client:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"לקוח {sender_phone}: {message_text}",
+            config=types.GenerateContentConfig(
+                system_instruction="אתה נציג שירות ומכירות מקצועי של חברת סינון והגנה (נטספרק וכשר פליי). ענה בעברית אדיבה וקצרה.",
+                temperature=0.2,
+            )
+        )
+        reply_text = response.text or "פנייתך התקבלה ומטופלת."
+    else:
+        reply_text = "שלום! פנייתך התקבלה במוקד."
+
+    send_whatsapp_message(sender_phone, reply_text)
+    return {"ok": True, "reply": reply_text}
