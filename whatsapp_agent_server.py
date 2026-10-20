@@ -70,7 +70,7 @@ async def whatsapp_webhook(req: Request):
     if client:
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-1.5-flash",
                 contents=f"לקוח {sender_phone}: {message_text}",
                 config=types.GenerateContentConfig(
                     system_instruction="אתה נציג שירות ומכירות מקצועי של חברת סינון והגנה (נטספרק וכשר פליי). ענה בעברית אדיבה וקצרה.",
