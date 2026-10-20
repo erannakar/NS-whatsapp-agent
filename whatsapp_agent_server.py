@@ -1,6 +1,6 @@
 """
 ShieldBot AI - WhatsApp Autonomous Agent Server
-Powered by Google Gemini 2.5 Flash
+Powered by Google Gemini (gemini-3.8-flash with auto-fallback)
 Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering Systems
 """
 
@@ -13,19 +13,19 @@ import httpx
 from google import genai
 from google.genai import types
 
-app = FastAPI(title="ShieldBot AI - WhatsApp Agent (Gemini 2.5 Flash)")
+app = FastAPI(title="ShieldBot AI - WhatsApp Agent")
 
 # ----------------- Environment Variables -----------------
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL", "")
-ADMIN_WHATSAPP_PHONE = os.getenv("ADMIN_WHATSAPP_PHONE", "972500000000")
-NETSPARK_API_TOKEN = os.getenv("NETSPARK_API_TOKEN", "")
-KOSHERPLAY_API_TOKEN = os.getenv("KOSHERPLAY_API_TOKEN", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip().strip('"').strip("'")
+WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL", "").strip().strip('"').strip("'")
+ADMIN_WHATSAPP_PHONE = os.getenv("ADMIN_WHATSAPP_PHONE", "972500000000").strip().strip('"').strip("'")
+NETSPARK_API_TOKEN = os.getenv("NETSPARK_API_TOKEN", "").strip()
+KOSHERPLAY_API_TOKEN = os.getenv("KOSHERPLAY_API_TOKEN", "").strip()
 
 # ----------------- Gemini Client Setup -----------------
-# Uses the active, low-latency, free-tier compatible Gemini 2.5 Flash model
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-MODEL_NAME = "gemini-2.5-flash"
+
+ACTIVE_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash"]
 
 DB_PATH = "agent_memory.db"
 
@@ -66,7 +66,6 @@ def init_db():
             renewal_date TEXT
         )
     """)
-    # Seed default sample data if table is empty
     c.execute("SELECT COUNT(*) FROM subscribers")
     if c.fetchone()[0] == 0:
         c.executemany("""
@@ -84,7 +83,6 @@ init_db()
 
 # ----------------- Helper Functions -----------------
 def send_whatsapp_message(phone: str, text: str) -> bool:
-    """Sends outgoing message via Green-API or compatible WhatsApp Gateway."""
     clean_phone = re.sub(r"[^0-9]", "", phone)
     if not clean_phone or not WHATSAPP_API_URL:
         print(f"[WhatsApp DryRun] To {clean_phone}: {text}")
@@ -105,7 +103,6 @@ def send_whatsapp_message(phone: str, text: str) -> bool:
         return False
 
 def get_learned_knowledge() -> str:
-    """Fetches custom knowledge rules taught by the admin."""
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT keywords, answer FROM learned_kb").fetchall()
     conn.close()
@@ -114,7 +111,6 @@ def get_learned_knowledge() -> str:
     return "\n".join([f"- מילות זיהוי ({r[0]}): ענה: {r[1]}" for r in rows])
 
 def lookup_subscriber(phone: str) -> dict:
-    """Checks subscriber status in NetSpark & KosherPlay databases."""
     digits = re.sub(r"[^0-9]", "", phone)
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute(
@@ -142,21 +138,18 @@ def health_check():
     return {
         "status": "online",
         "service": "ShieldBot AI WhatsApp Agent",
-        "model": MODEL_NAME,
-        "engine": "Google Gemini 2.5 Flash"
+        "models": ACTIVE_MODELS,
+        "has_gemini_key": bool(GEMINI_API_KEY),
+        "has_whatsapp_url": bool(WHATSAPP_API_URL)
     }
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(req: Request):
-    """
-    Main Webhook receiving incoming WhatsApp messages from Green-API or Meta Cloud API.
-    """
     try:
         payload = await req.json()
     except Exception:
         return {"ok": False, "error": "Invalid JSON"}
 
-    # Extract Sender Phone & Message Text
     sender_data = payload.get("senderData", {})
     sender_phone = sender_data.get("chatId", "").replace("@c.us", "") or payload.get("senderPhone", "")
     message_data = payload.get("messageData", {})
@@ -168,7 +161,6 @@ async def whatsapp_webhook(req: Request):
 
     print(f"[Incoming WhatsApp] From {sender_phone}: {message_text}")
 
-    # 1. Admin Learning Loop: Admin answering an escalated question
     clean_admin = re.sub(r"[^0-9]", "", ADMIN_WHATSAPP_PHONE)
     clean_sender = re.sub(r"[^0-9]", "", sender_phone)
 
@@ -182,7 +174,6 @@ async def whatsapp_webhook(req: Request):
             "INSERT INTO learned_kb (keywords, answer, created_at) VALUES (?, ?, ?)",
             (keywords, admin_answer, datetime.now().isoformat())
         )
-        # Find last pending customer and answer them
         last_pending = conn.execute(
             "SELECT id, phone FROM customer_requests WHERE status='pending' ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -200,7 +191,6 @@ async def whatsapp_webhook(req: Request):
         send_whatsapp_message(sender_phone, "✅ התשובה נשמרה במאגר הידע של הסוכן ונשלחה ללקוח!")
         return {"ok": True, "admin_action": "knowledge_saved"}
 
-    # 2. Check Subscriber Status in DB
     sub_info = lookup_subscriber(sender_phone)
     subscriber_context = (
         f"פרטי מנוי מאומת: שם {sub_info['name']}, מערכת {sub_info['system']}, "
@@ -211,7 +201,9 @@ async def whatsapp_webhook(req: Request):
 
     learned_rules = get_learned_knowledge()
 
-    # 3. Call Gemini 2.5 Flash for dynamic Hebrew AI response
+    reply_text = None
+    used_model = None
+
     if client:
         system_instruction = f"""
 אתה סוכן שירות ומכירות אוטונומי ומומחה ("ShieldBot AI") של חברת סינון והגנה מובילה (נטספרק - NetSpark וכשר פליי - KosherPlay).
@@ -219,13 +211,13 @@ async def whatsapp_webhook(req: Request):
 
 נתוני המערכות שברשותך:
 1. רמות הגנה בנטספרק:
-   • רחבה (שמרני/תורני) - סינון קפדני מאוד.
-   • מתקדמת (מאוזן) - חוסם תכנים לא הולמים, מאפשר יוטיוב ורשתות.
-   • בסיסית (פתוחה) - חוסם רק פורנוגרפיה ואלימות.
+   • רחבה (שמרני/תורני) - סינון קפדני מאוד של כל האתרים, חדשות תורניות בלבד.
+   • מתקדמת (מאוזן) - חוסם תכנים לא הולמים, מאפשר יוטיוב ורשתות בצורה מסוננת.
+   • בסיסית (פתוחה) - חוסם רק פורנוגרפיה ואלימות קשה.
    • מותאמת אישית / חסימה כוללת.
 2. מסלולי כשר פליי:
-   • סינון המכשיר ($45 לשנה) - אפליקציות שימושיות, בנקים, קופות חולים.
-   • סינון + תוספת דפדפן מסונן ($70 לשנה) - כולל דפדפן מאובטח.
+   • סינון המכשיר ($45 לשנה) - אפליקציות שימושיות, בנקים, קופות חולים, חנות מסוננת.
+   • סינון + תוספת דפדפן מסונן ($70 לשנה) - כולל דפדפן מאובטח לגלישה באתרים מאושרים.
    • סינון למחשב ($55 לשנה) - רשימת אתרים מותרת (Whitelist) וסינון תמונות.
 3. מצב הלקוח הנוכחי:
    {subscriber_context}
@@ -239,26 +231,30 @@ async def whatsapp_webhook(req: Request):
 - שלב בסיום הצעת שדרוג רלוונטית וקצרה (Upsell) בעדינות.
 - אם נשאלת שאלה חריגה שאינך יודע בוודאות, ציין שפנייתו מועברת לבדיקת מנהל ותחזור אליו בהקדם.
 """
-        try:
-            response = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=f"לקוח מספר {sender_phone} כתב בווצאפ: {message_text}",
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    temperature=0.2,
+        for model_candidate in ACTIVE_MODELS:
+            try:
+                response = client.models.generate_content(
+                    model=model_candidate,
+                    contents=f"לקוח מספר {sender_phone} כתב בווצאפ: {message_text}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.2,
+                    )
                 )
-            )
-            reply_text = response.text.strip() if response.text else "שלום! פנייתך התקבלה ומטופלת."
-        except Exception as exc:
-            print(f"[Gemini Error]: {exc}")
-            reply_text = (
-                f"שלום! קיבלתי את הודעתך בנוגע ל-{message_text[:30]}. "
-                f"הבקשה נקלטה במערכת ההגנה של מוקד נטספרק וכשר פליי ונציג יחזור אליך במידת הצורך."
-            )
-    else:
-        reply_text = "שלום! פנייתך התקבלה במוקד שירות והגנה של נטספרק וכשר פליי."
+                if response and response.text:
+                    reply_text = response.text.strip()
+                    used_model = model_candidate
+                    print(f"[Gemini Success] Answered with model: {model_candidate}")
+                    break
+            except Exception as exc:
+                print(f"[Gemini Error on {model_candidate}]: {exc}")
 
-    # 4. Save Request to DB for Reports
+    if not reply_text:
+        reply_text = (
+            f"שלום! קיבלתי את הודעתך בנוגע ל-{message_text[:30]}. "
+            f"הבקשה נקלטה במערכת ההגנה של מוקד נטספרק וכשר פליי ונציג יחזור אליך במידת הצורך."
+        )
+
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
@@ -267,7 +263,7 @@ async def whatsapp_webhook(req: Request):
             sender_phone,
             sub_info.get("system", "כללי"),
             message_text,
-            "מענה אוטונומי Gemini 2.5 Flash",
+            f"מענה אוטונומי ({used_model or 'fallback'})",
             "שדרוג דפדפן / מחשב ביתי",
             "handled",
             datetime.now().isoformat()
@@ -276,6 +272,5 @@ async def whatsapp_webhook(req: Request):
     conn.commit()
     conn.close()
 
-    # 5. Send WhatsApp Reply back to customer
     send_whatsapp_message(sender_phone, reply_text)
-    return {"ok": True, "reply": reply_text, "model": MODEL_NAME}
+    return {"ok": True, "reply": reply_text, "model": used_model}
