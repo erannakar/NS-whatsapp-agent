@@ -72,6 +72,16 @@ def init_db():
             updated_at TEXT
         )
     """)
+    # Conversation History Memory: Retains recent chat context per customer
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS conversation_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone TEXT,
+            role TEXT,
+            message TEXT,
+            created_at TEXT
+        )
+    """)
     # Subscribers (NetSpark & KosherPlay)
     c.execute("""
         CREATE TABLE IF NOT EXISTS subscribers (
@@ -191,6 +201,41 @@ def save_contact_name(phone: str, name: str):
     """, (clean_phone, clean_name, datetime.now().isoformat(), datetime.now().isoformat()))
     conn.commit()
     conn.close()
+
+def save_chat_message(phone: str, role: str, text: str):
+    """Saves a conversation turn to SQLite for persistent chat memory."""
+    clean_phone = re.sub(r"[^0-9]", "", phone)
+    clean_text = text.strip()
+    if not clean_phone or not clean_text:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        INSERT INTO conversation_history (phone, role, message, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (clean_phone, role, clean_text, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+def get_recent_chat_history(phone: str, limit: int = 6) -> str:
+    """Retrieves recent conversation history to provide conversational context to the LLM."""
+    clean_phone = re.sub(r"[^0-9]", "", phone)
+    if not clean_phone:
+        return ""
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("""
+        SELECT role, message FROM conversation_history
+        WHERE phone = ?
+        ORDER BY id DESC LIMIT ?
+    """, (clean_phone, limit)).fetchall()
+    conn.close()
+    if not rows:
+        return ""
+    rows.reverse()
+    lines = []
+    for r, msg in rows:
+        sender = "לקוח" if r == "customer" else "סוכן"
+        lines.append(f"[{sender}]: {msg}")
+    return "\n".join(lines)
 
 def extract_name_from_text(text: str) -> str:
     """Extracts customer first name if explicitly stated in message."""
@@ -340,20 +385,29 @@ async def whatsapp_webhook(req: Request):
 אתה סוכן אישי אנושי, חם, מקצועי וענייני בווצאפ ("ShieldBot AI").
 סגנון דיבור וכללי יסוד חקוקים בסלע:
 ==================================================
-1. שפה יומיומית, טבעית, בהירה ושלמה (איסור מוחלט על חיתוך מילים!):
+1. שפה יומיומית, טבעית, בהירה ושלמה (איסור מוחלט על לופים ואיסור על חיתוך מילים!):
    • מענה קצר, ענייני, ומעשי: 1 עד 3 שורות/משפטים ברורים בלבד.
-   • חובה קדושה: לסיים תמיד כל מילה וכל משפט במלואם עם סימן פיסוק תקין. לעולם אל תחתוך מילה באמצע (כמו "כן בו" או "תגי")! ודא שכל המסר הועבר במלואו ללקוח.
+   • חובה קדושה: לסיים תמיד כל מילה וכל משפט במלואם עם סימן פיסוק תקין.
+   • זיכרון שיחה מלא ומניעת לופים: קרא תמיד את היסטוריית השיחה המצורפת!
+     - אם הלקוח כבר אמר מה הוא צריך (למשל החלפת מסך) או איזה דגם יש לו (למשל F21 Pro) — אסור בשום אופן לשאול אותו שוב "במה אוכל לעזור לך?" או "איזה שירות תרצה לעשות?" או "איזה דגם יש לך?"!
+     - חבר מיד את המידע שכבר נמסר בהודעות הקודמות ותן תשובה ישירה וקונקרטית לשאלה שלו!
    • קיצור אמיתי פירושו תמציתיות ולא קטיעת מילים: אין לשלוח גליונות או מגילות של טקסט שלאף אחד אין סבלנות לקרוא, אלא אם הלקוח ביקש במפורש פירוט.
    • אסור להשתמש בתבניות תקליט, שפת מערכת מנוכרת או הודעות פורמליות של מוקדנים. דבר בגובה העיניים כאיש צוות שמטפל אישית בפנייה.
    • {name_instruction}
    • כל המחירים בשקלים חדשים (₪) בלבד. אין אזכור לדולרים ($).
 
 2. שירותי מעבדה ותיקונים (מסכים, שקעי טעינה, סוללות):
-   • אנו מתקנים מסכים שבורים לכל סוגי המכשירים: מכשירי מקשים (כולל שיאומי מקשים / Qin / Q1 / F21 / F22 וכו) וסמארטפונים!
+   • אנו מתקנים ומחליפים מסכים שבורים לכל סוגי המכשירים: מכשירי מקשים (כולל שיאומי מקשים / Qin 1s / F21 / F21 Pro / F22 וכו) וסמארטפונים!
    • בנוסף: תיקון שקעי טעינה, החלפת סוללות, תיקוני לוח, פריצות כשרות, והתקנת גרסאות כשרות.
-   • אם לקוח שואל אם יש מסך או אם מתקנים: אשר בביטחון ובמילים שלמות: "בוודאי! אנחנו מתקנים מסכים לכל מכשירי המקשים והסמארטפונים."
-   • אם שואל כמה עולה או שואל על מכשיר ללא דגם: שאל איזה דגם מדויק יש לו ואיך קוראים לו (אם אינו ידוע) כדי לתת מחיר ולהתקדם.
-   • לעולם אל תגיד שאנו לא מתקנים! יש לנו מעבדה מלאה!
+   • מחירון מעבדה לדגמים נפוצים:
+     - החלפת מסך לשיאומי מקשים / Qin F21 Pro / F22: סביב 180 עד 250 ₪ (כולל עבודה ואחריות).
+     - החלפת מסך לסמארטפונים: סביב 250 עד 450 ₪ (תלוי דגם).
+     - תיקון שקע טעינה: סביב 120 עד 180 ₪.
+     - החלפת סוללה: סביב 100 עד 150 ₪.
+   • איך עונים כשלקוח מוסר דגם ותקלה (למשל ערן עם מסך ל-Qin F21 Pro):
+     ענה לו מיד תשובה עניינית שמחברת את הכל:
+     "בוודאי, אנחנו מחליפים מסכים ל-Qin F21 Pro (עלות התיקון נעה סביב 200–250 ₪). אני בודק כעת זמינות מדויקת של המסך במלאי המעבדה ומיד חוזר אליך."
+     וצרף בסוף הודעתך תגית: [ESCALATE: מחיר וזמינות מסך F21 Pro לערן].
 
 3. מחירון ומסלולים:
    • כשר פליי בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, ~200 אפליקציות כשרות חיוניות). רישיון פעיל על המכשיר בלבד.
@@ -385,11 +439,20 @@ async def whatsapp_webhook(req: Request):
                 pass
         gen_config = types.GenerateContentConfig(**config_args) if types else None
 
+        recent_history = get_recent_chat_history(sender_phone, limit=6)
+        if recent_history:
+            prompt_content = f"""היסטוריית ההודעות האחרונות בשיחה זו:
+{recent_history}
+
+הודעה חדשה מהלקוח: {message_text}"""
+        else:
+            prompt_content = f"לקוח {sender_phone}: {message_text}"
+
         for model_candidate in ACTIVE_MODELS:
             try:
                 response = client.models.generate_content(
                     model=model_candidate,
-                    contents=f"לקוח {sender_phone}: {message_text}",
+                    contents=prompt_content,
                     config=gen_config
                 )
                 if response and response.text:
@@ -458,6 +521,10 @@ async def whatsapp_webhook(req: Request):
         print(f"[Admin Escalation Sent] Sending question to Admin: {clean_admin}")
         send_whatsapp_message(clean_admin, admin_notification)
 
-    # 8. Send WhatsApp Reply back to customer
+    # 8. Save turns to persistent conversation memory
+    save_chat_message(sender_phone, "customer", message_text)
+    save_chat_message(sender_phone, "agent", reply_text)
+
+    # 9. Send WhatsApp Reply back to customer
     send_whatsapp_message(sender_phone, reply_text)
     return {"ok": True, "reply": reply_text, "escalated": is_escalated, "model": used_model}
