@@ -1025,8 +1025,9 @@ async def unified_whatsapp_webhook(req: Request):
 
 4. מעבדת תיקונים ומסכים ובדיקת זמינות מכשירים:
    • אנו מתקנים ומחליפים מסכים לכל המכשירים: מכשירי מקשים (שיאומי מקשים / Qin / F21 / F22) וסמארטפונים.
-   • אם המחיר או הזמינות של דגם מכשיר/חלק אינם ידועים לך בוודאות: אמור שאתה בודק כעת את הזמינות והמחיר העדכני ומיד חוזר אליו עם תשובה מדויקת.
-     וצרף בסוף: [ESCALATE: מחיר וזמינות עבור {message_text} ללקוח {customer_name or sender_phone}]
+   • אם המחיר או הזמינות של דגם מכשיר/חלק אינם ידועים לך בוודאות:
+     אמור תמיד שאתה בודק כעת את הזמינות והמחיר העדכני ומיד חוזר אליו עם תשובה מדויקת (לעולם אל תגיד שתבדוק מחר!).
+     וצרף בסוף ההודעה: [ESCALATE: מחיר וזמינות עבור {message_text} ללקוח {customer_name or sender_phone}]
 
 5. כתובת ושעות פעילות:
    • רחוב ישעיהו 10, חדרה בלבד (ימים א'-ה' 12:00-20:00, ימי ו' שעון קיץ 12:00-15:30 / חורף 10:30-13:30).
@@ -1070,7 +1071,8 @@ async def unified_whatsapp_webhook(req: Request):
     if not reply_text:
         reply_text = "אני בודק כעת את הזמינות והמחיר העדכני, ומיד חוזר אליך עם תשובה מדויקת. 😃"
 
-    # Parse Escalation from text
+    # Comprehensive Escalation Detection:
+    # 1. Explicit tag from AI
     is_escalated = False
     escalation_question = message_text
     if "[ESCALATE:" in reply_text:
@@ -1080,12 +1082,25 @@ async def unified_whatsapp_webhook(req: Request):
         reply_text = re.sub(r"\[ESCALATE:\s*[^\]]+\]", "", reply_text).strip()
         is_escalated = True
 
-    # Automatic Escalation if the agent states it is checking with the team/pricing/availability
+    # 2. Any checking / followup keywords in reply text
     checking_markers = [
-        "אני בודק כעת", "בודק כעת", "בודק את הזמינות", "בודק את המחיר",
-        "חוזר אליך עם תשובה", "אחזור אליך עם תשובה", "בודק זאת"
+        "בודק", "אבדוק", "נבדוק", "יבדוק", "תבדוק", "בדיקה",
+        "אברר", "נברר", "בירור", "לברר",
+        "אחזור", "נחזור", "חוזר",
+        "אעדכן", "נעדכן", "מעדכן",
+        "תשובה מדויקת", "מחיר עדכני", "המחיר העדכני", "זמינות",
+        "במלאי", "מחר"
     ]
     if any(marker in reply_text for marker in checking_markers):
+        is_escalated = True
+
+    # 3. Any device / model / availability / repair pricing question from customer
+    q_clean = message_text.lower()
+    product_inquiry_markers = [
+        "יש לכם", "כמה עולה", "מחיר", "עלות", "זמין", "במלאי", "מכשיר",
+        "מסך", "תיקון", "החלפה", "f25", "pro", "שיאומי", "סמסונג", "אייפון"
+    ]
+    if any(p in q_clean for p in product_inquiry_markers):
         is_escalated = True
 
     # Guard and clean salutations/name
@@ -1132,6 +1147,8 @@ async def unified_whatsapp_webhook(req: Request):
     # Works reliably whether ADMIN_WHATSAPP_PHONE is in env vars or defaults to 972524043644
     if is_escalated and clean_admin:
         try:
+            # Small 1-second pause so Green-API does not throttle or drop rapid back-to-back sends to the same chat
+            await asyncio.sleep(1.0)
             customer_label = f"{customer_name} ({sender_phone})" if customer_name else sender_phone
             admin_notification = (
                 f"❓ *שאלה מלקוח שדורשת את תשובתך* ({customer_label}):\n\"{escalation_question}\"\n\n"
