@@ -32,7 +32,7 @@ RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().strip('"').st
 PORT = os.getenv("PORT", "8000")
 
 # ----------------- Gemini Client Setup -----------------
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+client = genai.Client(api_key=GEMINI_API_KEY) if (genai and GEMINI_API_KEY) else None
 
 # Active official production models with automatic fallback
 ACTIVE_MODELS = [
@@ -91,9 +91,11 @@ async def keep_alive_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(keep_alive_loop())
+    config_task = asyncio.create_task(auto_configure_green_api())
+    keep_alive_task = asyncio.create_task(keep_alive_loop())
     yield
-    task.cancel()
+    config_task.cancel()
+    keep_alive_task.cancel()
 
 app = FastAPI(title="ShieldBot AI - WhatsApp Agent", lifespan=lifespan)
 
@@ -301,30 +303,62 @@ init_db()
 def send_whatsapp_message(phone: str, text: str) -> bool:
     clean_phone = normalize_phone(phone)
     clean_text = (text or "").strip()
-    if not clean_phone or not clean_text or not WHATSAPP_API_URL:
-        print(f"[WhatsApp DryRun / Skip] To {clean_phone}: {clean_text[:40] if clean_text else 'EMPTY_MESSAGE'}")
+    if not clean_phone or not clean_text:
+        print(f"[WhatsApp Skip] Invalid phone or empty text: phone={clean_phone}")
+        return False
+
+    _, _, send_url = parse_green_api_credentials()
+    if not send_url:
+        print(f"[WhatsApp DryRun] No WHATSAPP_API_URL configured. Message to {clean_phone}: {clean_text[:40]}")
         return False
     
-    clean_url = WHATSAPP_API_URL.strip().rstrip("/")
     payload = {
         "chatId": f"{clean_phone}@c.us",
         "message": clean_text
     }
     try:
-        resp = http_session.post(clean_url, json=payload, timeout=8)
-        print(f"[WhatsApp Sent] To: {clean_phone}, Status: {resp.status_code}")
+        resp = http_session.post(send_url, json=payload, timeout=8)
+        print(f"[WhatsApp Sent] To: {clean_phone}, Status: {resp.status_code}, Response: {resp.text[:80]}")
         return resp.status_code == 200
     except Exception as exc:
         print(f"[WhatsApp Send Error]: {exc}")
         return False
 
-def get_green_api_base_and_token():
-    """Extracts instance base URL and token from WHATSAPP_API_URL."""
-    clean = (WHATSAPP_API_URL or "").strip().rstrip("/")
+def parse_green_api_credentials():
+    """Extracts instance base URL, token, and clean sendMessage URL from WHATSAPP_API_URL."""
+    clean = (WHATSAPP_API_URL or "").strip().strip('"').strip("'").rstrip("/")
     if "/sendMessage/" in clean:
         base, token = clean.split("/sendMessage/", 1)
-        return base, token
-    return None, None
+        token = token.strip().strip("/")
+        return base, token, f"{base}/sendMessage/{token}"
+    return None, None, clean
+
+def get_green_api_base_and_token():
+    base, token, _ = parse_green_api_credentials()
+    return base, token
+
+async def auto_configure_green_api():
+    """Automatically configures Green-API instance with Render webhook URL on server startup."""
+    await asyncio.sleep(4)
+    base, token, _ = parse_green_api_credentials()
+    if not base or not token:
+        print("[Green-API AutoConfig] No base/token detected in WHATSAPP_API_URL")
+        return
+    render_url = (RENDER_EXTERNAL_URL or "https://ns-whatsapp-agent-1.onrender.com").strip().rstrip("/")
+    target_webhook = f"{render_url}/webhook/whatsapp"
+    payload = {
+        "webhookUrl": target_webhook,
+        "webhookUrlToken": "",
+        "incomingWebhook": "yes",
+        "outgoingMessageWebhook": "yes",
+        "stateWebhook": "yes"
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as aclient:
+            resp = await aclient.post(f"{base}/setSettings/{token}", json=payload)
+            print(f"[Green-API AutoConfig] Result: {resp.status_code} - {resp.text[:120]}")
+    except Exception as exc:
+        print(f"[Green-API AutoConfig Notice]: {exc}")
 
 def lookup_subscriber(phone: str) -> dict:
     """Checks subscriber status in NetSpark & KosherPlay database."""
@@ -637,13 +671,15 @@ def fix_green_api_webhook():
         return {"error": str(e)}
 
 # ----------------- Unified Multi-Route Webhook Handler -----------------
-@app.post("/webhook/whatsapp")
-@app.post("/webhook/whatsapp/")
-@app.post("/webhook")
-@app.post("/webhook/")
-@app.post("/whatsapp")
-@app.post("/whatsapp/")
+@app.api_route("/webhook/whatsapp", methods=["GET", "POST", "HEAD", "OPTIONS"])
+@app.api_route("/webhook/whatsapp/", methods=["GET", "POST", "HEAD", "OPTIONS"])
+@app.api_route("/webhook", methods=["GET", "POST", "HEAD", "OPTIONS"])
+@app.api_route("/webhook/", methods=["GET", "POST", "HEAD", "OPTIONS"])
+@app.api_route("/whatsapp", methods=["GET", "POST", "HEAD", "OPTIONS"])
+@app.api_route("/whatsapp/", methods=["GET", "POST", "HEAD", "OPTIONS"])
 async def webhook_direct(req: Request):
+    if req.method in ["GET", "HEAD", "OPTIONS"]:
+        return {"ok": True, "service": "ShieldBot AI Webhook Endpoint Active"}
     return await unified_whatsapp_webhook(req)
 
 async def unified_whatsapp_webhook(req: Request):
