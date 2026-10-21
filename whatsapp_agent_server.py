@@ -27,7 +27,12 @@ except ImportError:
 # ----------------- Environment Variables -----------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip().strip('"').strip("'")
 WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL", "").strip().strip('"').strip("'")
-ADMIN_WHATSAPP_PHONE = os.getenv("ADMIN_WHATSAPP_PHONE", "972500000000").strip().strip('"').strip("'")
+
+# Default directly to Eran's phone (0524043644) so escalations work even if not defined in Render!
+DEFAULT_ADMIN_PHONE = "972524043644"
+_raw_admin = os.getenv("ADMIN_WHATSAPP_PHONE", DEFAULT_ADMIN_PHONE).strip().strip('"').strip("'")
+ADMIN_WHATSAPP_PHONE = DEFAULT_ADMIN_PHONE if (not _raw_admin or _raw_admin == "972500000000") else _raw_admin
+
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().strip('"').strip("'")
 PORT = os.getenv("PORT", "8000")
 
@@ -52,21 +57,24 @@ ACTIVE_MODELS = [
 ]
 
 def build_fast_gen_config(system_instruction: str):
-    """Builds a low-latency GenerateContentConfig with zero thinking overhead when supported."""
+    """
+    Builds a low-latency GenerateContentConfig.
+    max_output_tokens=1000 ensures complete, natural sentences and tags are never truncated mid-word!
+    """
     if not types:
         return None
     try:
         return types.GenerateContentConfig(
             system_instruction=system_instruction,
-            temperature=0.1,
-            max_output_tokens=180,
+            temperature=0.2,
+            max_output_tokens=1000,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
     except Exception:
         return types.GenerateContentConfig(
             system_instruction=system_instruction,
-            temperature=0.1,
-            max_output_tokens=180,
+            temperature=0.2,
+            max_output_tokens=1000,
         )
 
 # ----------------- Database & Persistent Storage Setup -----------------
@@ -620,6 +628,7 @@ def purge_unwanted_phrases(text: str) -> str:
 def apply_customer_name_guard(reply_text: str, customer_name: str, already_greeted: bool) -> str:
     cleaned = reply_text.strip()
 
+    # Strip unwanted prompts asking for customer's name
     cleaned = re.sub(
         r"(?:ו?איך\s+קוראים\s+לך(?:\s+כדי\s+שאדע\s+למי\s+לפנות)?[\s?!.,]*|ו?מה\s+שמך(?:\s+בבקשה)?[\s?!.,]*|תגיד\s+מה\s+השם\s+שלך[\s?!.,]*|למי\s+לפנות[\s?!.,]*)",
         "",
@@ -633,6 +642,7 @@ def apply_customer_name_guard(reply_text: str, customer_name: str, already_greet
         return cleaned
 
     if already_greeted:
+        # Strip redundant repeated greetings in ongoing conversation
         cleaned = re.sub(
             rf"^(?:שלום|היי|אהלן)\s+{re.escape(customer_name)}[\s,]+(?:מה\s+שלומך|מה\s+נשמע|שלומך)[\s?!.,]*",
             "",
@@ -650,8 +660,10 @@ def apply_customer_name_guard(reply_text: str, customer_name: str, already_greet
         has_how_are_you = any(p in cleaned for p in ["מה שלומך", "מה נשמע"])
         if not has_name or not has_how_are_you:
             salutation = f"שלום {customer_name}, מה שלומך?"
-            if re.match(r"^(?:שלום|היי|בוקר טוב|ערב טוב|אהלן)[\s!.,]*", cleaned):
-                cleaned = re.sub(r"^(?:שלום|היי|בוקר טוב|ערב טוב|אהלן)[\s!.,]*", f"{salutation} ", cleaned, count=1)
+            # Cleanly replace leading greeting without duplicating customer name
+            greeting_pattern = rf"^(?:שלום|היי|בוקר טוב|ערב טוב|אהלן)(?:\s+{re.escape(customer_name)})?[\s!.,]*"
+            if re.match(greeting_pattern, cleaned):
+                cleaned = re.sub(greeting_pattern, f"{salutation} ", cleaned, count=1)
             else:
                 cleaned = f"{salutation} {cleaned}"
 
@@ -843,7 +855,7 @@ async def unified_whatsapp_webhook(req: Request):
     clean_sender_raw = str(raw_sender).split("@")[0].split(":")[0]
     sender_phone = normalize_phone(clean_sender_raw)
 
-    # Guard against bot replying to its own number
+    # Guard against bot replying to its own instance WID
     bot_own_phone = normalize_phone(str(instance_data.get("wid", "")))
     if bot_own_phone and sender_phone and bot_own_phone == sender_phone and raw_sender_field == str(instance_data.get("wid", "")):
         print(f"[Ignored Self Message] sender={sender_phone} matches instance wid={bot_own_phone}")
@@ -970,7 +982,7 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "agent", warranty_reply)
         return {"ok": True, "reply": warranty_reply, "type": "warranty_full_explanation"}
 
-    # 4. LLM Generation (Strictly ONLY 3.8 & 3.5 Flash models with zero thinking overhead)
+    # 4. LLM Generation (Strictly ONLY 3.8 & 3.5 Flash models with full token headroom)
     reply_text = None
     used_model = None
     sub_info = lookup_subscriber(sender_phone, message_text)
@@ -995,7 +1007,7 @@ async def unified_whatsapp_webhook(req: Request):
 כללי יסוד קריטיים:
 ==================================================
 1. סגנון ומהירות:
-   • מענה קצר, ענייני ומעשי: 1 עד 3 שורות ברורות בלבד!
+   • מענה קצר, ענייני ומעשי: 1 עד 3 שורות ברורות ומלאות! לעולם אל תעצור באמצע משפט!
    • {name_instruction}
    • כל המחירים בשקלים חדשים (₪) בלבד.
 
@@ -1011,10 +1023,10 @@ async def unified_whatsapp_webhook(req: Request):
      ושאל אותו בסוף ההודעה:
      "האם תרצה פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות? 😃"
 
-4. מעבדת תיקונים ומסכים:
+4. מעבדת תיקונים ומסכים ובדיקת זמינות מכשירים:
    • אנו מתקנים ומחליפים מסכים לכל המכשירים: מכשירי מקשים (שיאומי מקשים / Qin / F21 / F22) וסמארטפונים.
-   • אם המחיר אינו ידוע לך: אמור שאתה בודק כעת את המחיר העדכני ומיד חוזר אליו.
-     וצרף בסוף: [ESCALATE: מחיר וזמינות עבור [חלק/דגם] ללקוח {customer_name or sender_phone}]
+   • אם המחיר או הזמינות של דגם מכשיר/חלק אינם ידועים לך בוודאות: אמור שאתה בודק כעת את הזמינות והמחיר העדכני ומיד חוזר אליו עם תשובה מדויקת.
+     וצרף בסוף: [ESCALATE: מחיר וזמינות עבור {message_text} ללקוח {customer_name or sender_phone}]
 
 5. כתובת ושעות פעילות:
    • רחוב ישעיהו 10, חדרה בלבד (ימים א'-ה' 12:00-20:00, ימי ו' שעון קיץ 12:00-15:30 / חורף 10:30-13:30).
@@ -1045,7 +1057,7 @@ async def unified_whatsapp_webhook(req: Request):
                         contents=prompt_content,
                         config=gen_config
                     ),
-                    timeout=5.5
+                    timeout=6.0
                 )
                 if response and response.text:
                     reply_text = response.text.strip()
@@ -1056,23 +1068,9 @@ async def unified_whatsapp_webhook(req: Request):
 
     # Fallback if AI is unreachable
     if not reply_text:
-        cust_label = f" {customer_name}" if customer_name else ""
-        reply_text = f"אני בודק כעת את המחיר העדכני{cust_label}, ומיד חוזר אליך עם תשובה מדויקת."
+        reply_text = "אני בודק כעת את הזמינות והמחיר העדכני, ומיד חוזר אליך עם תשובה מדויקת. 😃"
 
-    # Guard and purge
-    if customer_name:
-        reply_text = apply_customer_name_guard(reply_text, customer_name, already_greeted)
-    else:
-        reply_text = purge_unwanted_phrases(reply_text)
-
-    # CRITICAL: Ensure reply_text is never empty
-    if not reply_text or not reply_text.strip():
-        if customer_name:
-            reply_text = f"שלום {customer_name}, במה אוכל לעזור לך היום? 😃"
-        else:
-            reply_text = "שלום! במה אוכל לעזור לך היום? 😃"
-
-    # Escalation parsing
+    # Parse Escalation from text
     is_escalated = False
     escalation_question = message_text
     if "[ESCALATE:" in reply_text:
@@ -1081,6 +1079,27 @@ async def unified_whatsapp_webhook(req: Request):
             escalation_question = match.group(1).strip()
         reply_text = re.sub(r"\[ESCALATE:\s*[^\]]+\]", "", reply_text).strip()
         is_escalated = True
+
+    # Automatic Escalation if the agent states it is checking with the team/pricing/availability
+    checking_markers = [
+        "אני בודק כעת", "בודק כעת", "בודק את הזמינות", "בודק את המחיר",
+        "חוזר אליך עם תשובה", "אחזור אליך עם תשובה", "בודק זאת"
+    ]
+    if any(marker in reply_text for marker in checking_markers):
+        is_escalated = True
+
+    # Guard and clean salutations/name
+    if customer_name:
+        reply_text = apply_customer_name_guard(reply_text, customer_name, already_greeted)
+    else:
+        reply_text = purge_unwanted_phrases(reply_text)
+
+    # CRITICAL: Ensure reply_text is never empty or a truncated fragment
+    if not reply_text or len(reply_text.strip()) < 8:
+        if customer_name:
+            reply_text = f"שלום {customer_name}, אני בודק כעת את הזמינות והמחיר העדכני ומיד חוזר אליך עם תשובה מדויקת. 😃"
+        else:
+            reply_text = "שלום! אני בודק כעת את הזמינות והמחיר העדכני ומיד חוזר אליך עם תשובה מדויקת. 😃"
 
     # SEND WHATSAPP MESSAGE TO CUSTOMER FIRST FOR MAXIMUM SPEED!
     send_whatsapp_message(sender_phone, reply_text, raw_chat_id)
@@ -1109,8 +1128,9 @@ async def unified_whatsapp_webhook(req: Request):
     except Exception as e:
         print(f"[Save Request Notice]: {e}")
 
-    # Escalate to admin only if real admin number is configured (not dummy 972500000000)
-    if is_escalated and clean_admin and clean_admin != "972500000000" and sender_phone != clean_admin:
+    # ESCALATE TO ADMIN: Send question to Admin WhatsApp so they can answer and teach the bot!
+    # Works reliably whether ADMIN_WHATSAPP_PHONE is in env vars or defaults to 972524043644
+    if is_escalated and clean_admin:
         try:
             customer_label = f"{customer_name} ({sender_phone})" if customer_name else sender_phone
             admin_notification = (
@@ -1118,6 +1138,7 @@ async def unified_whatsapp_webhook(req: Request):
                 f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
                 f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
             )
+            print(f"[Admin Escalation] Sending question to Admin ({clean_admin}): {escalation_question}")
             send_whatsapp_message(clean_admin, admin_notification)
         except Exception as e_adm:
             print(f"[Admin Escalation Notice]: {e_adm}")
