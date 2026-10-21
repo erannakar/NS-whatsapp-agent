@@ -424,6 +424,19 @@ def lookup_pos_part_price(text: str) -> dict:
             }
     return {"found": False}
 
+def get_pos_inventory_summary() -> str:
+    """Returns a clean summary of current POS inventory parts and prices to feed directly into Gemini."""
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT part_name, price_nis, in_stock FROM pos_inventory").fetchall()
+    conn.close()
+    if not rows:
+        return "אין פריטים במערכת הקופה כרגע."
+    lines = []
+    for name, price, stock in rows:
+        status_str = "במלאי" if stock else "חסר זמנית"
+        lines.append(f"• {name}: {price} ₪ ({status_str})")
+    return "\n".join(lines)
+
 def get_lab_workload_status() -> dict:
     """Calculates current lab queue workload based on active in_repair devices."""
     conn = sqlite3.connect(DB_PATH)
@@ -444,6 +457,44 @@ def get_lab_workload_status() -> dict:
         "load_desc": load_desc,
         "time_instruction": time_instruction
     }
+
+def is_substantive_admin_question(customer_message: str) -> bool:
+    """
+    Returns True ONLY if the customer message is a real substantive question/request requiring admin assistance.
+    Returns False for customer introductions ('תודה קוראים לי ערן'), greetings, thank-yous, affirmations, or known POS items.
+    """
+    clean = customer_message.strip()
+    if not clean or len(clean) < 2:
+        return False
+
+    has_question_indicator = any(qw in clean for qw in [
+        "כמה", "מחיר", "עלות", "האם", "יש לכם", "אפשר", "למה", "מתי", "איך", "איפה",
+        "תקלה", "נשבר", "לתקן", "להחליף", "תיקון", "החלפה", "שקע", "סוללה", "?"
+    ])
+
+    # 1. Name statements or introductions without an explicit question
+    # e.g., "תודה קוראים לי ערן", "קוראים לי ערן", "שמי ערן", "זה ערן", "מדבר ערן"
+    if extract_name_from_text(clean) and not has_question_indicator:
+        return False
+
+    # 2. Pure social greetings, thanks, affirmations, small talk
+    pure_social_words = {
+        "תודה", "רבה", "לך", "לכם", "שלום", "היי", "אהלן", "בוקר", "ערב", "צהריים",
+        "טוב", "טובה", "טובים", "בסדר", "גמור", "אחלה", "יופי", "מעולה", "מצוין",
+        "סבבה", "מאה", "אחוז", "להתראות", "ביי", "כן", "לא", "הבנתי", "יום",
+        "שמי", "קוראים", "לי", "זה", "אני", "נעים", "להכיר", "שמח", "תודה רבה"
+    }
+    cleaned_no_punct = re.sub(r"[^\w\sא-ת]", "", clean).strip()
+    words = cleaned_no_punct.split()
+    if len(words) <= 5 and all(w in pure_social_words or len(w) <= 1 for w in words):
+        return False
+
+    # 3. If it's already a known POS part (e.g. A17 screen, F21 Pro screen) -> Bot already knows, no escalation!
+    pos_match = lookup_pos_part_price(clean)
+    if pos_match.get("found"):
+        return False
+
+    return True
 
 def apply_customer_name_guard(reply_text: str, customer_name: str) -> str:
     """
@@ -648,6 +699,8 @@ async def whatsapp_webhook(req: Request):
     )
 
     learned_rules = get_learned_knowledge()
+    pos_summary = get_pos_inventory_summary()
+    lab_status = get_lab_workload_status()
 
     # 4. Call Gemini with automatic model fallback
     reply_text = None
@@ -678,37 +731,32 @@ async def whatsapp_webhook(req: Request):
    • מענה קצר, ענייני, ומעשי: 1 עד 3 שורות/משפטים ברורים בלבד.
    • חובה קדושה: לסיים תמיד כל מילה וכל משפט במלואם עם סימן פיסוק תקין.
    • זיכרון שיחה מלא ומניעת לופים: קרא תמיד את היסטוריית השיחה המצורפת!
-     - אם הלקוח כבר אמר מה הוא צריך (למשל החלפת מסך) או איזה דגם יש לו (למשל F21 Pro) — אסור בשום אופן לשאול אותו שוב "במה אוכל לעזור לך?" או "איזה שירות תרצה לעשות?" או "איזה דגם יש לך?"!
+     - אם הלקוח כבר אמר מה הוא צריך או הציג את שמו — אל תחזור לשאול שוב!
      - חבר מיד את המידע שכבר נמסר בהודעות הקודמות ותן תשובה ישירה וקונקרטית לשאלה שלו!
    • {name_instruction}
    • קיצור אמיתי פירושו תמציתיות ולא קטיעת מילים: אין לשלוח גליונות או מגילות של טקסט שלאף אחד אין סבלנות לקרוא, אלא אם הלקוח ביקש במפורש פירוט.
-   • אסור להשתמש בתבניות תקליט, שפת מערכת מנוכרת או הודעות פורמליות של מוקדנים. דבר בגובה העיניים כאיש צוות שמטפל אישית בפנייה.
    • כל המחירים בשקלים חדשים (₪) בלבד. אין אזכור לדולרים ($).
 
-2. שירותי מעבדה ותיקונים (מסכים, שקעי טעינה, סוללות):
-   • אנו מתקנים ומחליפים מסכים שבורים לכל סוגי המכשירים: מכשירי מקשים (כולל שיאומי מקשים / Qin 1s / F21 / F21 Pro / F22 וכו) וסמארטפונים!
-   • בנוסף: תיקון שקעי טעינה, החלפת סוללות, תיקוני לוח, פריצות כשרות, והתקנת גרסאות כשרות.
-   • מחירון מעבדה לדגמים נפוצים:
-     - החלפת מסך לשיאומי מקשים / Qin F21 Pro / F22: סביב 180 עד 250 ₪ (כולל עבודה ואחריות).
+2. מחירון חלפים ותיקונים מעודכן מקופת המעבדה:
+{pos_summary}
+   • זמני מעבדה ועומס נוכחי: {lab_status['load_desc']}. ({lab_status['time_instruction']})
+   • כלל ברזל: אם הלקוח שואל על מוצר או חלק שמופיע במחירון למעלה (כמו מסך ל-Samsung Galaxy A17 במחיר 400 ₪, או מסך F21 Pro במחיר 220 ₪) — מסור לו מיד את המחיר המדויק! אין צורך להעביר למנהל!
+   • מחירון כללי לתקלות שכיחות:
+     - החלפת מסך לשיאומי מקשים / Qin F21 Pro / F22: סביב 180 עד 250 ₪.
      - החלפת מסך לסמארטפונים: סביב 250 עד 450 ₪ (תלוי דגם).
      - תיקון שקע טעינה: סביב 120 עד 180 ₪.
      - החלפת סוללה: סביב 100 עד 150 ₪.
-   • איך עונים כשלקוח מוסר דגם ותקלה (למשל לקוח עם מסך ל-Qin F21 Pro):
-     ענה לו מיד תשובה עניינית שמחברת את הכל:
-     "שלום [שם הלקוח אם ידוע, ושאלה לשלומו], בוודאי, אנחנו מחליפים מסכים ל-Qin F21 Pro (עלות התיקון נעה סביב 200–250 ₪). אני בודק כעת זמינות מדויקת של המסך במלאי המעבדה ומיד חוזר אליך."
-     וצרף בסוף הודעתך תגית: [ESCALATE: מחיר וזמינות מסך F21 Pro ללקוח].
 
-3. מחירון ומסלולים:
+3. מחירון ומסלולי הגנה:
    • כשר פליי בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, ~200 אפליקציות כשרות חיוניות). רישיון פעיל על המכשיר בלבד.
-   • כשר פליי מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר. הרישיון נייד ועובר למכשיר חדש ללא עלות רישיון!
+   • כשר פליי מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר.
    • נטספרק: 350 ₪ לשנה (רישיון שנתי). שינוי רמות חופשי ומיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית).
 
-4. כלל ברזל נגד המצאות / תשובות שגויות (Anti-Hallucination):
-   • לעולם אל תגיד בביטחון "אנחנו לא עושים את זה" לגבי שירות או דגם מכשיר!
-   • אם נשאלת שאלה על מחיר תיקון ספציפי, חלק חילוף, או שאלה טכנית שאינך יודע בוודאות:
-     ענה ללקוח בקצרה:
-     "אני בודק את זה כעת מול המעבדה ומיד חוזר אליך."
-     וצרף בסוף הודעתך את התגית: [ESCALATE: שאלה_קצרה_למנהל]
+4. מתי ורק מתי מעבירים שאלה למנהל ([ESCALATE: ...]):
+   • אך ורק אם מדובר בשאלה מקצועית מורכבת, חלק חילוף חדש שאינו קיים במחירון ובמערכת הקופה, או תקלה ספציפית שאינך יודע בוודאות!
+   • איסור מוחלט על הוספת תגית [ESCALATE:] במקרים הבאים:
+     - לעולם אל תצרף [ESCALATE:] להודעות הצגת שם ("קוראים לי ערן", "שמי דוד"), ברכות ("שלום", "בוקר טוב"), תודות ("תודה", "תודה רבה"), או אישורים ("בסדר", "יופי")!
+     - לעולם אל תצרף [ESCALATE:] על שאלות שמחיריהן כבר ידועים מתוך מחירון הקופה (כגון מסך A17 או Qin F21 Pro)!
 
 5. פרטי הלקוח:
    {subscriber_context}
@@ -775,13 +823,19 @@ async def whatsapp_webhook(req: Request):
     escalation_question = message_text
     
     if "[ESCALATE:" in reply_text:
-        is_escalated = True
         match = re.search(r"\[ESCALATE:\s*([^\]]+)\]", reply_text)
         if match:
             escalation_question = match.group(1).strip()
         reply_text = re.sub(r"\[ESCALATE:\s*[^\]]+\]", "", reply_text).strip()
-    elif any(phrase in reply_text for phrase in ["בודק זאת כעת מול מנהל", "בודק זאת כעת מול המעבדה", "אחזור אליך כאן מיד עם תשובה", "אני בודק את זה ומיד חוזר"]):
         is_escalated = True
+    elif any(phrase in reply_text for phrase in ["בודק זאת כעת מול מנהל", "בודק זאת כעת מול המעבדה", "אחזור אליך כאן מיד עם תשובה", "אני בודק את זה ומיד חוזר"]):
+        if is_substantive_admin_question(message_text):
+            is_escalated = True
+
+    # HARD GUARD: NEVER escalate non-substantive messages (names, thank-yous, greetings, small talk)
+    if is_escalated and not is_substantive_admin_question(message_text):
+        print(f"[Admin Escalation Suppressed] Non-substantive message was not sent to admin: '{message_text}'")
+        is_escalated = False
 
     # 6. Save Request to DB
     status = "pending" if is_escalated else "handled"
@@ -807,7 +861,7 @@ async def whatsapp_webhook(req: Request):
         customer_label = f"{customer_name} ({sender_phone})" if customer_name else sender_phone
         admin_notification = (
             f"❓ *שאלה מלקוח שדורשת את תשובתך* ({customer_label}):\n"
-            f"\"{message_text}\"\n\n"
+            f"\"{escalation_question}\"\n\n"
             f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
             f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
         )
