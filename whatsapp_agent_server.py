@@ -28,7 +28,8 @@ except ImportError:
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip().strip('"').strip("'")
 WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL", "").strip().strip('"').strip("'")
 
-# Default directly to Eran's phone (0524043644) so escalations work even if not defined in Render!
+# Both of Eran's numbers are registered as permanent admin phones
+ADMIN_PHONES = ["972553164770", "972524043644"]
 DEFAULT_ADMIN_PHONE = "972524043644"
 _raw_admin = os.getenv("ADMIN_WHATSAPP_PHONE", DEFAULT_ADMIN_PHONE).strip().strip('"').strip("'")
 ADMIN_WHATSAPP_PHONE = DEFAULT_ADMIN_PHONE if (not _raw_admin or _raw_admin == "972500000000") else _raw_admin
@@ -36,13 +37,9 @@ ADMIN_WHATSAPP_PHONE = DEFAULT_ADMIN_PHONE if (not _raw_admin or _raw_admin == "
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().strip('"').strip("'")
 PORT = os.getenv("PORT", "8000")
 
-# ----------------- Gemini Client Setup (Ultra-Fast Mode) -----------------
-client = None
-if genai and GEMINI_API_KEY:
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY, http_options={"timeout": 6000})
-    except Exception:
-        client = genai.Client(api_key=GEMINI_API_KEY)
+# ----------------- Gemini Client Setup (Clean Client, No Invalid Short Deadline) -----------------
+# Note: Google GenAI API requires deadline >= 10s. Default client handles standard deadlines cleanly!
+client = genai.Client(api_key=GEMINI_API_KEY) if (genai and GEMINI_API_KEY) else None
 
 # כלל ברזל קבוע: אך ורק מודלים מאושרים ומהירים מסדרות 3.8 ו-3.5 בלבד!
 # חל איסור מוחלט להכניס מודלים ישנים (ללא 2.0, ללא 1.5, ללא 2.5) כדי למנוע שגיאות ועיכובים.
@@ -106,7 +103,7 @@ BACKUP_JSON_PATH = os.path.join(
 
 # Shared HTTP connection pool with keep-alive to avoid SSL handshake overhead on every message
 http_session = httpx.Client(
-    timeout=8,
+    timeout=10,
     limits=httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=60)
 )
 
@@ -905,10 +902,15 @@ async def unified_whatsapp_webhook(req: Request):
 
     print(f"[Incoming WhatsApp] From {sender_phone}: {message_text}")
 
-    clean_admin = normalize_phone(ADMIN_WHATSAPP_PHONE)
+    # Recognize both of Eran's numbers as authorized admin numbers
+    admin_numbers_set = {
+        normalize_phone(ADMIN_WHATSAPP_PHONE),
+        "972553164770",
+        "972524043644"
+    }
 
     # 0. ADMIN LEARNING INTERCEPTOR: When Admin replies directly in WhatsApp to teach the bot
-    if clean_admin and sender_phone == clean_admin and ("תשובה:" in message_text or "תשובה " in message_text):
+    if sender_phone in admin_numbers_set and ("תשובה:" in message_text or "תשובה " in message_text):
         parts = message_text.replace("תשובה:", "תשובה ").split("|")
         admin_answer = parts[0].replace("תשובה", "").strip()
         keywords = parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip() if len(parts) > 1 else admin_answer[:25]
@@ -1051,6 +1053,7 @@ async def unified_whatsapp_webhook(req: Request):
 
         for model_candidate in ACTIVE_MODELS:
             try:
+                # Run with 12s timeout at application layer (Google API deadline is standard >=10s)
                 response = await asyncio.wait_for(
                     asyncio.to_thread(
                         client.models.generate_content,
@@ -1058,7 +1061,7 @@ async def unified_whatsapp_webhook(req: Request):
                         contents=prompt_content,
                         config=gen_config
                     ),
-                    timeout=6.0
+                    timeout=12.0
                 )
                 if response and response.text:
                     reply_text = response.text.strip()
@@ -1144,19 +1147,29 @@ async def unified_whatsapp_webhook(req: Request):
         print(f"[Save Request Notice]: {e}")
 
     # ESCALATE TO ADMIN: Send question to Admin WhatsApp so they can answer and teach the bot!
-    # Works reliably whether ADMIN_WHATSAPP_PHONE is in env vars or defaults to 972524043644
-    if is_escalated and clean_admin:
+    if is_escalated:
         try:
-            # Small 1-second pause so Green-API does not throttle or drop rapid back-to-back sends to the same chat
-            await asyncio.sleep(1.0)
+            # Smart admin recipient determination:
+            # If the message sender is one of Eran's admin phones (testing mode), send directly to THAT phone!
+            # If from an external customer, send to all registered admin numbers so Eran sees it on whichever phone he holds!
+            if sender_phone in admin_numbers_set:
+                target_admins = [sender_phone]
+            else:
+                target_admins = list(admin_numbers_set)
+
             customer_label = f"{customer_name} ({sender_phone})" if customer_name else sender_phone
             admin_notification = (
                 f"❓ *שאלה מלקוח שדורשת את תשובתך* ({customer_label}):\n\"{escalation_question}\"\n\n"
                 f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
                 f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
             )
-            print(f"[Admin Escalation] Sending question to Admin ({clean_admin}): {escalation_question}")
-            send_whatsapp_message(clean_admin, admin_notification)
+            
+            # Small pause before admin send so Green-API never drops consecutive messages to the same chat
+            await asyncio.sleep(1.0)
+            for adm in target_admins:
+                if adm and adm != "972500000000":
+                    print(f"[Admin Escalation] Sending question to Admin ({adm}): {escalation_question}")
+                    send_whatsapp_message(adm, admin_notification)
         except Exception as e_adm:
             print(f"[Admin Escalation Notice]: {e_adm}")
 
