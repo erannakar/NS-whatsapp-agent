@@ -244,6 +244,26 @@ COMMON_NON_NAMES = {
     "מעולה", "מצוין", "מגיע", "אליכם", "מחר", "היום", "עכשיו", "בתור", "לחכות"
 }
 
+# ----------------- Permanent Learned KB Seed (Immune to Server Rebuilds) -----------------
+PERMANENT_LEARNED_KB = [
+    {
+        "keywords": "f25 pro, f25, שיאומי f25, f25pro",
+        "answer": "כן, יש לנו מכשיר F25 Pro במלאי! 📱\n• אחריות יבואן רשמי (מסלול גלות): 770 ₪\n• אחריות מעבדה מלאה אצלנו (מסלול ימות המשיח ⭐): 870 ₪"
+    },
+    {
+        "keywords": "מסך f21, תיקון f21, מסך שיאומי f21, f21 מסך",
+        "answer": "תיקון מסך שיאומי Qin F21 עולה 220 ₪ כולל אחריות לחצי שנה במעבדה שלנו בחדרה. מוזמן להביא את המכשיר ונתקן לך במקום! 🛠️"
+    },
+    {
+        "keywords": "f21 pro, שיאומי f21 pro, f21",
+        "answer": "מכשיר שיאומי Qin F21 Pro זמין אצלנו ב-2 מסלולי אחריות:\n• אחריות יבואן רשמי (מסלול גלות): 650 ₪\n• אחריות מעבדה מלאה אצלנו (מסלול ימות המשיח ⭐): 750 ₪"
+    },
+    {
+        "keywords": "f22 pro, שיאומי f22 pro, f22",
+        "answer": "מכשיר שיאומי Qin F22 Pro זמין אצלנו ב-2 מסלולי אחריות:\n• אחריות יבואן רשמי (מסלול גלות): 850 ₪\n• אחריות מעבדה מלאה אצלנו (מסלול ימות המשיח ⭐): 950 ₪"
+    }
+]
+
 # ----------------- Greeting Detection -----------------
 def is_pure_greeting(text: str) -> bool:
     clean = re.sub(r"[^\w\sא-תa-zA-Z]", " ", text or "").strip().lower()
@@ -366,6 +386,58 @@ def ensure_warranty_question_in_device_quote(reply: str, customer_msg: str) -> s
     return clean_reply
 
 # ----------------- Database Initialization & JSON Backup Sync -----------------
+
+BACKUP_KB_JSON_PATH = os.path.join(
+    os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
+    "learned_kb_cache.json"
+)
+
+def sync_learned_kb_to_json():
+    """Exports learned_kb to local JSON cache for extra durability across restarts."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT keywords, answer FROM learned_kb").fetchall()
+        conn.close()
+        data = [{"keywords": r[0], "answer": r[1]} for r in rows if r[0] and r[1]]
+        with open(BACKUP_KB_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def find_matching_learned_knowledge(message_text: str) -> str:
+    """
+    Direct deterministic lookup for learned rules and known product prices.
+    Returns the answer immediately without LLM delay or unnecessary admin escalation!
+    """
+    clean = (message_text or "").lower().strip()
+    clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean])
+
+    # 1. Check database first (dynamic learned knowledge)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT keywords, answer FROM learned_kb ORDER BY id DESC").fetchall()
+        conn.close()
+        for kw_str, ans in rows:
+            if not kw_str or not ans:
+                continue
+            keywords = [k.strip().lower() for k in kw_str.replace(";", ",").replace("|", ",").split(",") if k.strip()]
+            for kw in keywords:
+                kw_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in kw]).strip()
+                if kw in clean or (kw_clean and kw_clean in clean_no_punct):
+                    return ans
+    except Exception:
+        pass
+
+    # 2. Check permanent embedded knowledge (immune to container resets)
+    for item in PERMANENT_LEARNED_KB:
+        keywords = [k.strip().lower() for k in item["keywords"].split(",") if k.strip()]
+        for kw in keywords:
+            kw_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in kw]).strip()
+            if kw in clean or (kw_clean and kw_clean in clean_no_punct):
+                return item["answer"]
+
+    return ""
+
 def sync_contacts_to_json():
     """Exports all contacts from SQLite to local JSON cache for extra durability."""
     try:
@@ -467,9 +539,32 @@ def init_db():
                 ("972528819203", "שמעון מזרחי", "כשר פליי", "expired", "כשר פליי מורחב + דפדפן (300 ₪/שנה)", "KP-19204", "gov.il", "01/10/2026"),
                 ("972501234567", "יוסף אברהמי", "כשר פליי", "active", "כשר פליי בסיסי (250 ₪ חד-פעמי)", "KP-B-102", "bankleumi.co.il, waze", "ללא תפוגה (פעיל עד החלפת מכשיר)"),
             ])
+        # 3. Seed PERMANENT_LEARNED_KB into learned_kb
+        for item in PERMANENT_LEARNED_KB:
+            c.execute("""
+                INSERT OR IGNORE INTO learned_kb (keywords, answer, created_at)
+                VALUES (?, ?, datetime('now'))
+            """, (item["keywords"], item["answer"]))
+
+        # 4. Restore learned_kb from JSON cache if present
+        if os.path.exists(BACKUP_KB_JSON_PATH):
+            try:
+                with open(BACKUP_KB_JSON_PATH, "r", encoding="utf-8") as f:
+                    kb_cached = json.load(f)
+                if isinstance(kb_cached, list):
+                    for item in kb_cached:
+                        if isinstance(item, dict) and item.get("keywords") and item.get("answer"):
+                            c.execute("""
+                                INSERT OR IGNORE INTO learned_kb (keywords, answer, created_at)
+                                VALUES (?, ?, datetime('now'))
+                            """, (item["keywords"], item["answer"]))
+            except Exception:
+                pass
+
         conn.commit()
         conn.close()
         sync_contacts_to_json()
+        sync_learned_kb_to_json()
     except Exception as e:
         print(f"[Init DB Notice]: {e}")
 
@@ -1030,6 +1125,7 @@ async def unified_whatsapp_webhook(req: Request):
                 "INSERT INTO learned_kb (keywords, answer, created_at) VALUES (?, ?, ?)",
                 (keywords, admin_answer, datetime.now().isoformat())
             )
+            sync_learned_kb_to_json()
             last_pending = conn.execute(
                 "SELECT id, phone, request_text FROM customer_requests WHERE status='pending' ORDER BY id DESC LIMIT 1"
             ).fetchone()
@@ -1129,6 +1225,40 @@ async def unified_whatsapp_webhook(req: Request):
             
         return {"ok": True, "reply": warranty_reply, "type": "warranty_full_explanation", "escalated": False}
 
+    # 3.5 FAST DETERMINISTIC PATH: Learned Knowledge & Known Device Prices (Zero delay, Never escalate)
+    kb_answer = find_matching_learned_knowledge(message_text)
+    if kb_answer:
+        reply_kb = kb_answer
+        if customer_name and not already_greeted:
+            reply_kb = f"שלום {customer_name}, מה שלומך? {reply_kb}"
+        reply_kb = ensure_warranty_question_in_device_quote(reply_kb, message_text)
+        
+        send_whatsapp_message(sender_phone, reply_kb, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", reply_kb)
+        
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute(
+                "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sender_phone,
+                    "נעם שיח - מעבדה ומכירות",
+                    message_text,
+                    "מענה אוטונומי ממאגר ידע ומחירון",
+                    "מסלול ימות המשיח",
+                    "handled",
+                    datetime.now().isoformat()
+                )
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+            
+        return {"ok": True, "reply": reply_kb, "type": "learned_kb_direct", "escalated": False}
+
     # 4. LLM Generation (Strictly ONLY 3.8 & 3.5 Flash models with full token headroom)
     reply_text = None
     used_model = None
@@ -1163,12 +1293,18 @@ async def unified_whatsapp_webhook(req: Request):
    • במקום זאת אמור תמיד: "אני בודק כעת את המחיר העדכני וכבר חוזר אליך עם תשובה מדויקת" או "אני בודק כעת את הזמינות והמחיר העדכני".
 
 3. רכישת מכשירים ומסלולי אחריות בנעם שיח (כלל 2 השלבים):
+   • מחירון מכשירים במלאי:
+     - F25 Pro: 770 ₪ (מסלול גלות יבואן רשמי) / 870 ₪ (מסלול ימות המשיח ⭐ מעבדה מקומית)
+     - שיאומי Qin F21 Pro: 650 ₪ (גלות) / 750 ₪ (ימות המשיח ⭐)
+     - שיאומי Qin F22 Pro: 850 ₪ (גלות) / 950 ₪ (ימות המשיח ⭐)
+     - החלפת מסך שיאומי Qin F21: 220 ₪ כולל אחריות חצי שנה
    • כאשר לקוח שואל על רכישת מכשיר או מחיר מכשיר חדש:
-     הצג לו את המחיר בשתי אפשרויות אחריות:
+     הצג לו תמיד את המחיר בשתי אפשרויות אחריות:
      - אחריות יבואן ארצי (מסלול גלות)
      - אחריות מלאה אצלנו במעבדה (מסלול ימות המשיח ⭐)
      ושאל אותו בסוף ההודעה:
      "האם תרצה פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות? 😃"
+   • אם הדגם או המחיר ידועים לך מהרשימה לעיל — ענה מיד במדויק! לעולם אל תגיד שאתה בודק או שתחזור אליו על מכשירים שמחירם ידוע!
 
 4. מעבדת תיקונים ומסכים ובדיקת זמינות מכשירים:
    • אנו מתקנים ומחליפים מסכים לכל המכשירים: מכשירי מקשים (שיאומי מקשים / Qin / F21 / F22) וסמארטפונים.
@@ -1230,26 +1366,19 @@ async def unified_whatsapp_webhook(req: Request):
         reply_text = re.sub(r"\[ESCALATE:\s*[^\]]+\]", "", reply_text).strip()
         is_escalated = True
 
-    # 2. Any checking / followup keywords in reply text
-    checking_markers = [
-        "בודק", "אבדוק", "נבדוק", "יבדוק", "תבדוק", "בדיקה",
-        "אברר", "נברר", "בירור", "לברר",
-        "אחזור", "נחזור", "חוזר",
-        "אעדכן", "נעדכן", "מעדכן",
-        "תשובה מדויקת", "מחיר עדכני", "המחיר העדכני", "זמינות",
-        "במלאי", "מחר"
+    # 2. Only actual active checking phrases in reply text indicate real escalation
+    checking_phrases = [
+        "אני בודק כעת", "בודק כעת", "אבדוק כעת", "אבדוק זאת",
+        "אברר כעת", "נברר עבורך", "אחזור אליך עם תשובה", "נחזור אליך עם תשובה",
+        "חוזר אליך עם תשובה מדויקת", "אברר ואחזור"
     ]
-    if any(marker in reply_text for marker in checking_markers):
+    if any(phrase in reply_text for phrase in checking_phrases):
         is_escalated = True
 
-    # 3. Any device / model / availability / repair pricing question from customer
-    q_clean = message_text.lower()
-    product_inquiry_markers = [
-        "יש לכם", "כמה עולה", "מחיר", "עלות", "זמין", "במלאי", "מכשיר",
-        "מסך", "תיקון", "החלפה", "f25", "pro", "שיאומי", "סמסונג", "אייפון"
-    ]
-    if any(p in q_clean for p in product_inquiry_markers):
-        is_escalated = True
+    # Guard: If reply contains concrete price quote and gives an answer, do NOT escalate!
+    if any(cur in reply_text for cur in ["770", "870", "220", "650", "850", "250 ₪", "350 ₪"]):
+        if not any(phrase in reply_text for phrase in ["אני בודק", "בודק כעת", "אבדוק"]):
+            is_escalated = False
 
     # Ensure device price quotes always conclude with the mandatory warranty question
     reply_text = ensure_warranty_question_in_device_quote(reply_text, message_text)
@@ -1301,13 +1430,11 @@ async def unified_whatsapp_webhook(req: Request):
     # ESCALATE TO ADMIN: Send question to Admin WhatsApp so they can answer and teach the bot!
     if is_escalated:
         try:
-            # Smart admin recipient determination:
-            # If the message sender is one of Eran's admin phones (testing mode), send directly to THAT phone!
-            # If from an external customer, send to all registered admin numbers so Eran sees it on whichever phone he holds!
-            if sender_phone in admin_numbers_set:
-                target_admins = [sender_phone]
-            else:
-                target_admins = list(admin_numbers_set)
+            # CRITICAL RULE: NEVER send the admin notification to sender_phone!
+            # The person chatting with the bot is acting as the customer and must NEVER receive the admin prompt.
+            # If Eran is testing from one of his admin phones, the alert goes to his OTHER admin phone!
+            # If an external customer is chatting, the alert goes to both of Eran's admin phones.
+            target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
 
             customer_label = f"{customer_name} ({sender_phone})" if customer_name else sender_phone
             admin_notification = (
