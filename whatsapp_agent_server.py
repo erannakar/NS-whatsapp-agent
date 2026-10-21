@@ -1,6 +1,6 @@
 """
 ShieldBot AI - WhatsApp Autonomous Agent Server
-Powered by Google Gemini 2.5 Flash (ultra-fast sub-second responses) with auto-fallback to 2.5-flash-lite
+Powered by Google Gemini 3.8 Flash (primary) & Gemini 3.5 Flash Lite (fallback)
 Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering, Lab & Repair Services
 """
 
@@ -10,8 +10,12 @@ import re
 from datetime import datetime
 from fastapi import FastAPI, Request
 import httpx
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None
+    types = None
 
 app = FastAPI(title="ShieldBot AI - WhatsApp Agent")
 
@@ -25,10 +29,10 @@ KOSHERPLAY_API_TOKEN = os.getenv("KOSHERPLAY_API_TOKEN", "").strip()
 # ----------------- Gemini Client Setup -----------------
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Active models: gemini-2.5-flash is Google's fastest, production-grade model (sub-second response, zero 503 errors)
-ACTIVE_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+# Active models: gemini-3.8-flash (primary) with gemini-3.5-flash-lite (fast fallback)
+ACTIVE_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 
-DB_PATH = "agent_memory.db"
+DB_PATH = os.getenv("DB_PATH", "agent_memory.db")
 
 # Shared HTTP connection pool to avoid SSL handshake overhead on every WhatsApp message
 http_session = httpx.Client(timeout=10)
@@ -37,6 +41,7 @@ http_session = httpx.Client(timeout=10)
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # Learned Knowledge from Admin
     c.execute("""
         CREATE TABLE IF NOT EXISTS learned_kb (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +50,7 @@ def init_db():
             created_at TEXT
         )
     """)
+    # Customer Requests Log
     c.execute("""
         CREATE TABLE IF NOT EXISTS customer_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,6 +63,16 @@ def init_db():
             created_at TEXT
         )
     """)
+    # Contacts Memory: Remembers Customer Names Across Chats
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS contacts (
+            phone TEXT PRIMARY KEY,
+            name TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    # Subscribers (NetSpark & KosherPlay)
     c.execute("""
         CREATE TABLE IF NOT EXISTS subscribers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,8 +155,60 @@ def lookup_subscriber(phone: str) -> dict:
         }
     return {"found": False}
 
+def get_contact_name(phone: str) -> str:
+    """Retrieves remembered name from contacts or subscriber database."""
+    digits = re.sub(r"[^0-9]", "", phone)
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT name FROM contacts WHERE phone LIKE ? OR phone = ? LIMIT 1",
+        (f"%{digits[-7:]}%" if len(digits) >= 7 else phone, phone)
+    ).fetchone()
+    if row and row[0]:
+        conn.close()
+        return row[0].strip()
+    
+    sub_row = conn.execute(
+        "SELECT name FROM subscribers WHERE phone LIKE ? LIMIT 1",
+        (f"%{digits[-7:]}%" if len(digits) >= 7 else phone,)
+    ).fetchone()
+    conn.close()
+    if sub_row and sub_row[0]:
+        first_only = sub_row[0].strip().split()[0]
+        return first_only
+    return ""
+
+def save_contact_name(phone: str, name: str):
+    """Saves or updates customer name in contacts memory."""
+    clean_name = name.strip()
+    clean_phone = re.sub(r"[^0-9]", "", phone)
+    if not clean_name or not clean_phone:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        INSERT INTO contacts (phone, name, created_at, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(phone) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at
+    """, (clean_phone, clean_name, datetime.now().isoformat(), datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+def extract_name_from_text(text: str) -> str:
+    """Extracts customer first name if explicitly stated in message."""
+    stopwords = {"רוצה", "צריך", "יכול", "מדבר", "שואל", "מבקש", "שלום", "היי", "בוקר", "ערב", "יש", "לא", "פה", "כאן"}
+    patterns = [
+        r"(?:שמי|קוראים לי|אני)\s+([א-ת]{2,15})",
+        r"^([א-ת]{2,15})\s*:\s*",
+        r"זה\s+([א-ת]{2,15})\s+כאן"
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            candidate = match.group(1).strip()
+            if candidate not in stopwords:
+                return candidate
+    return ""
+
 # ----------------- Routes -----------------
-# Supports both GET and HEAD so Render health checks never receive 405 Method Not Allowed!
 @app.api_route("/", methods=["GET", "HEAD"])
 def health_check():
     return {
@@ -175,7 +243,6 @@ async def whatsapp_webhook(req: Request):
     except Exception:
         return {"ok": False, "error": "Invalid JSON"}
 
-    # Extract Sender Phone & Message Text
     sender_data = payload.get("senderData", {})
     sender_phone = sender_data.get("chatId", "").replace("@c.us", "") or payload.get("senderPhone", "")
     message_data = payload.get("messageData", {})
@@ -201,7 +268,7 @@ async def whatsapp_webhook(req: Request):
     clean_admin = re.sub(r"[^0-9]", "", ADMIN_WHATSAPP_PHONE)
     clean_sender = re.sub(r"[^0-9]", "", sender_phone)
 
-    # 1. Admin Learning Loop: Admin answering an escalated question
+    # 1. Admin Learning Loop
     if clean_sender == clean_admin and ("תשובה:" in message_text or "תשובה " in message_text):
         parts = message_text.replace("תשובה:", "תשובה ").split("|")
         admin_answer = parts[0].replace("תשובה", "").strip()
@@ -221,9 +288,11 @@ async def whatsapp_webhook(req: Request):
                 "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
                 ("נענה על ידי מנהל ונלמד במאגר", last_pending[0])
             )
+            cust_name = get_contact_name(last_pending[1])
+            salutation = f"שלום {cust_name}," if cust_name else "שלום,"
             send_whatsapp_message(
                 last_pending[1],
-                f"שלום, חזרתי אליך עם תשובה מהמעבדה / מנהל השירות שלנו:\n{admin_answer}"
+                f"{salutation} חזרתי אליך עם תשובה:\n{admin_answer}"
             )
             customer_dest = last_pending[1]
         else:
@@ -234,8 +303,19 @@ async def whatsapp_webhook(req: Request):
         send_whatsapp_message(sender_phone, f"✅ התשובה נשמרה במאגר הידע של הסוכן ונשלחה ללקוח ({customer_dest})!")
         return {"ok": True, "admin_action": "knowledge_saved"}
 
-    # 2. Check Subscriber Status in DB
+    # 2. Check Customer Name & Memory
+    customer_name = get_contact_name(sender_phone)
+    extracted_name = extract_name_from_text(message_text)
+    if extracted_name:
+        customer_name = extracted_name
+        save_contact_name(sender_phone, extracted_name)
+
+    # 3. Check Subscriber Status in DB
     sub_info = lookup_subscriber(sender_phone)
+    if sub_info.get("found") and not customer_name:
+        customer_name = sub_info["name"].split()[0]
+        save_contact_name(sender_phone, customer_name)
+
     subscriber_context = (
         f"פרטי מנוי מאומת: שם {sub_info['name']}, מערכת {sub_info['system']}, "
         f"סטטוס {sub_info['status']}, מסלול/רמה נוכחית: {sub_info['level']}, מזהה מכשיר: {sub_info['deviceId']}."
@@ -245,42 +325,48 @@ async def whatsapp_webhook(req: Request):
 
     learned_rules = get_learned_knowledge()
 
-    # 3. Call Gemini with automatic model fallback
+    # 4. Call Gemini with automatic model fallback
     reply_text = None
     used_model = None
 
     if client:
+        name_instruction = (
+            f"השם הפרטי של הלקוח ידוע: '{customer_name}'. פנה אליו תמיד בשמו הפרטי ('שלום {customer_name}, ...')."
+            if customer_name
+            else "אינך יודע עדיין את שמו של הלקוח. שאל אותו בנימוס ובטבעיות לשמו (למשל: 'שלום! בשמחה, אני בודק את זה. איך קוראים לך כדי שאדע למי לפנות?'). אם הוא כתב לך את שמו, הוסף בסוף תשובתך [SET_NAME: שם_הלקוח]."
+        )
+
         system_instruction = f"""
-אתה סוכן שירות, מכירות ומעבדה אוטונומי ("ShieldBot AI").
-סגנון מענה קריטי:
-- ענה בעברית טבעית, חמה, קצרה וקולעת! אסור בתכלית האיסור לכתוב תשובות ארוכות וטרחניות!
-- אורך התשובה: 2 עד 4 שורות לכל היותר. אנשים בווצאפ רוצים מענה מהיר ומדויק.
-- כל המחירים אך ורק בשקלים חדשים (₪). לעולם אל תשתמש בדולר ($).
-
-תחומי הפעילות והשירותים שלנו:
+אתה סוכן אישי אנושי, חם, מקצועי וענייני בווצאפ ("ShieldBot AI").
+סגנון דיבור וכללי יסוד חקוקים בסלע:
 ==================================================
-1. מעבדת תיקונים מקצועית ומכירת מכשירים:
-   • אנו מתקנים מסכים שבורים לכל סוגי המכשירים: מכשירי מקשים (כולל שיאומי מקשים / Qin / Q1 / F21 / F22 וכו') וסמארטפונים!
-   • בנוסף: תיקון שקעי טעינה, החלפת סוללות, תיקוני לוח ורכיבים, פריצות כשרות, והתקנת גרסאות כשרות.
+1. שפה יומיומית, טבעית ומכבדת:
+   • דבר כמו איש שירות אכפתי, קצר וענייני.
+   • אסור לחלוטין לדבר בשפת מכונה או הודעות תקליט!
+   • אסור להשתמש בתבניות תקליט, שפת מערכת מנוכרת או הודעות פורמליות של מוקדנים. דבר בגובה העיניים כאיש צוות שמטפל אישית בפנייה.
+   • {name_instruction}
+   • אורך מענה: 1 עד 3 שורות קצרות וקולעות בלבד!
+   • כל המחירים בשקלים חדשים (₪) בלבד. אין אזכור לדולרים ($).
+
+2. שירותי מעבדה ותיקונים:
+   • אנו מתקנים מסכים שבורים לכל סוגי המכשירים: מכשירי מקשים (כולל שיאומי מקשים / Qin / Q1 / F21 / F22 וכו) וסמארטפונים!
+   • בנוסף: תיקון שקעי טעינה, החלפת סוללות, תיקוני לוח, פריצות כשרות, והתקנת גרסאות כשרות.
    • אם לקוח שואל על תיקון מסך / מעבדה: אשר בשמחה שאנו מתקנים! הזמן אותו להביא את המכשיר או שאל איזה דגם יש לו כדי לתת הצעת מחיר מדויקת.
-   • לעולם אל תגיד שאנו עוסקים רק בסינון ולא בתיקונים! אנו מפעילים מעבדה מלאה!
+   • לעולם אל תגיד שאנו לא מתקנים! יש לנו מעבדה מלאה!
 
-2. כשר פליי (KosherPlay) — מסלולים תמציתיים:
-   • בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, ~200 אפליקציות שימושיות כשרות). הרישיון פעיל על המכשיר בלבד.
-   • מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר. הרישיון נייד ועובר למכשיר חדש ללא עלות רישיון!
+3. מחירון ומסלולים:
+   • כשר פליי בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, ~200 אפליקציות כשרות חיוניות). רישיון פעיל על המכשיר בלבד.
+   • כשר פליי מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר. הרישיון נייד ועובר למכשיר חדש ללא עלות רישיון!
+   • נטספרק: 350 ₪ לשנה (רישיון שנתי). שינוי רמות חופשי ומיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית).
 
-3. נטספרק (NetSpark):
-   • 350 ₪ לשנה (רישיון שנתי).
-   • שינוי רמות חופשי ומיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית).
-
-4. כלל ברזל נגד המצאות / תשובות שגויות בביטחון (Anti-Hallucination):
-   • לעולם אל תגיד בביטחון "אנחנו לא עושים את זה" לגבי מוצר, שירות, דגם מכשיר או תיקון!
-   • אם נשאלת שאלה על מחיר ספציפי של תיקון דגם, חלק חילוף, או שאלה טכנית שאינך יודע בוודאות:
+4. כלל ברזל נגד המצאות / תשובות שגויות (Anti-Hallucination):
+   • לעולם אל תגיד בביטחון "אנחנו לא עושים את זה" לגבי שירות או דגם מכשיר!
+   • אם נשאלת שאלה על מחיר תיקון ספציפי, חלק חילוף, או שאלה טכנית שאינך יודע בוודאות:
      ענה ללקוח בקצרה:
-     "אני בודק זאת כעת מול המעבדה/הצוות שלנו ואחזור אליך כאן מיד."
-     וצרף בסוף הודעתך באופן מדויק את התגית: [ESCALATE: שאלה_קצרה_למנהל]
+     "אני בודק את זה כעת מול המעבדה ומיד חוזר אליך."
+     וצרף בסוף הודעתך את התגית: [ESCALATE: שאלה_קצרה_למנהל]
 
-5. מצב הלקוח הנוכחי:
+5. פרטי הלקוח:
    {subscriber_context}
 
 6. כללים שנלמדו מהמנהל:
@@ -304,11 +390,22 @@ async def whatsapp_webhook(req: Request):
             except Exception as exc:
                 print(f"[Gemini Error on {model_candidate}]: {exc}")
 
-    # Fallback if AI generation failed
+    # Natural Human Fallback (Never robotic boilerplate!)
     if not reply_text:
-        reply_text = "שלום! פנייתך התקבלה במוקד השירות, המעבדה והסינון. נציג יחזור אליך בהקדם."
+        if customer_name:
+            reply_text = f"שלום {customer_name}, העניין בטיפול ואני כבר בודק את זה וחוזר אליך."
+        else:
+            reply_text = "שלום! העניין בטיפול ואני כבר בודק את זה. איך קוראים לך כדי שאדע למי לפנות?"
 
-    # 4. Check if Escalation to Admin is needed
+    # Check for [SET_NAME: ...] tag to save customer name
+    match_name = re.search(r"\[SET_NAME:\s*([^\]]+)\]", reply_text)
+    if match_name:
+        new_name = match_name.group(1).strip()
+        save_contact_name(sender_phone, new_name)
+        customer_name = new_name
+        reply_text = re.sub(r"\[SET_NAME:\s*[^\]]+\]", "", reply_text).strip()
+
+    # 5. Check if Escalation to Admin is needed
     is_escalated = False
     escalation_question = message_text
     
@@ -318,10 +415,10 @@ async def whatsapp_webhook(req: Request):
         if match:
             escalation_question = match.group(1).strip()
         reply_text = re.sub(r"\[ESCALATE:\s*[^\]]+\]", "", reply_text).strip()
-    elif any(phrase in reply_text for phrase in ["בודק זאת כעת מול מנהל", "בודק זאת כעת מול המעבדה", "אחזור אליך כאן מיד עם תשובה"]):
+    elif any(phrase in reply_text for phrase in ["בודק זאת כעת מול מנהל", "בודק זאת כעת מול המעבדה", "אחזור אליך כאן מיד עם תשובה", "אני בודק את זה ומיד חוזר"]):
         is_escalated = True
 
-    # 5. Save Request to DB
+    # 6. Save Request to DB
     status = "pending" if is_escalated else "handled"
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -340,10 +437,11 @@ async def whatsapp_webhook(req: Request):
     conn.commit()
     conn.close()
 
-    # 6. If Escalated -> ACTUALLY SEND WHATSAPP MESSAGE TO ADMIN!
+    # 7. If Escalated -> ACTUALLY SEND WHATSAPP MESSAGE TO ADMIN!
     if is_escalated and clean_admin and clean_sender != clean_admin:
+        customer_label = f"{customer_name} ({sender_phone})" if customer_name else sender_phone
         admin_notification = (
-            f"❓ *שאלה מלקוח שדורשת את תשובתך* ({sender_phone}):\n"
+            f"❓ *שאלה מלקוח שדורשת את תשובתך* ({customer_label}):\n"
             f"\"{message_text}\"\n\n"
             f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
             f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
@@ -351,6 +449,6 @@ async def whatsapp_webhook(req: Request):
         print(f"[Admin Escalation Sent] Sending question to Admin: {clean_admin}")
         send_whatsapp_message(clean_admin, admin_notification)
 
-    # 7. Send WhatsApp Reply back to customer
+    # 8. Send WhatsApp Reply back to customer
     send_whatsapp_message(sender_phone, reply_text)
     return {"ok": True, "reply": reply_text, "escalated": is_escalated, "model": used_model}
