@@ -103,6 +103,35 @@ def is_pure_greeting(text: str) -> bool:
             return False
     return True
 
+# ----------------- Store Address & Opening Hours (Hadera) -----------------
+STORE_ADDRESS = "רחוב ישעיהו 10, חדרה"
+STORE_HOURS_DETAILS = """אנחנו נמצאים ברחוב ישעיהו 10, חדרה 📍
+
+שעות הפעילות שלנו:
+• ימים א'-ה': 12:00-20:00
+• ימי ו' וערבי חג:
+  - שעון קיץ: 12:00-15:30
+  - שעון חורף: 10:30-13:30
+• מוצאי שבת וחג: בתיאום מראש בלבד"""
+
+def is_store_info_question(text: str) -> bool:
+    """Returns True if the customer is asking about store address, location, or opening hours."""
+    clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
+    indicators = [
+        "כתובת", "איפה אתם", "איפה החנות", "איפה המעבדה", "מיקום", "שעות פעילות",
+        "שעות פתיחה", "מתי פתוח", "מתי אתם פתוחים", "מתי סגור", "שעות קבלה",
+        "איפה אתם יושבים", "איפה נמצאים", "איפה יושבים", "איזה רחוב", "איך מגיעים",
+        "איפה הסניף", "כתובת שלכם", "שעות הפעילות", "הכתובת שלכם", "שעות פעילות"
+    ]
+    return any(ind in clean for ind in indicators)
+
+def get_store_info_reply(customer_name: str = "") -> str:
+    name_str = f" {customer_name}" if customer_name else ""
+    closing = f"מוזמן להגיע אלינו{name_str}! 😃"
+    return f"""{STORE_HOURS_DETAILS}
+
+{closing}"""
+
 # ----------------- Database Initialization -----------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -115,6 +144,13 @@ def init_db():
             answer TEXT,
             created_at TEXT
         )
+    """)
+    # Seed Store Address & Hours into learned_kb
+    c.execute("""
+        INSERT OR IGNORE INTO learned_kb (keywords, answer, created_at)
+        VALUES ('כתובת, מיקום, שעות פעילות, שעות פתיחה, איפה אתם, ישעיהו 10, חדרה',
+        'החנות והמעבדה שלנו נמצאות ברחוב ישעיהו 10 בחדרה. שעות פעילות: ימים א-ה 12:00-20:00. ימי ו׳ וערבי חג: שעון קיץ 12:00-15:30, שעון חורף 10:30-13:30. מוצאי שבת וחג בתיאום מראש בלבד.',
+        datetime('now'))
     """)
     # Seed A17 screen rule explicitly approved by Admin
     c.execute("""
@@ -499,6 +535,9 @@ def is_substantive_admin_question(customer_message: str) -> bool:
     if not clean or len(clean) < 2:
         return False
 
+    if is_store_info_question(clean):
+        return False
+
     has_question_indicator = any(qw in clean for qw in [
         "כמה", "מחיר", "עלות", "האם יש", "יש לכם", "תקלה", "נשבר", "לתקן", "להחליף", "שקע", "סוללה", "?"
     ])
@@ -552,6 +591,11 @@ def apply_customer_name_guard(reply_text: str, customer_name: str, already_greet
         flags=re.IGNORECASE
     ).strip()
     
+    # 1.5 Purge hallucinated model denial (e.g. claiming iPhone 18 does not exist or iPhone 16 is latest)
+    if re.search(r"(?:עדיין\s+לא\s+יצא|לא\s+קיים\s+דגם|הדגם\s+האחרון\s+(?:בשוק\s+)?הוא\s+אייפון\s+16)", cleaned):
+        cust_label = f" {customer_name}" if customer_name else ""
+        cleaned = f"אני בודק כעת את הזמינות והמחיר מול היבואן והמעבדה{cust_label}, ומיד חוזר אליך עם תשובה מדויקת. [ESCALATE: בדיקת זמינות ומחיר ללקוח{cust_label}]"
+
     # 2. Purge fake machine count hallucinations
     cleaned = re.sub(r"\(?\d+\s+מכשירים\s+בתיקון\)?", "", cleaned).strip()
     cleaned = re.sub(r"יש\s+כרגע\s+\d+\s+מכשירים\s+בתיקון\s*,?\s*", "", cleaned).strip()
@@ -736,16 +780,11 @@ async def whatsapp_webhook(req: Request):
             "SELECT id, phone, request_text FROM customer_requests WHERE status='pending' ORDER BY id DESC LIMIT 1"
         ).fetchone()
         
+        pending_target = last_pending[1] if last_pending else None
         if last_pending:
             conn.execute(
                 "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
                 ("נענה על ידי מנהל ונלמד במאגר", last_pending[0])
-            )
-            cust_name = get_contact_name(last_pending[1])
-            salutation = f"שלום {cust_name}," if cust_name else "שלום,"
-            send_whatsapp_message(
-                last_pending[1],
-                f"{salutation} חזרתי אליך עם תשובה:\n{clean_answer}"
             )
             customer_dest = last_pending[1]
         else:
@@ -753,6 +792,13 @@ async def whatsapp_webhook(req: Request):
             
         conn.commit()
         conn.close()
+
+        if pending_target:
+            cust_name = get_contact_name(pending_target)
+            salutation = f"שלום {cust_name}," if cust_name else "שלום,"
+            fwd_msg = f"{salutation} חזרתי אליך עם תשובה:\n{clean_answer}"
+            send_whatsapp_message(pending_target, fwd_msg)
+            save_chat_message(pending_target, "agent", fwd_msg)
         send_whatsapp_message(sender_phone, f"✅ התשובה נשלחה ללקוח ({customer_dest}) ללא מילות מפתח ונשמרה במאגר תחת מילות הזיהוי:\n'{keywords}'")
         return {"ok": True, "admin_action": "knowledge_saved"}
 
@@ -787,6 +833,14 @@ async def whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "agent", greeting_prompt_reply)
         send_whatsapp_message(sender_phone, greeting_prompt_reply)
         return {"ok": True, "reply": greeting_prompt_reply, "type": "initial_greeting_prompt"}
+
+    # ----------------- FAST DETERMINISTIC PATH FOR STORE ADDRESS & HOURS -----------------
+    if is_store_info_question(message_text):
+        store_reply = get_store_info_reply(customer_name)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", store_reply)
+        send_whatsapp_message(sender_phone, store_reply)
+        return {"ok": True, "reply": store_reply, "type": "store_info"}
 
     # 4. Call Gemini with conversational prompt
     reply_text = None
@@ -857,15 +911,34 @@ async def whatsapp_webhook(req: Request):
      אם הלקוח שואל על תור או זמנים:
      הסבר לו בצורה שירותית שאין צורך להמתין במקום — הוא יכול להשאיר את המכשיר במעבדה, וברגע שהמכשיר מוכן הוא יקבל מיד הודעה מסודרת לאיסוף.
 
-3. מחירון ומסלולי הגנה קבועים:
+3. כתובת החנות והמעבדה ושעות פעילות מדויקות (איסור מוחלט על בני ברק!):
+   • כתובת: רחוב ישעיהו 10, חדרה (אנחנו בחדרה בלבד! לעולם אל תגיד בני ברק או כל עיר אחרת!).
+   • שעות פעילות המעבדה והחנות:
+     - ימים א'-ה': בין השעות 12:00 עד 20:00.
+     - ימי שישי וערבי חג:
+       * שעון קיץ: 12:00 עד 15:30.
+       * שעון חורף: 10:30 עד 13:30.
+     - מוצאי שבת ומוצאי חג: בתיאום מראש בלבד.
+   • כאשר לקוח שואל על כתובת, מיקום, שעות פתיחה, או מתי אפשר להגיע:
+     מסור תמיד את הכתובת המדויקת בחדרה ואת שעות הפעילות הנ"ל בצורה מסודרת וברורה.
+     לעולם אל תגיד שאתה "בודק מול המעבדה" את שעות הפעילות או הכתובת — המידע ידוע לך וקבוע!
+
+4. מכשירים, סמארטפונים ודגמים עדכניים (שנת 2026! איסור מוחלט על הכחשת דגמים):
+   • אנחנו בסוף שנת 2026! דגמי אייפון 16, אייפון 17 ו-iPhone 18 קיימים ופעילים בשוק!
+   • איסור מוחלט: לעולם אל תגיד ללקוח "עדיין לא יצא דגם כזה", "לא קיים דגם כזה של אפל", "הדגם האחרון בשוק הוא 16", או תתווכח עם הלקוח!
+   • אם לקוח שואל על זמינות או מחיר של מכשיר (כגון "יש לכם אייפון 18 החדש?", "כמה עולה אייפון 17?", "יש לכם גלקסי S26?"):
+     השב לו שאתה בודק כעת את הזמינות והמחיר המעודכן מול היבואן והמעבדה ומיד חוזר אליו עם תשובה מדויקת.
+     וצרף תגית: [ESCALATE: בדיקת זמינות ומחיר [שם הדגם] ללקוח {customer_name or sender_phone}].
+
+5. מחירון ומסלולי הגנה קבועים:
    • כשר פליי בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, ~200 אפליקציות כשרות חיוניות). רישיון פעיל על המכשיר בלבד.
    • כשר פליי מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר.
    • נטספרק: 350 ₪ לשנה (רישיון שנתי). שינוי רמות חופשי ומיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית).
 
-4. כללים שנלמדו מהמנהל בעבר (השתמש במחירים שלהלן כמחיר משוער "בערך X ₪" והצע בדיקה להיום):
+6. כללים שנלמדו מהמנהל בעבר (השתמש במחירים שלהלן כמחיר משוער "בערך X ₪" והצע בדיקה להיום):
    {learned_rules}
 
-5. מתי מעבירים שאלה למנהל באמצעות [ESCALATE: ...]:
+7. מתי מעבירים שאלה למנהל באמצעות [ESCALATE: ...]:
    • בכל פעם שלקוח שואל על מחיר מסך או תיקון שאינו מופיע בכללים שנלמדו מהמנהל!
    • בכל פעם שלקוח ביקש לבדוק הצעת מחיר מדויקת ומעודכנת להיום!
    • לעולם אל תצרף [ESCALATE:] להודעות הצגת שם, ברכות, תודות, אישורים, או הודעות הגעה ("מעולה אני מגיע אליכם")!
