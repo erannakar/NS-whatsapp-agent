@@ -1,19 +1,17 @@
 """
 ShieldBot AI - WhatsApp Autonomous Agent Server
-Powered by Google Gemini (gemini-3.8-flash with auto-retry and resilient fallback)
-Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering Systems
+Powered by Google Gemini (gemini-3.8-flash with auto-fallback to gemini-2.5-flash)
+Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering, Lab & Repair Services
 """
 
 import os
 import sqlite3
 import re
-import time
 from datetime import datetime
 from fastapi import FastAPI, Request
 import httpx
 from google import genai
 from google.genai import types
-from google.genai.errors import APIError
 
 app = FastAPI(title="ShieldBot AI - WhatsApp Agent")
 
@@ -24,12 +22,8 @@ ADMIN_WHATSAPP_PHONE = os.getenv("ADMIN_WHATSAPP_PHONE", "972500000000").strip()
 NETSPARK_API_TOKEN = os.getenv("NETSPARK_API_TOKEN", "").strip()
 KOSHERPLAY_API_TOKEN = os.getenv("KOSHERPLAY_API_TOKEN", "").strip()
 
-# ----------------- Gemini Client Setup -----------------
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-
-# Active models: gemini-3.8-flash is the primary supported model
-ACTIVE_MODELS = ["gemini-3.8-flash"]
-
+ACTIVE_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash"]
 DB_PATH = "agent_memory.db"
 
 # ----------------- Database Initialization -----------------
@@ -87,7 +81,6 @@ init_db()
 
 # ----------------- Helper Functions -----------------
 def send_whatsapp_message(phone: str, text: str) -> bool:
-    """Sends outgoing message via Green-API or compatible WhatsApp Gateway."""
     clean_phone = re.sub(r"[^0-9]", "", phone)
     if not clean_phone or not WHATSAPP_API_URL:
         print(f"[WhatsApp DryRun] To {clean_phone}: {text}")
@@ -108,7 +101,6 @@ def send_whatsapp_message(phone: str, text: str) -> bool:
         return False
 
 def get_learned_knowledge() -> str:
-    """Fetches custom knowledge rules taught by the admin."""
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT keywords, answer FROM learned_kb").fetchall()
     conn.close()
@@ -117,7 +109,6 @@ def get_learned_knowledge() -> str:
     return "\n".join([f"- מילות זיהוי ({r[0]}): ענה: {r[1]}" for r in rows])
 
 def lookup_subscriber(phone: str) -> dict:
-    """Checks subscriber status in NetSpark & KosherPlay databases."""
     digits = re.sub(r"[^0-9]", "", phone)
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute(
@@ -147,14 +138,24 @@ def health_check():
         "service": "ShieldBot AI WhatsApp Agent",
         "models": ACTIVE_MODELS,
         "has_gemini_key": bool(GEMINI_API_KEY),
-        "has_whatsapp_url": bool(WHATSAPP_API_URL)
+        "has_whatsapp_url": bool(WHATSAPP_API_URL),
+        "admin_phone": ADMIN_WHATSAPP_PHONE
+    }
+
+@app.get("/test_send")
+def test_send(phone: str = "0524043644"):
+    success = send_whatsapp_message(
+        phone,
+        "שלום! זוהי הודעת בדיקה משרת הסוכן ShieldBot AI. החיבור לווצאפ פעיל ומסונכרן בהצלחה! 🛡️"
+    )
+    return {
+        "ok": success,
+        "recipient": phone,
+        "note": "הודעת בדיקה נשלחה בהצלחה."
     }
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(req: Request):
-    """
-    Main Webhook receiving incoming WhatsApp messages from Green-API or Meta Cloud API.
-    """
     try:
         payload = await req.json()
     except Exception:
@@ -164,22 +165,33 @@ async def whatsapp_webhook(req: Request):
     sender_data = payload.get("senderData", {})
     sender_phone = sender_data.get("chatId", "").replace("@c.us", "") or payload.get("senderPhone", "")
     message_data = payload.get("messageData", {})
-    text_data = message_data.get("textMessageData", {})
-    message_text = text_data.get("textMessage", "") or payload.get("text", "")
+    
+    type_msg = message_data.get("typeMessage", "")
+    message_text = ""
+    if type_msg == "textMessage":
+        message_text = message_data.get("textMessageData", {}).get("textMessage", "")
+    elif type_msg == "extendedTextMessage":
+        message_text = message_data.get("extendedTextMessageData", {}).get("text", "")
+    
+    if not message_text:
+        message_text = (
+            message_data.get("textMessageData", {}).get("textMessage", "")
+            or payload.get("text", "")
+        )
 
     if not sender_phone or not message_text:
         return {"ok": True, "note": "Ignored non-text or system event"}
 
     print(f"[Incoming WhatsApp] From {sender_phone}: {message_text}")
 
-    # 1. Admin Learning Loop: Admin answering an escalated question
     clean_admin = re.sub(r"[^0-9]", "", ADMIN_WHATSAPP_PHONE)
     clean_sender = re.sub(r"[^0-9]", "", sender_phone)
 
-    if clean_sender == clean_admin and "תשובה:" in message_text:
-        parts = message_text.split("|")
-        admin_answer = parts[0].replace("תשובה:", "").strip()
-        keywords = parts[1].replace("מילות מפתח:", "").strip() if len(parts) > 1 else admin_answer[:25]
+    # 1. Admin Learning Loop: מנהל עונה לשאלה שהועברה אליו
+    if clean_sender == clean_admin and ("תשובה:" in message_text or "תשובה " in message_text):
+        parts = message_text.replace("תשובה:", "תשובה ").split("|")
+        admin_answer = parts[0].replace("תשובה", "").strip()
+        keywords = parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip() if len(parts) > 1 else admin_answer[:25]
         
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
@@ -187,8 +199,9 @@ async def whatsapp_webhook(req: Request):
             (keywords, admin_answer, datetime.now().isoformat())
         )
         last_pending = conn.execute(
-            "SELECT id, phone FROM customer_requests WHERE status='pending' ORDER BY id DESC LIMIT 1"
+            "SELECT id, phone, request_text FROM customer_requests WHERE status='pending' ORDER BY id DESC LIMIT 1"
         ).fetchone()
+        
         if last_pending:
             conn.execute(
                 "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
@@ -196,153 +209,126 @@ async def whatsapp_webhook(req: Request):
             )
             send_whatsapp_message(
                 last_pending[1],
-                f"חזרתי אליך עם תשובה ממנהל המערכת שלנו:\n{admin_answer}"
+                f"שלום, חזרתי אליך עם תשובה מהמעבדה / מנהל השירות שלנו:\n{admin_answer}"
             )
+            customer_dest = last_pending[1]
+        else:
+            customer_dest = "אין לקוח ממתין (נשמר ישירות למאגר)"
+            
         conn.commit()
         conn.close()
-        send_whatsapp_message(sender_phone, "✅ התשובה נשמרה במאגר הידע של הסוכן ונשלחה ללקוח!")
+        send_whatsapp_message(sender_phone, f"✅ התשובה נשמרה במאגר הידע של הסוכן ונשלחה ללקוח ({customer_dest})!")
         return {"ok": True, "admin_action": "knowledge_saved"}
 
-    # 2. Check Subscriber Status in DB
+    # 2. אימות מנוי קיים
     sub_info = lookup_subscriber(sender_phone)
     subscriber_context = (
         f"פרטי מנוי מאומת: שם {sub_info['name']}, מערכת {sub_info['system']}, "
-        f"סטטוס {sub_info['status']}, מסלול/רמה נוכחית: {sub_info['level']}, מזהה מכשיר: {sub_info['deviceId']}."
+        f"סטטוס {sub_info['status']}, מסלול/רמה: {sub_info['level']}, מכשיר: {sub_info['deviceId']}."
         if sub_info.get("found")
         else "הלקוח פונה ממספר שאינו רשום כמנוי קיים במערכות נטספרק או כשר פליי."
     )
 
     learned_rules = get_learned_knowledge()
 
-    # 3. Call Gemini with automatic retry for 503 temporary demand spikes
+    # 3. הפעלת מודל Gemini
     reply_text = None
     used_model = None
 
     if client:
         system_instruction = f"""
-אתה סוכן שירות ומכירות אוטונומי ומומחה ("ShieldBot AI") של חברת סינון והגנה מובילה (נטספרק - NetSpark וכשר פליי - KosherPlay).
-ענה בעברית אדיבה, בהירה, שירותית ומקצועית בלבד.
-הערה קריטית: כל המחירים אך ורק בשקלים חדשים (₪). לעולם אל תשתמש בסימן דולר ($).
+אתה סוכן שירות, מכירות ומעבדה אוטונומי ("ShieldBot AI").
+סגנון מענה קריטי:
+- ענה בעברית טבעית, חמה, קצרה וקולעת! אסור בתכלית האיסור לכתוב תשובות ארוכות וטרחניות!
+- אורך התשובה: 2 עד 4 שורות לכל היותר. אנשים בווצאפ רוצים מענה מהיר ומדויק.
+- כל המחירים אך ורק בשקלים חדשים (₪). לעולם אל תשתמש בדולר ($).
 
-מחירון ומסלולי השירות הרשמיים שלנו:
+תחומי הפעילות והשירותים שלנו:
 ==================================================
-1. כשר פליי (KosherPlay) - מסלולים ומדיניות החלפת מכשיר:
-   א. מסלול כשר פליי בסיסי:
-      • כולל: חסימת גישה מלאה לדפדפן ולתכנים בלתי ראויים באפליקציות.
-      • חנות אפליקציות: מצומצמת (כ-200 אפליקציות כשרות) הנחוצות לשימוש בסיסי יומיומי ולצרכי עבודה כגון בנקים, קופות חולים, וויז (Waze), ווצאפ ועוד.
-      • עלות: 250 ₪ תשלום חד-פעמי.
-      • מדיניות החלפת מכשיר: הרישיון פעיל על אותו המכשיר בלבד עד להחלפתו. אם הלקוח מחליף מכשיר, הרישיון אינו עובר ויש לרכוש רישיון חדש.
+1. מעבדת תיקונים מקצועית ומכירת מכשירים:
+   • אנו מתקנים מסכים שבורים לכל סוגי המכשירים: מכשירי מקשים (כולל שיאומי מקשים / Qin / Q1 / F21 / F22 וכו') וסמארטפונים!
+   • בנוסף: תיקון שקעי טעינה, החלפת סוללות, תיקוני לוח ורכיבים, פריצות כשרות, והתקנת גרסאות כשרות.
+   • אם לקוח שואל על תיקון מסך / מעבדה: אשר בשמחה שאנו מתקנים! הזמן אותו להביא את המכשיר או שאל איזה דגם יש לו כדי לתת הצעת מחיר מדויקת.
+   • לעולם אל תגיד שאנו עוסקים רק בסינון ולא בתיקונים! אנו מפעילים מעבדה מלאה!
 
-   ב. מסלול כשר פליי מורחב:
-      • כולל: כ-20,000 (עשרים אלף) אפליקציות כשרות ומוגנות, וכן אפליקציות ייחודיות בפיתוח בלעדי: ספוטיפי כשר, יוטיוב כשר, ווצאפ כשר ועוד.
-      • עלות התקנה: 180 ₪ חד-פעמי.
-      • עלות רישיון/שירות:
-        - מערכת הגנה ורישיון בלבד: 200 ₪ לשנה.
-        - מערכת הגנה + דפדפן מסונן: 300 ₪ לשנה (שדרוג דפדפן בתוספת 100 ₪ לשנה).
-      • מדיניות החלפת מכשיר: הרישיון נייד ויכול לעבור למכשיר החדש ללא תשלום נוסף על הרישיון! הלקוח משלם רק עבור ההתקנה במכשיר החדש (180 ₪).
+2. כשר פליי (KosherPlay) — מסלולים תמציתיים:
+   • בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, ~200 אפליקציות שימושיות כשרות). הרישיון פעיל על המכשיר בלבד.
+   • מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר. הרישיון נייד ועובר למכשיר חדש ללא עלות רישיון!
 
-2. נטספרק (NetSpark):
-   • עלות: 350 ₪ לשנה (רישיון שנתי).
-   • רמות סינון לבחירה (המעבר ביניהן מתבצע מיידית וחינם דרך הודעה בווצאפ):
-     - רחבה (שמרני/תורני): סינון קפדני מאוד, אתרים תורניים וחדשות מאושרות בלבד.
-     - מתקדמת (מאוזן): חוסם תכנים לא הולמים, מאפשר יוטיוב ורשתות בצורה מוגנת ומסוננת.
-     - בסיסית (פתוחה): חוסם פורנוגרפיה ואלימות קשה.
-     - מותאמת אישית / חסימה כוללת.
+3. נטספרק (NetSpark):
+   • 350 ₪ לשנה (רישיון שנתי).
+   • שינוי רמות חופשי ומיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית).
 
-3. מצב הלקוח הנוכחי:
+4. כלל ברזל נגד המצאות / תשובות שגויות בביטחון (Anti-Hallucination):
+   • לעולם אל תגיד בביטחון "אנחנו לא עושים את זה" לגבי מוצר, שירות, דגם מכשיר או תיקון!
+   • אם נשאלת שאלה על מחיר ספציפי של תיקון דגם, חלק חילוף, או שאלה טכנית שאינך יודע בוודאות:
+     ענה ללקוח בקצרה:
+     "אני בודק זאת כעת מול המעבדה/הצוות שלנו ואחזור אליך כאן מיד."
+     וצרף בסוף הודעתך באופן מדויק את התגית: [ESCALATE: שאלה_קצרה_למנהל]
+
+5. מצב הלקוח הנוכחי:
    {subscriber_context}
 
-4. כללים מותאמים שנלמדו מהמנהל:
+6. כללים שנלמדו מהמנהל:
    {learned_rules}
-
-הנחיות מענה ושירות:
-- ענה ישירות לשאלת הלקוח בסבר פנים יפות.
-- אם הלקוח שואל על כשר פליי: פרט את שני המסלולים (בסיסי ב-250 ₪ חד פעמי מול מורחב ב-180 ₪ התקנה + 200/300 ₪ לשנה), והסבר בבירור מה כולל כל מסלול ואת ההבדל במדיניות החלפת מכשיר.
-- אם הלקוח מבקש לשנות רמת סינון בנטספרק, אשר שהרמה שונתה בהצלחה במכשיר.
-- אם הלקוח מבקש לפתוח אתר מסוים (כגון btl.gov.il, אתרי ממשלה, בנקים), אשר שהאתר נוסף לרשימה המאושרת במכשירו.
-- אם לקוח מתעניין במסלול הבסיסי, ציין את יתרון המחיר החד-פעמי (250 ₪), אך הדגש שבמסלול המורחב (180 ₪ התקנה + 200 ₪ לשנה) מקבלים 20,000 אפליקציות, יוטיוב וספוטיפי כשרים, ובעיקר: כשיחליף מכשיר בעתיד הרישיון נשמר לו ויעבור בחינם (ישלם רק 180 ₪ התקנה במקום רישיון מחדש).
-- אם נשאלת שאלה חריגה שאינך יודע בוודאות, ציין שפנייתו הועברה לבדיקת מנהל המערכת ונחזור אליו בהקדם.
 """
         for model_candidate in ACTIVE_MODELS:
-            # Try up to 3 attempts with brief backoff for 503 high demand spikes
-            for attempt in range(1, 4):
-                try:
-                    response = client.models.generate_content(
-                        model=model_candidate,
-                        contents=f"לקוח מספר {sender_phone} כתב בווצאפ: {message_text}",
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_instruction,
-                            temperature=0.2,
-                        )
+            try:
+                response = client.models.generate_content(
+                    model=model_candidate,
+                    contents=f"לקוח {sender_phone}: {message_text}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.2,
                     )
-                    if response and response.text:
-                        reply_text = response.text.strip()
-                        used_model = model_candidate
-                        print(f"[Gemini Success] Answered with model: {model_candidate} (attempt {attempt})")
-                        break
-                except APIError as api_err:
-                    print(f"[Gemini APIError on {model_candidate} - attempt {attempt}]: {api_err}")
-                    # If 503 (temporary high demand spike), wait briefly and retry
-                    if api_err.code == 503 and attempt < 3:
-                        time.sleep(1.5 * attempt)
-                        continue
+                )
+                if response and response.text:
+                    reply_text = response.text.strip()
+                    used_model = model_candidate
                     break
-                except Exception as exc:
-                    print(f"[Gemini Unexpected Error on {model_candidate} - attempt {attempt}]: {exc}")
-                    break
-            
-            if reply_text:
-                break
+            except Exception as exc:
+                print(f"[Gemini Error on {model_candidate}]: {exc}")
 
-    # Fallback if AI generation temporarily unavailable
     if not reply_text:
-        reply_text = (
-            f"שלום! קיבלתי את הודעתך בנוגע ל-{message_text[:30]}. "
-            f"הבקשה נקלטה במוקד השירות וההגנה (נטספרק וכשר פליי) ונציג יחזור אליך בהקדם."
-        )
+        reply_text = "שלום! פנייתך התקבלה במוקד השירות, המעבדה והסינון. נציג יחזור אליך בהקדם."
 
-    # 4. Check if escalation to Admin is required (Unknown question)
-    is_escalation = (
-        "מנהל המערכת" in reply_text
-        or "אבדוק מול" in reply_text
-        or "לבדיקת מנהל" in reply_text
-        or "נחזור אליך בהקדם" in reply_text
-    )
+    # 4. בדיקה האם נדרשת העברה למנהל
+    is_escalated = False
+    if "[ESCALATE:" in reply_text:
+        is_escalated = True
+        reply_text = re.sub(r"\[ESCALATE:\s*[^\]]+\]", "", reply_text).strip()
+    elif any(phrase in reply_text for phrase in ["בודק זאת כעת מול מנהל", "בודק זאת כעת מול המעבדה", "אחזור אליך כאן מיד"]):
+        is_escalated = True
 
-    request_status = "pending" if is_escalation else "handled"
-    action_note = f"מענה אוטונומי ({used_model or 'fallback'})"
-
-    # Save Request to DB for Reports
+    # 5. שמירת הבקשה בדאטה-בייס
+    status = "pending" if is_escalated else "handled"
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             sender_phone,
-            sub_info.get("system", "כללי"),
+            sub_info.get("system", "מעבדה/שירות"),
             message_text,
-            action_note,
-            "הצעה מותאמת לפי מסלול",
-            request_status,
+            "הועבר למנהל לבדיקה" if is_escalated else f"מענה אוטונומי ({used_model})",
+            "—",
+            status,
             datetime.now().isoformat()
         )
     )
     conn.commit()
     conn.close()
 
-    # 5. Send WhatsApp Reply back to customer
-    send_whatsapp_message(sender_phone, reply_text)
-
-    # 6. If escalated, immediately ping the Admin on WhatsApp
-    if is_escalation and clean_admin and clean_sender != clean_admin:
-        admin_alert = (
-            f"❓ *שאלה חדשה מלקוח שהסוכן לא ידע לענות:*\n"
-            f"📱 לקוח: {sender_phone} ({sub_info.get('name', 'לא רשום')})\n"
-            f"💬 שאלה: \"{message_text}\"\n\n"
-            f"כדי לענות ללקוח וללמד את הסוכן לפעמים הבאות, השב להודעה זו בפורמט:\n"
-            f"תשובה: [התשובה שלך ללקוח] | מילות מפתח: [מילים לזיהוי]"
+    # 6. שליחת הודעת ווצאפ אקטיבית למנהל!
+    if is_escalated and clean_admin and clean_sender != clean_admin:
+        admin_notification = (
+            f"❓ *שאלה מלקוח שדורשת את תשובתך* ({sender_phone}):\n"
+            f"\"{message_text}\"\n\n"
+            f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
+            f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
         )
-        send_whatsapp_message(clean_admin, admin_alert)
-        print(f"[Admin Escalation Sent] Alerted admin ({clean_admin}) for inquiry from {sender_phone}")
+        send_whatsapp_message(clean_admin, admin_notification)
 
-    return {"ok": True, "reply": reply_text, "model": used_model, "escalated": is_escalation}
+    # 7. שליחת המענה חזרה ללקוח
+    send_whatsapp_message(sender_phone, reply_text)
+    return {"ok": True, "reply": reply_text, "escalated": is_escalated, "model": used_model}
