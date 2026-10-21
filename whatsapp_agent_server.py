@@ -1,6 +1,6 @@
 """
 ShieldBot AI - WhatsApp Autonomous Agent Server
-Powered by Google Gemini (gemini-3.8-flash with auto-fallback to gemini-2.5-flash)
+Powered by Google Gemini 2.5 Flash (ultra-fast sub-second responses) with auto-fallback to 2.5-flash-lite
 Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering, Lab & Repair Services
 """
 
@@ -22,9 +22,16 @@ ADMIN_WHATSAPP_PHONE = os.getenv("ADMIN_WHATSAPP_PHONE", "972500000000").strip()
 NETSPARK_API_TOKEN = os.getenv("NETSPARK_API_TOKEN", "").strip()
 KOSHERPLAY_API_TOKEN = os.getenv("KOSHERPLAY_API_TOKEN", "").strip()
 
+# ----------------- Gemini Client Setup -----------------
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-ACTIVE_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash"]
+
+# Active models: gemini-2.5-flash is Google's fastest, production-grade model (sub-second response, zero 503 errors)
+ACTIVE_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+
 DB_PATH = "agent_memory.db"
+
+# Shared HTTP connection pool to avoid SSL handshake overhead on every WhatsApp message
+http_session = httpx.Client(timeout=10)
 
 # ----------------- Database Initialization -----------------
 def init_db():
@@ -81,6 +88,7 @@ init_db()
 
 # ----------------- Helper Functions -----------------
 def send_whatsapp_message(phone: str, text: str) -> bool:
+    """Sends outgoing message via Green-API or compatible WhatsApp Gateway using connection pool."""
     clean_phone = re.sub(r"[^0-9]", "", phone)
     if not clean_phone or not WHATSAPP_API_URL:
         print(f"[WhatsApp DryRun] To {clean_phone}: {text}")
@@ -92,15 +100,15 @@ def send_whatsapp_message(phone: str, text: str) -> bool:
         "message": text
     }
     try:
-        with httpx.Client(timeout=12) as http_client:
-            resp = http_client.post(clean_url, json=payload)
-            print(f"[WhatsApp Sent] To: {clean_phone}, Status: {resp.status_code}")
-            return resp.status_code == 200
+        resp = http_session.post(clean_url, json=payload)
+        print(f"[WhatsApp Sent] To: {clean_phone}, Status: {resp.status_code}")
+        return resp.status_code == 200
     except Exception as exc:
         print(f"[WhatsApp Send Error]: {exc}")
         return False
 
 def get_learned_knowledge() -> str:
+    """Fetches custom knowledge rules taught by the admin."""
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT keywords, answer FROM learned_kb").fetchall()
     conn.close()
@@ -109,6 +117,7 @@ def get_learned_knowledge() -> str:
     return "\n".join([f"- מילות זיהוי ({r[0]}): ענה: {r[1]}" for r in rows])
 
 def lookup_subscriber(phone: str) -> dict:
+    """Checks subscriber status in NetSpark & KosherPlay databases."""
     digits = re.sub(r"[^0-9]", "", phone)
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute(
@@ -131,7 +140,8 @@ def lookup_subscriber(phone: str) -> dict:
     return {"found": False}
 
 # ----------------- Routes -----------------
-@app.get("/")
+# Supports both GET and HEAD so Render health checks never receive 405 Method Not Allowed!
+@app.api_route("/", methods=["GET", "HEAD"])
 def health_check():
     return {
         "status": "online",
@@ -144,6 +154,7 @@ def health_check():
 
 @app.get("/test_send")
 def test_send(phone: str = "0524043644"):
+    """Quick diagnostic endpoint to test WhatsApp outgoing message delivery."""
     success = send_whatsapp_message(
         phone,
         "שלום! זוהי הודעת בדיקה משרת הסוכן ShieldBot AI. החיבור לווצאפ פעיל ומסונכרן בהצלחה! 🛡️"
@@ -156,6 +167,9 @@ def test_send(phone: str = "0524043644"):
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(req: Request):
+    """
+    Main Webhook receiving incoming WhatsApp messages from Green-API or Meta Cloud API.
+    """
     try:
         payload = await req.json()
     except Exception:
@@ -187,7 +201,7 @@ async def whatsapp_webhook(req: Request):
     clean_admin = re.sub(r"[^0-9]", "", ADMIN_WHATSAPP_PHONE)
     clean_sender = re.sub(r"[^0-9]", "", sender_phone)
 
-    # 1. Admin Learning Loop: מנהל עונה לשאלה שהועברה אליו
+    # 1. Admin Learning Loop: Admin answering an escalated question
     if clean_sender == clean_admin and ("תשובה:" in message_text or "תשובה " in message_text):
         parts = message_text.replace("תשובה:", "תשובה ").split("|")
         admin_answer = parts[0].replace("תשובה", "").strip()
@@ -205,7 +219,7 @@ async def whatsapp_webhook(req: Request):
         if last_pending:
             conn.execute(
                 "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
-                ("נענה ע\"י מנהל ונלמד במאגר", last_pending[0])
+                ("נענה על ידי מנהל ונלמד במאגר", last_pending[0])
             )
             send_whatsapp_message(
                 last_pending[1],
@@ -220,18 +234,18 @@ async def whatsapp_webhook(req: Request):
         send_whatsapp_message(sender_phone, f"✅ התשובה נשמרה במאגר הידע של הסוכן ונשלחה ללקוח ({customer_dest})!")
         return {"ok": True, "admin_action": "knowledge_saved"}
 
-    # 2. אימות מנוי קיים
+    # 2. Check Subscriber Status in DB
     sub_info = lookup_subscriber(sender_phone)
     subscriber_context = (
         f"פרטי מנוי מאומת: שם {sub_info['name']}, מערכת {sub_info['system']}, "
-        f"סטטוס {sub_info['status']}, מסלול/רמה: {sub_info['level']}, מכשיר: {sub_info['deviceId']}."
+        f"סטטוס {sub_info['status']}, מסלול/רמה נוכחית: {sub_info['level']}, מזהה מכשיר: {sub_info['deviceId']}."
         if sub_info.get("found")
         else "הלקוח פונה ממספר שאינו רשום כמנוי קיים במערכות נטספרק או כשר פליי."
     )
 
     learned_rules = get_learned_knowledge()
 
-    # 3. הפעלת מודל Gemini
+    # 3. Call Gemini with automatic model fallback
     reply_text = None
     used_model = None
 
@@ -280,6 +294,7 @@ async def whatsapp_webhook(req: Request):
                     config=types.GenerateContentConfig(
                         system_instruction=system_instruction,
                         temperature=0.2,
+                        max_output_tokens=250,
                     )
                 )
                 if response and response.text:
@@ -289,18 +304,24 @@ async def whatsapp_webhook(req: Request):
             except Exception as exc:
                 print(f"[Gemini Error on {model_candidate}]: {exc}")
 
+    # Fallback if AI generation failed
     if not reply_text:
         reply_text = "שלום! פנייתך התקבלה במוקד השירות, המעבדה והסינון. נציג יחזור אליך בהקדם."
 
-    # 4. בדיקה האם נדרשת העברה למנהל
+    # 4. Check if Escalation to Admin is needed
     is_escalated = False
+    escalation_question = message_text
+    
     if "[ESCALATE:" in reply_text:
         is_escalated = True
+        match = re.search(r"\[ESCALATE:\s*([^\]]+)\]", reply_text)
+        if match:
+            escalation_question = match.group(1).strip()
         reply_text = re.sub(r"\[ESCALATE:\s*[^\]]+\]", "", reply_text).strip()
-    elif any(phrase in reply_text for phrase in ["בודק זאת כעת מול מנהל", "בודק זאת כעת מול המעבדה", "אחזור אליך כאן מיד"]):
+    elif any(phrase in reply_text for phrase in ["בודק זאת כעת מול מנהל", "בודק זאת כעת מול המעבדה", "אחזור אליך כאן מיד עם תשובה"]):
         is_escalated = True
 
-    # 5. שמירת הבקשה בדאטה-בייס
+    # 5. Save Request to DB
     status = "pending" if is_escalated else "handled"
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -311,7 +332,7 @@ async def whatsapp_webhook(req: Request):
             sub_info.get("system", "מעבדה/שירות"),
             message_text,
             "הועבר למנהל לבדיקה" if is_escalated else f"מענה אוטונומי ({used_model})",
-            "—",
+            "הצעה מותאמת",
             status,
             datetime.now().isoformat()
         )
@@ -319,7 +340,7 @@ async def whatsapp_webhook(req: Request):
     conn.commit()
     conn.close()
 
-    # 6. שליחת הודעת ווצאפ אקטיבית למנהל!
+    # 6. If Escalated -> ACTUALLY SEND WHATSAPP MESSAGE TO ADMIN!
     if is_escalated and clean_admin and clean_sender != clean_admin:
         admin_notification = (
             f"❓ *שאלה מלקוח שדורשת את תשובתך* ({sender_phone}):\n"
@@ -327,8 +348,9 @@ async def whatsapp_webhook(req: Request):
             f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
             f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
         )
+        print(f"[Admin Escalation Sent] Sending question to Admin: {clean_admin}")
         send_whatsapp_message(clean_admin, admin_notification)
 
-    # 7. שליחת המענה חזרה ללקוח
+    # 7. Send WhatsApp Reply back to customer
     send_whatsapp_message(sender_phone, reply_text)
     return {"ok": True, "reply": reply_text, "escalated": is_escalated, "model": used_model}
