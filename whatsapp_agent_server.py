@@ -59,8 +59,26 @@ COMMON_NON_NAMES = {
     "סוללה", "שקע", "תיקון", "מעבדה", "מחיר", "עלות", "שיאומי", "סמסונג", "אייפון",
     "בדיקה", "בבקשה", "החלפה", "עזרה", "טלפון", "מכשיר", "דגם", "מנוי", "סינון",
     "הוא", "היא", "הם", "הן", "שלי", "שלך", "שלו", "שלנו", "שלכם", "אותי", "אותך",
-    "אפשר", "רוצים", "בדיוק", "תגיד", "תגידו", "רציתי", "לשאול", "דבר", "נוסף"
+    "אפשר", "רוצים", "בדיוק", "תגיד", "תגידו", "רציתי", "לשאול", "דבר", "נוסף",
+    "מעולה", "מצוין", "מגיע", "אליכם", "מחר", "היום", "עכשיו", "בתור", "לחכות"
 }
+
+# ----------------- Greeting Detection -----------------
+def is_pure_greeting(text: str) -> bool:
+    """Returns True if the message contains only greetings (שלום, בוקר טוב, ערב טוב, etc.) without an inquiry."""
+    clean = re.sub(r"[^\w\sא-תa-zA-Z]", " ", text or "").strip().lower()
+    words = clean.split()
+    if not words:
+        return False
+    greeting_stems = {
+        "שלום", "היי", "הי", "אהלן", "בוקר", "ערב", "צהריים", "לילה", "טוב", "טובה",
+        "טובים", "שלוםם", "היוש", "הייוש", "הלו", "hello", "hi", "hey", "ברכה", "נעים"
+    }
+    for w in words:
+        stem = w[1:] if (w.startswith("ו") and len(w) > 2 and w not in greeting_stems) else w
+        if stem not in greeting_stems and w not in greeting_stems:
+            return False
+    return True
 
 # ----------------- Database Initialization -----------------
 def init_db():
@@ -74,6 +92,11 @@ def init_db():
             answer TEXT,
             created_at TEXT
         )
+    """)
+    # Seed A17 screen rule explicitly approved by Admin
+    c.execute("""
+        INSERT OR IGNORE INTO learned_kb (keywords, answer, created_at)
+        VALUES ('a17, samsung a17, מסך סאני מקורי', 'עלות החלפת מסך מקורי ל-Samsung Galaxy A17 (סאני) כולל עבודה ואחריות היא 400 ₪.', datetime('now'))
     """)
     # Customer Requests Log
     c.execute("""
@@ -123,18 +146,9 @@ def init_db():
             updated_at TEXT
         )
     """)
-    c.execute("SELECT COUNT(*) FROM pos_inventory")
-    if c.fetchone()[0] == 0:
-        c.executemany("""
-            INSERT INTO pos_inventory (part_name, model_keywords, price_nis, in_stock, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, [
-            ("מסך מקורי Samsung Galaxy A17 (סאני)", "a17, samsung a17, סאני", 400, 1, "21/10/2026"),
-            ("מסך Qin F21 Pro מקורי", "f21, f21 pro, qin f21", 220, 1, "21/10/2026"),
-            ("מסך Qin 1s / 1s+", "qin 1s, 1s, שיאומי מקשים", 180, 1, "21/10/2026"),
-            ("שקע טעינה Type-C מקורי", "שקע טעינה, טעינה", 150, 1, "21/10/2026"),
-            ("סוללה מקורית למכשירי מקשים", "סוללה, החלפת סוללה", 130, 1, "21/10/2026")
-        ])
+    # Clean any old mock records with unconfirmed prices (e.g. F21 Pro 220 NIS)
+    c.execute("DELETE FROM pos_inventory WHERE model_keywords LIKE '%f21%' OR model_keywords LIKE '%qin 1s%'")
+    
     # Live Lab Queue Table
     c.execute("""
         CREATE TABLE IF NOT EXISTS lab_tickets (
@@ -145,17 +159,9 @@ def init_db():
             created_at TEXT
         )
     """)
-    c.execute("SELECT COUNT(*) FROM lab_tickets")
-    if c.fetchone()[0] == 0:
-        c.executemany("""
-            INSERT INTO lab_tickets (device_model, issue, status, created_at)
-            VALUES (?, ?, ?, ?)
-        """, [
-            ("Samsung S23", "החלפת מסך", "in_repair", "21/10/2026 09:30"),
-            ("Xiaomi Qin F21 Pro", "שקע טעינה", "in_repair", "21/10/2026 10:00"),
-            ("iPhone 13", "סוללה", "in_repair", "21/10/2026 10:15"),
-            ("Samsung A14", "מסך שבור", "in_repair", "21/10/2026 10:20")
-        ])
+    # Clean any mock lab tickets that caused fake "4 מכשירים בתיקון"
+    c.execute("DELETE FROM lab_tickets WHERE device_model IN ('Samsung S23', 'Xiaomi Qin F21 Pro', 'iPhone 13', 'Samsung A14')")
+
     # Subscribers (NetSpark & KosherPlay)
     c.execute("""
         CREATE TABLE IF NOT EXISTS subscribers (
@@ -214,7 +220,7 @@ def get_learned_knowledge() -> str:
     conn.close()
     if not rows:
         return "אין עדיין כללים נוספים."
-    return "\n".join([f"- מילות זיהוי ({r[0]}): ענה: {r[1]}" for r in rows])
+    return "\n".join([f"- מילות זיהוי ({r[0]}): תשובה שנלמדה בעבר: {r[1]}" for r in rows])
 
 def lookup_subscriber(phone: str) -> dict:
     """Checks subscriber status in NetSpark & KosherPlay databases."""
@@ -262,12 +268,11 @@ def extract_name_from_text(text: str) -> str:
     if not cleaned:
         return ""
     
-    # 1. Explicit introduction patterns
     patterns = [
         r"(?:שמי\s+הוא|שמי|קוראים\s+לי|השם\s+שלי\s+הוא|השם\s+שלי|מדבר|זה)\s+([א-ת]{2,15}(?:\s+[א-ת]{2,15})?)",
         r"^(?:אני)\s+([א-ת]{2,15}(?:\s+[א-ת]{2,15})?)",
         r"^([א-ת]{2,15}(?:\s+[א-ת]{2,15})?)\s*[:,\-]\s*",
-        r"([א-ת]{2,15})\s+כאן"
+        r"([א-ת]{2,15})\s+כאן\b"
     ]
     for pattern in patterns:
         match = re.search(pattern, cleaned)
@@ -277,7 +282,6 @@ def extract_name_from_text(text: str) -> str:
             if first_word not in COMMON_NON_NAMES:
                 return first_word
 
-    # 2. Standalone short text (1-2 words only, Hebrew letters only, e.g. replying with just their name)
     words = cleaned.split()
     if 1 <= len(words) <= 2:
         if all(re.fullmatch(r"[א-ת]{2,15}", w) for w in words):
@@ -290,7 +294,6 @@ def extract_name_from_text(text: str) -> str:
 def get_contact_name(phone: str) -> str:
     """
     Retrieves remembered name from contacts memory, subscribers DB, or prior conversation history.
-    Ensures that once a customer's name is known, they are never asked for their name again.
     """
     norm = normalize_phone(phone)
     if not norm:
@@ -298,7 +301,7 @@ def get_contact_name(phone: str) -> str:
     
     conn = sqlite3.connect(DB_PATH)
     
-    # 1. Check contacts memory table (normalized exact or partial suffix)
+    # 1. Check contacts memory table
     row = conn.execute(
         "SELECT name FROM contacts WHERE phone = ? OR phone LIKE ? LIMIT 1",
         (norm, f"%{norm[-9:]}%" if len(norm) >= 9 else f"%{norm}%")
@@ -333,7 +336,6 @@ def get_contact_name(phone: str) -> str:
                 save_contact_name(norm, extracted)
                 return extracted
         elif role == "agent":
-            # If agent previously greeted "שלום ערן" or "היי ערן"
             m = re.search(r"(?:שלום|היי)\s+([א-ת]{2,15})[\s,!.]", msg)
             if m:
                 cand = m.group(1).strip()
@@ -378,6 +380,19 @@ def get_recent_chat_history(phone: str, limit: int = 6) -> str:
         lines.append(f"[{sender}]: {msg}")
     return "\n".join(lines)
 
+def has_already_greeted_customer(phone: str) -> bool:
+    """Checks if the agent has already sent messages to this customer in the current conversation."""
+    norm_phone = normalize_phone(phone)
+    if not norm_phone:
+        return False
+    conn = sqlite3.connect(DB_PATH)
+    count = conn.execute("""
+        SELECT COUNT(*) FROM conversation_history
+        WHERE phone = ? AND role = 'agent'
+    """, (norm_phone,)).fetchone()[0]
+    conn.close()
+    return count > 0
+
 def parse_admin_reply(raw_text: str):
     """
     Sanitizes admin reply to strip out מילות מפתח so internal keywords NEVER leak to customer.
@@ -398,7 +413,6 @@ def parse_admin_reply(raw_text: str):
         clean_answer = parts[0].strip()
         keywords = parts[1].strip() if len(parts) > 1 else ""
         
-    # Hard safety: Purge any trailing keywords mention from clean_answer
     clean_answer = re.sub(r"[\s\|]*(?:מילות\s*מפתח|מילים\s*לזיהוי|תגיות).*", "", clean_answer, flags=re.IGNORECASE | re.DOTALL).strip()
     
     if not keywords:
@@ -406,123 +420,102 @@ def parse_admin_reply(raw_text: str):
         
     return clean_answer, keywords
 
-def lookup_pos_part_price(text: str) -> dict:
-    """Searches live POS / Back-Office inventory for matching part price and stock."""
-    text_low = text.lower()
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT part_name, model_keywords, price_nis, in_stock, updated_at FROM pos_inventory").fetchall()
-    conn.close()
-    for name, kws, price, stock, updated in rows:
-        kw_list = [k.strip().lower() for k in kws.split(",")]
-        if any(k in text_low for k in kw_list):
-            return {
-                "found": True,
-                "part_name": name,
-                "price_nis": price,
-                "in_stock": bool(stock),
-                "updated_at": updated
-            }
-    return {"found": False}
-
-def get_pos_inventory_summary() -> str:
-    """Returns a clean summary of current POS inventory parts and prices to feed directly into Gemini."""
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT part_name, price_nis, in_stock FROM pos_inventory").fetchall()
-    conn.close()
-    if not rows:
-        return "אין פריטים במערכת הקופה כרגע."
-    lines = []
-    for name, price, stock in rows:
-        status_str = "במלאי" if stock else "חסר זמנית"
-        lines.append(f"• {name}: {price} ₪ ({status_str})")
-    return "\n".join(lines)
-
-def get_lab_workload_status() -> dict:
-    """Calculates current lab queue workload based on active in_repair devices."""
-    conn = sqlite3.connect(DB_PATH)
-    active_count = conn.execute("SELECT COUNT(*) FROM lab_tickets WHERE status='in_repair'").fetchone()[0]
-    conn.close()
-    
-    is_busy = active_count > 3
-    if is_busy:
-        load_desc = f"יש כרגע עומס קל במעבדה ({active_count} מכשירים בטיפול שוטף)"
-        time_instruction = f"ציין שיש כרגע טיפה עומס במעבדה ({active_count} מכשירים בתיקון) ולכן זה ייקח קצת יותר זמן. אל תמציא שעה-שעתיים!"
-    else:
-        load_desc = f"המעבדה פעילה בקצב שוטף ({active_count} מכשירים בטיפול)"
-        time_instruction = "ציין שהמכשיר ייבדק מיד עם כניסתו למעבדה והזמן המדויק יימסר לאחר בדיקת טכנאי. אל תמציא שעה-שעתיים!"
-        
-    return {
-        "active_count": active_count,
-        "is_busy": is_busy,
-        "load_desc": load_desc,
-        "time_instruction": time_instruction
-    }
-
 def is_substantive_admin_question(customer_message: str) -> bool:
     """
     Returns True ONLY if the customer message is a real substantive question/request requiring admin assistance.
-    Returns False for customer introductions ('תודה קוראים לי ערן'), greetings, thank-yous, affirmations, or known POS items.
+    Returns False for customer introductions ('תודה קוראים לי ערן'), greetings, thank-yous, affirmations,
+    queue logistics ('לא רוצה לחכות בתור'), arrivals ('מעולה אני מגיע אליכם'), or known items.
     """
     clean = customer_message.strip()
     if not clean or len(clean) < 2:
         return False
 
     has_question_indicator = any(qw in clean for qw in [
-        "כמה", "מחיר", "עלות", "האם", "יש לכם", "אפשר", "למה", "מתי", "איך", "איפה",
-        "תקלה", "נשבר", "לתקן", "להחליף", "תיקון", "החלפה", "שקע", "סוללה", "?"
+        "כמה", "מחיר", "עלות", "האם יש", "יש לכם", "תקלה", "נשבר", "לתקן", "להחליף", "שקע", "סוללה", "?"
     ])
 
-    # 1. Name statements or introductions without an explicit question
-    # e.g., "תודה קוראים לי ערן", "קוראים לי ערן", "שמי ערן", "זה ערן", "מדבר ערן"
+    # 1. Name statements or introductions without question words
     if extract_name_from_text(clean) and not has_question_indicator:
         return False
 
-    # 2. Pure social greetings, thanks, affirmations, small talk
-    pure_social_words = {
+    # 2. Queue, waiting, arrival, greetings, thanks logistics -> handled autonomously by bot
+    logistics_and_social = {
         "תודה", "רבה", "לך", "לכם", "שלום", "היי", "אהלן", "בוקר", "ערב", "צהריים",
         "טוב", "טובה", "טובים", "בסדר", "גמור", "אחלה", "יופי", "מעולה", "מצוין",
-        "סבבה", "מאה", "אחוז", "להתראות", "ביי", "כן", "לא", "הבנתי", "יום",
-        "שמי", "קוראים", "לי", "זה", "אני", "נעים", "להכיר", "שמח", "תודה רבה"
+        "סבבה", "מאה", "אחוז", "להתראות", "ביי", "הבנתי", "יום",
+        "שמי", "קוראים", "לי", "זה", "אני", "נעים", "להכיר", "שמח",
+        "מעולה", "מגיע", "אליכם", "מחר", "היום", "עכשיו", "מחכה", "בדרך",
+        "תור", "בתור", "לחכות", "להמתין", "הרבה", "זמן", "רוצה", "להקפיץ", "להשאיר", "לאסוף"
     }
     cleaned_no_punct = re.sub(r"[^\w\sא-ת]", "", clean).strip()
     words = cleaned_no_punct.split()
-    if len(words) <= 5 and all(w in pure_social_words or len(w) <= 1 for w in words):
+    if all(w in logistics_and_social or len(w) <= 2 for w in words):
         return False
 
-    # 3. If it's already a known POS part (e.g. A17 screen, F21 Pro screen) -> Bot already knows, no escalation!
-    pos_match = lookup_pos_part_price(clean)
-    if pos_match.get("found"):
-        return False
+    # 3. Check learned_kb - if already answered, don't escalate!
+    conn = sqlite3.connect(DB_PATH)
+    kb_rows = conn.execute("SELECT keywords FROM learned_kb").fetchall()
+    conn.close()
+    clean_low = clean.lower()
+    for (kws,) in kb_rows:
+        kw_list = [k.strip().lower() for k in kws.split(",") if k.strip()]
+        if any(k in clean_low for k in kw_list if len(k) >= 3):
+            return False
 
     return True
 
-def apply_customer_name_guard(reply_text: str, customer_name: str) -> str:
+def apply_customer_name_guard(reply_text: str, customer_name: str, already_greeted: bool) -> str:
     """
-    Fail-Safe Guard:
-    1. If customer_name is known, purges any accidental name-asking question (e.g. 'איך קוראים לך').
-    2. Ensures the reply begins with a personal greeting addressing the customer by name and asking how they are doing (מה שלומך).
+    Conversational Natural Flow Guard:
+    1. If customer_name is known:
+       - FIRST message of chat: greets once warmly with 'שלום [שם], מה שלומך?'.
+       - ONGOING chat (already_greeted is True): STRIPS repetitive 'מה שלומך' and formal 'שלום [שם], מה שלומך?'!
+    2. Purges any accidental 'איך קוראים לך' questions for known customers.
+    3. Purges any hallucinated machine count numbers (e.g. '4 מכשירים בתיקון').
     """
-    if not customer_name:
-        return reply_text
+    cleaned = reply_text.strip()
     
     # 1. Purge accidental name-asking questions
     cleaned = re.sub(
         r"(?:ו?איך\s+קוראים\s+לך(?:\s+כדי\s+שאדע\s+למי\s+לפנות)?[\s?!.,]*|ו?מה\s+שמך(?:\s+בבקשה)?[\s?!.,]*|תגיד\s+מה\s+השם\s+שלך[\s?!.,]*|למי\s+לפנות[\s?!.,]*)",
         "",
-        reply_text,
+        cleaned,
         flags=re.IGNORECASE
     ).strip()
     
-    has_name = customer_name in cleaned
-    has_how_are_you = any(phrase in cleaned for phrase in ["מה שלומך", "מה נשמע", "שלומך", "שלומו"])
+    # 2. Purge fake machine count hallucinations
+    cleaned = re.sub(r"\(?\d+\s+מכשירים\s+בתיקון\)?", "", cleaned).strip()
+    cleaned = re.sub(r"יש\s+כרגע\s+\d+\s+מכשירים\s+בתיקון\s*,?\s*", "", cleaned).strip()
+    cleaned = re.sub(r"שיש\s+כרגע\s+\d+\s+מכשירים\s+בתיקון\s*,?\s*", "", cleaned).strip()
     
-    if not has_name or not has_how_are_you:
-        salutation = f"שלום {customer_name}, מה שלומך?"
-        if re.match(r"^(?:שלום|היי|בוקר טוב|ערב טוב|אהלן)[\s!.,]*", cleaned):
-            cleaned = re.sub(r"^(?:שלום|היי|בוקר טוב|ערב טוב|אהלן)[\s!.,]*", f"{salutation} ", cleaned, count=1)
-        else:
-            cleaned = f"{salutation} {cleaned}"
-            
+    if not customer_name:
+        return cleaned
+
+    if already_greeted:
+        # In ongoing conversation: STRIP repetitive greetings!
+        cleaned = re.sub(
+            rf"^(?:שלום|היי|אהלן)\s+{re.escape(customer_name)}[\s,]+(?:מה\s+שלומך|מה\s+נשמע|שלומך)[\s?!.,]*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE
+        ).strip()
+        cleaned = re.sub(
+            r"^(?:שלום|היי|אהלן)?[\s,]+(?:מה\s+שלומך|מה\s+נשמע)[\s?!.,]*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE
+        ).strip()
+    else:
+        # First turn only: ensure we greet once with name and ask how they are
+        has_name = customer_name in cleaned
+        has_how_are_you = any(p in cleaned for p in ["מה שלומך", "מה נשמע"])
+        if not has_name or not has_how_are_you:
+            salutation = f"שלום {customer_name}, מה שלומך?"
+            if re.match(r"^(?:שלום|היי|בוקר טוב|ערב טוב|אהלן)[\s!.,]*", cleaned):
+                cleaned = re.sub(r"^(?:שלום|היי|בוקר טוב|ערב טוב|אהלן)[\s!.,]*", f"{salutation} ", cleaned, count=1)
+            else:
+                cleaned = f"{salutation} {cleaned}"
+                
     return cleaned
 
 # ----------------- Routes -----------------
@@ -564,31 +557,6 @@ async def update_pos_part(req: Request):
         conn.commit()
         conn.close()
         return {"ok": True, "message": f"Part {part_name} updated to {price_nis} NIS"}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-@app.get("/api/lab/workload")
-def get_lab_workload_api():
-    """Returns live lab queue workload status."""
-    return get_lab_workload_status()
-
-@app.post("/api/lab/ticket")
-async def add_lab_ticket(req: Request):
-    """Endpoint for Lab interface to add/update active repair tickets."""
-    try:
-        data = await req.json()
-        model = data.get("device_model", "Unknown")
-        issue = data.get("issue", "תיקון")
-        status = data.get("status", "in_repair")
-        
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("""
-            INSERT INTO lab_tickets (device_model, issue, status, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (model, issue, status, datetime.now().strftime("%d/%m/%Y %H:%M")))
-        conn.commit()
-        conn.close()
-        return {"ok": True, "active_workload": get_lab_workload_status()}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -664,7 +632,6 @@ async def whatsapp_webhook(req: Request):
             )
             cust_name = get_contact_name(last_pending[1])
             salutation = f"שלום {cust_name}," if cust_name else "שלום,"
-            # Send ONLY the sanitized clean_answer to the customer - NO keywords!
             send_whatsapp_message(
                 last_pending[1],
                 f"{salutation} חזרתי אליך עם תשובה:\n{clean_answer}"
@@ -698,71 +665,99 @@ async def whatsapp_webhook(req: Request):
         else "הלקוח פונה ממספר שאינו רשום כמנוי קיים במערכות נטספרק או כשר פליי."
     )
 
+    already_greeted = has_already_greeted_customer(sender_phone)
     learned_rules = get_learned_knowledge()
-    pos_summary = get_pos_inventory_summary()
-    lab_status = get_lab_workload_status()
 
-    # 4. Call Gemini with automatic model fallback
+    # ----------------- FAST DETERMINISTIC PATH FOR PURE GREETINGS -----------------
+    # If the customer's name is not known yet and they only wrote a greeting (שלום, בוקר טוב, ערב טוב וכו')
+    if not customer_name and not already_greeted and is_pure_greeting(message_text):
+        greeting_prompt_reply = "שלום , על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום ."
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", greeting_prompt_reply)
+        send_whatsapp_message(sender_phone, greeting_prompt_reply)
+        return {"ok": True, "reply": greeting_prompt_reply, "type": "initial_greeting_prompt"}
+
+    # 4. Call Gemini with conversational prompt
     reply_text = None
     used_model = None
 
     if client:
         if customer_name:
-            name_instruction = f"""
-הלקוח מוכר במערכת! שמו הפרטי הוא: '{customer_name}'.
-כללים קריטיים וחד-משמעיים לפנייה ללקוח זה:
-1. פתח תמיד את תשובתך בברכה אישית חמה שכוללת את שמו הפרטי ושואלת לשלומו: "שלום {customer_name}, מה שלומך?" (או "היי {customer_name}, מה שלומך היום?").
-2. איסור מוחלט: לעולם, בשום אופן ומצב, אל תשאל שוב "איך קוראים לך?", "מה שמך?" או "למי לפנות?"! אתה כבר מכיר אותו ויודע ששמו {customer_name}!
-3. ענה מיד ובאופן ישיר, קצר (1 עד 3 משפטים בלבד) וענייני לשאלה או לבקשה שלו.
+            if already_greeted:
+                name_instruction = f"""
+הלקוח מוכר ושמו הפרטי הוא: '{customer_name}'.
+כבר בירכת אותו לשלומו בתחילת השיחה!
+כללי שיחה אנושיים וקריטיים:
+• איסור מוחלט: אל תכתוב שוב "שלום {customer_name}, מה שלומך?" או "היי {customer_name}, מה שלומך?"! שאלת לשלומו קודם, אל תשאל שוב!
+• אל תשאל לעולם "איך קוראים לך" - שמו ידוע: {customer_name}.
+• שלב את שמו הפרטי '{customer_name}' בטבעיות בתוך גוף המשפט בלבד:
+  - אם הוא כותב שהוא לא רוצה להמתין בתור:
+    "חשוב לי {customer_name} שלא תמתין זמן מיותר ולכן אין צורך שתמתין במקום — אתה מוזמן פשוט להשאיר לנו את המכשיר במעבדה, וברגע שהוא יהיה מוכן נשלח לך הודעה מסודרת לאיסוף."
+  - אם הוא כותב "מעולה אני מגיע אליכם" או "אני בדרך":
+    "מצויין תגיע אלינו {customer_name} אנחנו מחכים לך 😃"
+"""
+            else:
+                name_instruction = f"""
+הלקוח מוכר ושמו הפרטי הוא: '{customer_name}'. זוהי תחילת השיחה שלכם.
+• פתח פעם אחת בברכה חמה: "שלום {customer_name}, מה שלומך?".
+• אל תשאל אותו לשמו - שמו ידוע: {customer_name}.
 """
         else:
             name_instruction = """
-אינך יודע עדיין את שמו של הלקוח.
-1. אם הלקוח מסר את שמו בהודעתו (למשל "קוראים לי ערן" או "ערן"), פנה אליו בשמו, שאל לשלומו, וצרף בסוף [SET_NAME: שם_הלקוח].
-2. אם הלקוח טרם מסר את שמו ולא שאלת אותו קודם בשיחה זו, שאל אותו פעם אחת בלבד בנימוס ובטבעיות: "שלום! איך קוראים לך כדי שאדע למי לפנות?".
-3. אם כבר שאלת אותו קודם בהיסטוריית השיחה והוא ענה, השתמש בשמו מיד, שאל לשלומו, ואל תשאל שוב!
+אינך יודע עדיין את שמו של הלקוח:
+1. אם הלקוח מסר את שמו בהודעתו (למשל "קוראים לי ערן", "שמי דניאל", "אני משה"):
+   פנה אליו בשמו, וצרף בסוף [SET_NAME: שם_הלקוח].
+2. בפנייה ראשונית כאשר שמו של הלקוח עדיין אינו ידוע:
+   • במידה והלקוח רק רשם שלום, ערב טוב, בוקר טוב וכו' ללא בקשה מסוימת:
+     חובה לענות בדיוק במילים אלו:
+     "שלום , על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום ."
+   • במידה והלקוח רשם מה הוא צריך:
+     חובה להשיב במבנה הבא (כדי לקבל את שמו לפני הטיפול המעמיק):
+     "נשמח לעזור לך ב[מה שביקש הלקוח] . תאמר לי בבקשה את שמך המלא שאוכל לטפל בך בצורה המהירה והמקצועית ביותר ."
 """
 
         system_instruction = f"""
-אתה סוכן אישי אנושי, חם, מקצועי וענייני בווצאפ ("ShieldBot AI").
+אתה איש שירות ומעבדה אנושי, חם, מקצועי וענייני בווצאפ ("ShieldBot AI").
 סגנון דיבור וכללי יסוד חקוקים בסלע:
 ==================================================
-1. שפה יומיומית, טבעית, בהירה ושלמה (איסור מוחלט על לופים ואיסור על חיתוך מילים!):
-   • מענה קצר, ענייני, ומעשי: 1 עד 3 שורות/משפטים ברורים בלבד.
+1. שפה יומיומית, טבעית, בהירה וקולחת (בלי תקליטים שחוזרים על עצמם!):
+   • מענה קצר, ענייני ומעשי: 1 עד 3 שורות ברורות בלבד.
    • חובה קדושה: לסיים תמיד כל מילה וכל משפט במלואם עם סימן פיסוק תקין.
-   • זיכרון שיחה מלא ומניעת לופים: קרא תמיד את היסטוריית השיחה המצורפת!
-     - אם הלקוח כבר אמר מה הוא צריך או הציג את שמו — אל תחזור לשאול שוב!
-     - חבר מיד את המידע שכבר נמסר בהודעות הקודמות ותן תשובה ישירה וקונקרטית לשאלה שלו!
+   • קרא תמיד את היסטוריית השיחה המצורפת ואל תחזור על דברים שכבר נאמרו!
    • {name_instruction}
-   • קיצור אמיתי פירושו תמציתיות ולא קטיעת מילים: אין לשלוח גליונות או מגילות של טקסט שלאף אחד אין סבלנות לקרוא, אלא אם הלקוח ביקש במפורש פירוט.
    • כל המחירים בשקלים חדשים (₪) בלבד. אין אזכור לדולרים ($).
 
-2. מחירון חלפים ותיקונים מעודכן מקופת המעבדה:
-{pos_summary}
-   • זמני מעבדה ועומס נוכחי: {lab_status['load_desc']}. ({lab_status['time_instruction']})
-   • כלל ברזל: אם הלקוח שואל על מוצר או חלק שמופיע במחירון למעלה (כמו מסך ל-Samsung Galaxy A17 במחיר 400 ₪, או מסך F21 Pro במחיר 220 ₪) — מסור לו מיד את המחיר המדויק! אין צורך להעביר למנהל!
-   • מחירון כללי לתקלות שכיחות:
-     - החלפת מסך לשיאומי מקשים / Qin F21 Pro / F22: סביב 180 עד 250 ₪.
-     - החלפת מסך לסמארטפונים: סביב 250 עד 450 ₪ (תלוי דגם).
-     - תיקון שקע טעינה: סביב 120 עד 180 ₪.
-     - החלפת סוללה: סביב 100 עד 150 ₪.
+2. מודל תמחור דינמי ומשוער למעבדה (כל עוד אין חיבור ישיר לקופה או לספק):
+   • אנו מתקנים ומחליפים מסכים שבורים לכל סוגי המכשירים: מכשירי מקשים (כולל שיאומי מקשים / Qin 1s / F21 Pro / F22 וכו') וסמארטפונים.
+   • איסור מוחלט על המצאת מחירים מראש! מחירי מסכים ורכיבים משתנים תדיר אצל הספקים.
+   • מקרה א': אם המחיר אינו ידוע לך כלל (לא נלמד מהמנהל):
+     אמור ללקוח שאתה בודק כעת את זמינות המסך/החלק והמחיר המעודכן מול המעבדה ומיד חוזר אליו עם תשובה מדויקת.
+     וצרף בסוף הודעתך תגית: [ESCALATE: מחיר וזמינות [דגם/חלק] ללקוח {customer_name or sender_phone}].
+   • מקרה ב' (כלל המפתח למחיר שנלמד בעבר):
+     אם המחיר X כבר נלמד ונשמר מפעם קודמת בכללים שלהלן, לעולם אל תגיד שזהו מחיר סופי להיום!
+     ענה ללקוח שהמחיר הוא "בערך X ₪" (אותו אתה זוכר מפעם שעברה, ולכן אמרת בערך), והצע לו לקבל הצעת מחיר מדויקת נכון להיום:
+     "המחיר עבור [המוצר/התיקון] הוא בערך X ₪ (לפי מה שנבדק אצלנו בפעם שעברה, ולכן אמרתי בערך). האם תרצה שאבדוק עבורך הצעת מחיר מדויקת נכון להיום?"
+     (אל תצרף תגית ESCALATE בהודעה זו - תן ללקוח להשיב תחילה).
+   • מקרה ג': אם הלקוח משיב בחיוב ("כן", "אשמח שתבדוק", "תבדוק לי בבקשה", "מעוניין"):
+     השב לו שאתה בודק כעת את הצעת המחיר המדויקת להיום מול המעבדה ומיד חוזר אליו.
+     וצרף תגית: [ESCALATE: בדיקת הצעת מחיר מדויקת להיום עבור [המוצר/התיקון] ללקוח {customer_name or sender_phone}].
+   • איסור מוחלט על המצאת נתוני עומס מזויפים:
+     לעולם אל תגיד "יש 4 מכשירים בתיקון" או תנקוב במספר מכשירים!
+     אם הלקוח שואל על תור או זמנים:
+     הסבר לו בצורה שירותית שאין צורך להמתין במקום — הוא יכול להשאיר את המכשיר במעבדה, וברגע שהמכשיר מוכן הוא יקבל מיד הודעה מסודרת לאיסוף.
 
-3. מחירון ומסלולי הגנה:
+3. מחירון ומסלולי הגנה קבועים:
    • כשר פליי בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, ~200 אפליקציות כשרות חיוניות). רישיון פעיל על המכשיר בלבד.
    • כשר פליי מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר.
    • נטספרק: 350 ₪ לשנה (רישיון שנתי). שינוי רמות חופשי ומיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית).
 
-4. מתי ורק מתי מעבירים שאלה למנהל ([ESCALATE: ...]):
-   • אך ורק אם מדובר בשאלה מקצועית מורכבת, חלק חילוף חדש שאינו קיים במחירון ובמערכת הקופה, או תקלה ספציפית שאינך יודע בוודאות!
-   • איסור מוחלט על הוספת תגית [ESCALATE:] במקרים הבאים:
-     - לעולם אל תצרף [ESCALATE:] להודעות הצגת שם ("קוראים לי ערן", "שמי דוד"), ברכות ("שלום", "בוקר טוב"), תודות ("תודה", "תודה רבה"), או אישורים ("בסדר", "יופי")!
-     - לעולם אל תצרף [ESCALATE:] על שאלות שמחיריהן כבר ידועים מתוך מחירון הקופה (כגון מסך A17 או Qin F21 Pro)!
-
-5. פרטי הלקוח:
-   {subscriber_context}
-
-6. כללים שנלמדו מהמנהל:
+4. כללים שנלמדו מהמנהל בעבר (השתמש במחירים שלהלן כמחיר משוער "בערך X ₪" והצע בדיקה להיום):
    {learned_rules}
+
+5. מתי מעבירים שאלה למנהל באמצעות [ESCALATE: ...]:
+   • בכל פעם שלקוח שואל על מחיר מסך או תיקון שאינו מופיע בכללים שנלמדו מהמנהל!
+   • בכל פעם שלקוח ביקש לבדוק הצעת מחיר מדויקת ומעודכנת להיום!
+   • לעולם אל תצרף [ESCALATE:] להודעות הצגת שם, ברכות, תודות, אישורים, או הודעות הגעה ("מעולה אני מגיע אליכם")!
 """
         config_args = {
             "system_instruction": system_instruction,
@@ -799,12 +794,18 @@ async def whatsapp_webhook(req: Request):
             except Exception as exc:
                 print(f"[Gemini Error on {model_candidate}]: {exc}")
 
-    # Natural Human Fallback (Never robotic boilerplate!)
+    # Natural Human Fallback
     if not reply_text:
         if customer_name:
-            reply_text = f"שלום {customer_name}, מה שלומך? העניין בטיפול ואני כבר בודק את זה וחוזר אליך."
+            if already_greeted:
+                reply_text = f"העניין בטיפול מול המעבדה {customer_name}, ואני כבר בודק את זה וחוזר אליך."
+            else:
+                reply_text = f"שלום {customer_name}, מה שלומך? העניין בטיפול ואני כבר בודק את זה וחוזר אליך."
         else:
-            reply_text = "שלום! העניין בטיפול ואני כבר בודק את זה. איך קוראים לך כדי שאדע למי לפנות?"
+            if is_pure_greeting(message_text):
+                reply_text = "שלום , על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום ."
+            else:
+                reply_text = "נשמח לעזור לך במה שביקשת . תאמר לי בבקשה את שמך המלא שאוכל לטפל בך בצורה המהירה והמקצועית ביותר ."
 
     # Check for [SET_NAME: ...] tag to save customer name
     match_name = re.search(r"\[SET_NAME:\s*([^\]]+)\]", reply_text)
@@ -814,9 +815,9 @@ async def whatsapp_webhook(req: Request):
         customer_name = new_name
         reply_text = re.sub(r"\[SET_NAME:\s*[^\]]+\]", "", reply_text).strip()
 
-    # Apply fail-safe name greeting and question purge guard
+    # Apply fail-safe name & greeting guard
     if customer_name:
-        reply_text = apply_customer_name_guard(reply_text, customer_name)
+        reply_text = apply_customer_name_guard(reply_text, customer_name, already_greeted)
 
     # 5. Check if Escalation to Admin is needed
     is_escalated = False
@@ -832,10 +833,15 @@ async def whatsapp_webhook(req: Request):
         if is_substantive_admin_question(message_text):
             is_escalated = True
 
-    # HARD GUARD: NEVER escalate non-substantive messages (names, thank-yous, greetings, small talk)
-    if is_escalated and not is_substantive_admin_question(message_text):
-        print(f"[Admin Escalation Suppressed] Non-substantive message was not sent to admin: '{message_text}'")
-        is_escalated = False
+    # HARD GUARD: NEVER escalate non-substantive messages (names, thank-yous, greetings, arrival notices like "אני מגיע")
+    if is_escalated:
+        is_quote_escalation = any(k in escalation_question for k in ["הצעת מחיר", "מחיר מדויק", "זמינות", "מחיר"])
+        # Suppress if message is purely arrival, queue complaint, or thank you
+        if any(arr in message_text for arr in ["מגיע אליכם", "בדרך אליכם", "בתור", "לחכות בתור", "תודה"]):
+            is_escalated = False
+        elif not is_quote_escalation and not is_substantive_admin_question(message_text):
+            print(f"[Admin Escalation Suppressed] Non-substantive message was not sent to admin: '{message_text}'")
+            is_escalated = False
 
     # 6. Save Request to DB
     status = "pending" if is_escalated else "handled"
