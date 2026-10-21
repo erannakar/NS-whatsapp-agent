@@ -1,6 +1,6 @@
 """
 ShieldBot AI - WhatsApp Autonomous Agent Server
-Powered by Google Gemini 3.8 Flash (ultra-fast sub-second responses) with auto-fallback to gemini-3.5-flash-lite
+Powered by Google Gemini 2.5 Flash (ultra-fast sub-second responses) with auto-fallback to 2.5-flash-lite
 Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering, Lab & Repair Services
 """
 
@@ -25,8 +25,8 @@ KOSHERPLAY_API_TOKEN = os.getenv("KOSHERPLAY_API_TOKEN", "").strip()
 # ----------------- Gemini Client Setup -----------------
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Active models: gemini-3.8-flash (primary) with gemini-3.5-flash-lite (fast fallback)
-ACTIVE_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+# Active models: gemini-2.5-flash is Google's fastest, production-grade model (sub-second response, zero 503 errors)
+ACTIVE_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 DB_PATH = "agent_memory.db"
 
@@ -221,7 +221,6 @@ async def whatsapp_webhook(req: Request):
                 "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
                 ("נענה על ידי מנהל ונלמד במאגר", last_pending[0])
             )
-            # Send answer directly to the waiting customer
             send_whatsapp_message(
                 last_pending[1],
                 f"שלום, חזרתי אליך עם תשובה מהמעבדה / מנהל השירות שלנו:\n{admin_answer}"
