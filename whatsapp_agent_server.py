@@ -2,9 +2,11 @@
 ShieldBot AI - WhatsApp Autonomous Agent Server
 Powered by Google Gemini 3.8 Flash (primary) & Gemini 3.5 Flash Lite (fallback)
 Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering, Lab & Repair Services
+Persistent Memory & Sync: Permanent Code Seed, Local JSON Cache, SQLite with Render Persistent Disk Support
 """
 
 import os
+import json
 import sqlite3
 import re
 from datetime import datetime
@@ -32,7 +34,18 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 # Active models: gemini-3.8-flash (primary) with gemini-3.5-flash-lite (fast fallback)
 ACTIVE_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 
-DB_PATH = os.getenv("DB_PATH", "agent_memory.db")
+# ----------------- Database & Persistent Storage Setup -----------------
+# Auto-detect Render Persistent Disk (e.g. /var/data or /data) so data survives every redeploy!
+DB_PATH = os.getenv("DB_PATH", "")
+if not DB_PATH:
+    for disk_candidate in ["/var/data", "/data", "/opt/render/project/src/data"]:
+        if os.path.exists(disk_candidate) and os.path.isdir(disk_candidate):
+            DB_PATH = os.path.join(disk_candidate, "agent_memory.db")
+            break
+    if not DB_PATH:
+        DB_PATH = "agent_memory.db"
+
+BACKUP_JSON_PATH = os.path.join(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else ".", "contacts_cache.json")
 
 # Shared HTTP connection pool to avoid SSL handshake overhead on every WhatsApp message
 http_session = httpx.Client(timeout=10)
@@ -50,6 +63,16 @@ def normalize_phone(phone: str) -> str:
     elif digits.startswith("5") and len(digits) == 9:
         digits = "972" + digits
     return digits
+
+# ----------------- PERMANENT CONTACTS SEED (Immune to Server Rebuilds) -----------------
+# Numbers hardcoded here are 100% permanently preserved across GitHub commits and Render deploys!
+PERMANENT_CONTACTS = {
+    "972553164770": "ערן נקר",
+    "0553164770": "ערן נקר",
+    "972524043644": "ערן נקר",
+    "0524043644": "ערן נקר",
+    "972500000000": "מנהל מערכת",
+}
 
 # Common words that must NEVER be misidentified as a customer's first name
 COMMON_NON_NAMES = {
@@ -120,11 +143,14 @@ def init_db():
             updated_at TEXT
         )
     """)
-    # Pre-seed owner/test contact so name is recognized from first interaction
-    c.execute("""
-        INSERT OR IGNORE INTO contacts (phone, name, created_at, updated_at)
-        VALUES ('972524043644', 'ערן', datetime('now'), datetime('now'))
-    """)
+    # Seed permanent contacts into contacts table
+    for p, n in PERMANENT_CONTACTS.items():
+        norm_p = normalize_phone(p)
+        c.execute("""
+            INSERT OR IGNORE INTO contacts (phone, name, created_at, updated_at)
+            VALUES (?, ?, datetime('now'), datetime('now'))
+        """, (norm_p, n))
+
     # Conversation History Memory: Retains recent chat context per customer
     c.execute("""
         CREATE TABLE IF NOT EXISTS conversation_history (
@@ -146,7 +172,6 @@ def init_db():
             updated_at TEXT
         )
     """)
-    # Clean any old mock records with unconfirmed prices (e.g. F21 Pro 220 NIS)
     c.execute("DELETE FROM pos_inventory WHERE model_keywords LIKE '%f21%' OR model_keywords LIKE '%qin 1s%'")
     
     # Live Lab Queue Table
@@ -159,7 +184,6 @@ def init_db():
             created_at TEXT
         )
     """)
-    # Clean any mock lab tickets that caused fake "4 מכשירים בתיקון"
     c.execute("DELETE FROM lab_tickets WHERE device_model IN ('Samsung S23', 'Xiaomi Qin F21 Pro', 'iPhone 13', 'Samsung A14')")
 
     # Subscribers (NetSpark & KosherPlay)
@@ -187,10 +211,28 @@ def init_db():
             ("972528819203", "שמעון מזרחי", "כשר פליי", "expired", "כשר פליי מורחב + דפדפן (300 ₪/שנה)", "KP-19204", "gov.il", "01/10/2026"),
             ("972501234567", "יוסף אברהמי", "כשר פליי", "active", "כשר פליי בסיסי (250 ₪ חד-פעמי)", "KP-B-102", "bankleumi.co.il, waze", "ללא תפוגה (פעיל עד החלפת מכשיר)"),
         ])
+    
+    # Restore from JSON cache if file exists (surviving container rebuilds when persistent volume attached)
+    if os.path.exists(BACKUP_JSON_PATH):
+        try:
+            with open(BACKUP_JSON_PATH, "r", encoding="utf-8") as f:
+                cached_contacts = json.load(f)
+                for ph, nm in cached_contacts.items():
+                    norm_ph = normalize_phone(ph)
+                    c.execute("""
+                        INSERT OR IGNORE INTO contacts (phone, name, created_at, updated_at)
+                        VALUES (?, ?, datetime('now'), datetime('now'))
+                    """, (norm_ph, nm))
+        except Exception as e:
+            print(f"[Backup Cache Read Error]: {e}")
+
     conn.commit()
     conn.close()
 
-init_db()
+try:
+    init_db()
+except Exception as e:
+    print(f"[Init DB Error]: {e}")
 
 # ----------------- Helper Functions -----------------
 def send_whatsapp_message(phone: str, text: str) -> bool:
@@ -247,8 +289,21 @@ def lookup_subscriber(phone: str) -> dict:
         }
     return {"found": False}
 
+def sync_contacts_to_cache():
+    """Writes all contacts to JSON cache file on disk for backup."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT phone, name FROM contacts").fetchall()
+        conn.close()
+        cache = {r[0]: r[1] for r in rows}
+        cache.update({normalize_phone(p): n for p, n in PERMANENT_CONTACTS.items()})
+        with open(BACKUP_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        print(f"[Sync Cache Error]: {exc}")
+
 def save_contact_name(phone: str, name: str):
-    """Saves or updates customer name in contacts memory using normalized phone."""
+    """Saves or updates customer name in contacts memory and JSON cache using normalized phone."""
     clean_name = name.strip()
     norm_phone = normalize_phone(phone)
     if not clean_name or not norm_phone or clean_name in COMMON_NON_NAMES:
@@ -261,9 +316,10 @@ def save_contact_name(phone: str, name: str):
     """, (norm_phone, clean_name, datetime.now().isoformat(), datetime.now().isoformat()))
     conn.commit()
     conn.close()
+    sync_contacts_to_cache()
 
 def extract_name_from_text(text: str) -> str:
-    """Extracts customer first name if stated in message or when answering a name prompt."""
+    """Extracts customer name if stated in message or when answering a name prompt."""
     cleaned = text.strip()
     if not cleaned:
         return ""
@@ -293,24 +349,37 @@ def extract_name_from_text(text: str) -> str:
 
 def get_contact_name(phone: str) -> str:
     """
-    Retrieves remembered name from contacts memory, subscribers DB, or prior conversation history.
+    Retrieves remembered name using 4-tier lookup:
+    1. Permanent code seed (immune to wipes/rebuilds)
+    2. SQLite contacts table
+    3. Subscribers DB
+    4. Multi-turn conversation history
     """
     norm = normalize_phone(phone)
     if not norm:
         return ""
     
+    # 1. Tier 1: Check Permanent Contacts baked into code
+    if norm in PERMANENT_CONTACTS:
+        return PERMANENT_CONTACTS[norm].split()[0]
+    for p, n in PERMANENT_CONTACTS.items():
+        clean_p = normalize_phone(p)
+        if clean_p and len(clean_p) >= 9 and len(norm) >= 9:
+            if clean_p[-9:] == norm[-9:]:
+                return n.split()[0]
+    
     conn = sqlite3.connect(DB_PATH)
     
-    # 1. Check contacts memory table
+    # 2. Tier 2: Check contacts memory table
     row = conn.execute(
         "SELECT name FROM contacts WHERE phone = ? OR phone LIKE ? LIMIT 1",
         (norm, f"%{norm[-9:]}%" if len(norm) >= 9 else f"%{norm}%")
     ).fetchone()
     if row and row[0] and row[0].strip() not in COMMON_NON_NAMES:
         conn.close()
-        return row[0].strip()
+        return row[0].strip().split()[0]
     
-    # 2. Check subscribers table
+    # 3. Tier 3: Check subscribers table
     sub_row = conn.execute(
         "SELECT name FROM subscribers WHERE phone = ? OR phone LIKE ? LIMIT 1",
         (norm, f"%{norm[-9:]}%" if len(norm) >= 9 else f"%{norm}%")
@@ -321,7 +390,7 @@ def get_contact_name(phone: str) -> str:
         save_contact_name(norm, first_only)
         return first_only
 
-    # 3. Check conversation_history for any past mention of name
+    # 4. Tier 4: Check conversation_history for past mentions of name
     hist_rows = conn.execute("""
         SELECT role, message FROM conversation_history
         WHERE phone = ? OR phone LIKE ?
@@ -518,17 +587,59 @@ def apply_customer_name_guard(reply_text: str, customer_name: str, already_greet
                 
     return cleaned
 
-# ----------------- Routes -----------------
+# ----------------- Routes & Backup Endpoints -----------------
 @app.api_route("/", methods=["GET", "HEAD"])
 def health_check():
     return {
         "status": "online",
         "service": "ShieldBot AI WhatsApp Agent",
         "models": ACTIVE_MODELS,
+        "db_path": DB_PATH,
         "has_gemini_key": bool(GEMINI_API_KEY),
         "has_whatsapp_url": bool(WHATSAPP_API_URL),
-        "admin_phone": ADMIN_WHATSAPP_PHONE
+        "admin_phone": ADMIN_WHATSAPP_PHONE,
+        "permanent_contacts_count": len(PERMANENT_CONTACTS)
     }
+
+@app.get("/api/contacts")
+def list_contacts():
+    """Lists all remembered contacts across code permanent seed and SQLite storage."""
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("SELECT phone, name, updated_at FROM contacts ORDER BY updated_at DESC").fetchall()
+    conn.close()
+    db_map = {r[0]: {"name": r[1], "source": "db", "updated_at": r[2]} for r in rows}
+    for p, n in PERMANENT_CONTACTS.items():
+        norm_p = normalize_phone(p)
+        if norm_p not in db_map:
+            db_map[norm_p] = {"name": n, "source": "permanent_seed", "updated_at": "permanent"}
+    return {"total": len(db_map), "contacts": db_map}
+
+@app.get("/api/backup/export")
+def export_backup():
+    """Exports full JSON backup of remembered contacts and learned knowledge rules."""
+    conn = sqlite3.connect(DB_PATH)
+    contacts_rows = conn.execute("SELECT phone, name, updated_at FROM contacts").fetchall()
+    kb_rows = conn.execute("SELECT keywords, answer, created_at FROM learned_kb").fetchall()
+    conn.close()
+    return {
+        "exported_at": datetime.now().isoformat(),
+        "contacts": {r[0]: {"name": r[1], "updated_at": r[2]} for r in contacts_rows},
+        "learned_kb": [{"keywords": r[0], "answer": r[1], "created_at": r[2]} for r in kb_rows]
+    }
+
+@app.post("/api/contacts/add")
+async def add_contact_manual(req: Request):
+    """Manually add or sync a customer phone number and name into persistent memory."""
+    try:
+        data = await req.json()
+        phone = data.get("phone", "")
+        name = data.get("name", "")
+        if not phone or not name:
+            return {"ok": False, "error": "Phone and Name required"}
+        save_contact_name(phone, name)
+        return {"ok": True, "saved": {normalize_phone(phone): name}}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 # ----------------- POS & Lab Integration Endpoints -----------------
 @app.get("/api/pos/parts")
@@ -561,7 +672,7 @@ async def update_pos_part(req: Request):
         return {"ok": False, "error": str(exc)}
 
 @app.get("/test_send")
-def test_send(phone: str = "0524043644"):
+def test_send(phone: str = "0553164770"):
     """Quick diagnostic endpoint to test WhatsApp outgoing message delivery."""
     success = send_whatsapp_message(
         phone,
@@ -645,7 +756,7 @@ async def whatsapp_webhook(req: Request):
         send_whatsapp_message(sender_phone, f"✅ התשובה נשלחה ללקוח ({customer_dest}) ללא מילות מפתח ונשמרה במאגר תחת מילות הזיהוי:\n'{keywords}'")
         return {"ok": True, "admin_action": "knowledge_saved"}
 
-    # 2. Check Customer Name & Memory
+    # 2. Check Customer Name & Memory (Across Permanent Seed, DB, Subscribers, History)
     customer_name = get_contact_name(sender_phone)
     extracted_name = extract_name_from_text(message_text)
     if extracted_name:
