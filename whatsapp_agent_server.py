@@ -1,6 +1,6 @@
 """
 ShieldBot AI - WhatsApp Autonomous Agent Server
-Powered by Google Gemini (ultra-fast sub-second responses)
+Powered by Google Gemini (ONLY approved 3.8 & 3.5 Flash models for ultra-fast sub-second responses)
 Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering, Lab & Repair Services
 Persistent Memory & Sync: Permanent Code Seed, Local JSON Cache, SQLite with Render Persistent Disk Support
 Keep-Alive: Built-in background ping loop to prevent Render cold starts!
@@ -31,18 +31,43 @@ ADMIN_WHATSAPP_PHONE = os.getenv("ADMIN_WHATSAPP_PHONE", "972500000000").strip()
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().strip('"').strip("'")
 PORT = os.getenv("PORT", "8000")
 
-# ----------------- Gemini Client Setup -----------------
-client = genai.Client(api_key=GEMINI_API_KEY) if (genai and GEMINI_API_KEY) else None
+# ----------------- Gemini Client Setup (Ultra-Fast Mode) -----------------
+client = None
+if genai and GEMINI_API_KEY:
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY, http_options={"timeout": 6000})
+    except Exception:
+        client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Active official production models with automatic fallback
-ACTIVE_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-2.5-flash",
-    "gemini-1.5-flash-8b",
+# כלל ברזל קבוע: אך ורק מודלים מאושרים ומהירים מסדרות 3.8 ו-3.5 בלבד!
+# חל איסור מוחלט להכניס מודלים ישנים (ללא 2.0, ללא 1.5, ללא 2.5) כדי למנוע שגיאות ועיכובים.
+APPROVED_MODELS = [
     "gemini-3.8-flash",
-    "gemini-3.5-flash-lite"
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
 ]
+ACTIVE_MODELS = [
+    m for m in APPROVED_MODELS
+    if m.startswith(("gemini-3.8", "gemini-3.5"))
+]
+
+def build_fast_gen_config(system_instruction: str):
+    """Builds a low-latency GenerateContentConfig with zero thinking overhead when supported."""
+    if not types:
+        return None
+    try:
+        return types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.1,
+            max_output_tokens=180,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        )
+    except Exception:
+        return types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.1,
+            max_output_tokens=180,
+        )
 
 # ----------------- Database & Persistent Storage Setup -----------------
 def resolve_working_db_path() -> str:
@@ -66,10 +91,16 @@ def resolve_working_db_path() -> str:
     return ":memory:"
 
 DB_PATH = resolve_working_db_path()
-BACKUP_JSON_PATH = os.path.join(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else ".", "contacts_cache.json")
+BACKUP_JSON_PATH = os.path.join(
+    os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
+    "contacts_cache.json"
+)
 
-# Shared HTTP connection pool to avoid SSL handshake overhead
-http_session = httpx.Client(timeout=10)
+# Shared HTTP connection pool with keep-alive to avoid SSL handshake overhead on every message
+http_session = httpx.Client(
+    timeout=8,
+    limits=httpx.Limits(max_keepalive_connections=20, max_connections=50, keepalive_expiry=60)
+)
 
 # ----------------- Keep-Alive Background Task (Render Cold-Start Preventer) -----------------
 async def keep_alive_loop():
@@ -78,7 +109,7 @@ async def keep_alive_loop():
     if not target_url.startswith("http"):
         target_url = f"https://{target_url}"
     ping_url = f"{target_url.rstrip('/')}/healthz"
-    
+
     await asyncio.sleep(45)
     async with httpx.AsyncClient(timeout=10) as aclient:
         while True:
@@ -89,12 +120,49 @@ async def keep_alive_loop():
                 print(f"[Keep-Alive] Ping notice: {e}")
             await asyncio.sleep(540)
 
+async def verify_green_api_on_startup():
+    """
+    Read-only diagnostic check on startup.
+    IMPORTANT: Does NOT call setSettings if webhookUrl and incomingWebhook are already set,
+    because calling Green-API setSettings reboots the WhatsApp instance for up to 5 minutes!
+    """
+    await asyncio.sleep(3)
+    base, token, _ = parse_green_api_credentials()
+    if not base or not token:
+        print("[Green-API Check] WHATSAPP_API_URL not configured or custom gateway in use.")
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as aclient:
+            state_resp = await aclient.get(f"{base}/getStateInstance/{token}")
+            print(f"[Green-API State]: {state_resp.status_code} - {state_resp.text[:120]}")
+
+            settings_resp = await aclient.get(f"{base}/getSettings/{token}")
+            if settings_resp.status_code == 200:
+                settings = settings_resp.json()
+                curr_url = settings.get("webhookUrl", "")
+                inc_wh = settings.get("incomingWebhook", "")
+                print(f"[Green-API Settings]: webhookUrl='{curr_url}', incomingWebhook='{inc_wh}'")
+                # Only call setSettings if webhookUrl is completely missing or incomingWebhook is disabled
+                if not curr_url or inc_wh != "yes":
+                    render_url = (RENDER_EXTERNAL_URL or "https://ns-whatsapp-agent-1.onrender.com").strip().rstrip("/")
+                    target_webhook = curr_url or f"{render_url}/webhook/whatsapp"
+                    payload = {
+                        "webhookUrl": target_webhook,
+                        "incomingWebhook": "yes",
+                        "outgoingMessageWebhook": "no",
+                        "outgoingAPIMessageWebhook": "no"
+                    }
+                    fix_resp = await aclient.post(f"{base}/setSettings/{token}", json=payload)
+                    print(f"[Green-API Auto-Repair] Applied missing webhook settings: {fix_resp.status_code}")
+    except Exception as exc:
+        print(f"[Green-API Startup Check Notice]: {exc}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    config_task = asyncio.create_task(auto_configure_green_api())
+    check_task = asyncio.create_task(verify_green_api_on_startup())
     keep_alive_task = asyncio.create_task(keep_alive_loop())
     yield
-    config_task.cancel()
+    check_task.cancel()
     keep_alive_task.cancel()
 
 app = FastAPI(title="ShieldBot AI - WhatsApp Agent", lifespan=lifespan)
@@ -146,7 +214,8 @@ def is_pure_greeting(text: str) -> bool:
         return False
     greeting_stems = {
         "שלום", "היי", "הי", "אהלן", "בוקר", "ערב", "צהריים", "לילה", "טוב", "טובה",
-        "טובים", "שלוםם", "היוש", "הייוש", "הלו", "hello", "hi", "hey", "ברכה", "נעים"
+        "טובים", "שלוםם", "היוש", "הייוש", "הלו", "hello", "hi", "hey", "ברכה", "נעים",
+        "מה", "נשמע", "שלומך", "קורה", "העניינים", "איתך"
     }
     for w in words:
         stem = w[1:] if (w.startswith("ו") and len(w) > 2 and w not in greeting_stems) else w
@@ -219,7 +288,19 @@ def is_warranty_followup_confirmation(text: str, history_text: str) -> bool:
     ]
     return (had_warranty_offer and is_positive) or any(phrase in clean for phrase in direct_warranty_triggers)
 
-# ----------------- Database Initialization -----------------
+# ----------------- Database Initialization & JSON Backup Sync -----------------
+def sync_contacts_to_json():
+    """Exports all contacts from SQLite to local JSON cache for extra durability."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT phone, name FROM contacts").fetchall()
+        conn.close()
+        data = {r[0]: r[1] for r in rows if r[0] and r[1]}
+        with open(BACKUP_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 def init_db():
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -252,12 +333,29 @@ def init_db():
                 updated_at TEXT
             )
         """)
+        # 1. Seed from PERMANENT_CONTACTS
         for p, n in PERMANENT_CONTACTS.items():
             norm_p = normalize_phone(p)
             c.execute("""
                 INSERT OR IGNORE INTO contacts (phone, name, created_at, updated_at)
                 VALUES (?, ?, datetime('now'), datetime('now'))
             """, (norm_p, n))
+
+        # 2. Restore from JSON cache if present
+        if os.path.exists(BACKUP_JSON_PATH):
+            try:
+                with open(BACKUP_JSON_PATH, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                if isinstance(cached, dict):
+                    for cp, cn in cached.items():
+                        norm_cp = normalize_phone(cp)
+                        if norm_cp and cn:
+                            c.execute("""
+                                INSERT OR IGNORE INTO contacts (phone, name, created_at, updated_at)
+                                VALUES (?, ?, datetime('now'), datetime('now'))
+                            """, (norm_cp, str(cn).strip()))
+            except Exception:
+                pass
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS conversation_history (
@@ -294,36 +392,13 @@ def init_db():
             ])
         conn.commit()
         conn.close()
+        sync_contacts_to_json()
     except Exception as e:
         print(f"[Init DB Notice]: {e}")
 
 init_db()
 
 # ----------------- Helper Functions -----------------
-def send_whatsapp_message(phone: str, text: str) -> bool:
-    clean_phone = normalize_phone(phone)
-    clean_text = (text or "").strip()
-    if not clean_phone or not clean_text:
-        print(f"[WhatsApp Skip] Invalid phone or empty text: phone={clean_phone}")
-        return False
-
-    _, _, send_url = parse_green_api_credentials()
-    if not send_url:
-        print(f"[WhatsApp DryRun] No WHATSAPP_API_URL configured. Message to {clean_phone}: {clean_text[:40]}")
-        return False
-    
-    payload = {
-        "chatId": f"{clean_phone}@c.us",
-        "message": clean_text
-    }
-    try:
-        resp = http_session.post(send_url, json=payload, timeout=8)
-        print(f"[WhatsApp Sent] To: {clean_phone}, Status: {resp.status_code}, Response: {resp.text[:80]}")
-        return resp.status_code == 200
-    except Exception as exc:
-        print(f"[WhatsApp Send Error]: {exc}")
-        return False
-
 def parse_green_api_credentials():
     """Extracts instance base URL, token, and clean sendMessage URL from WHATSAPP_API_URL."""
     clean = (WHATSAPP_API_URL or "").strip().strip('"').strip("'").rstrip("/")
@@ -337,41 +412,51 @@ def get_green_api_base_and_token():
     base, token, _ = parse_green_api_credentials()
     return base, token
 
-async def auto_configure_green_api():
-    """Automatically configures Green-API instance with Render webhook URL on server startup."""
-    await asyncio.sleep(4)
-    base, token, _ = parse_green_api_credentials()
-    if not base or not token:
-        print("[Green-API AutoConfig] No base/token detected in WHATSAPP_API_URL")
-        return
-    render_url = (RENDER_EXTERNAL_URL or "https://ns-whatsapp-agent-1.onrender.com").strip().rstrip("/")
-    target_webhook = f"{render_url}/webhook/whatsapp"
+def send_whatsapp_message(phone: str, text: str, raw_chat_id: str = "") -> bool:
+    clean_phone = normalize_phone(phone)
+    clean_text = (text or "").strip()
+    if (not clean_phone and not raw_chat_id) or not clean_text:
+        print(f"[WhatsApp Skip] Invalid phone or empty text: phone={clean_phone}")
+        return False
+
+    _, _, send_url = parse_green_api_credentials()
+    if not send_url:
+        print(f"[WhatsApp DryRun] No WHATSAPP_API_URL configured. Message to {clean_phone}: {clean_text[:60]}")
+        return False
+
+    target_chat_id = f"{clean_phone}@c.us" if clean_phone else raw_chat_id
     payload = {
-        "webhookUrl": target_webhook,
-        "webhookUrlToken": "",
-        "incomingWebhook": "yes",
-        "outgoingMessageWebhook": "yes",
-        "stateWebhook": "yes"
+        "chatId": target_chat_id,
+        "message": clean_text
     }
     try:
-        async with httpx.AsyncClient(timeout=10) as aclient:
-            resp = await aclient.post(f"{base}/setSettings/{token}", json=payload)
-            print(f"[Green-API AutoConfig] Result: {resp.status_code} - {resp.text[:120]}")
+        resp = http_session.post(send_url, json=payload, timeout=8)
+        print(f"[WhatsApp Sent] To: {target_chat_id}, Status: {resp.status_code}, Response: {resp.text[:100]}")
+        return resp.status_code == 200
     except Exception as exc:
-        print(f"[Green-API AutoConfig Notice]: {exc}")
+        print(f"[WhatsApp Send Error]: {exc}")
+        return False
 
-def lookup_subscriber(phone: str) -> dict:
-    """Checks subscriber status in NetSpark & KosherPlay database."""
+def lookup_subscriber(phone: str, message_text: str = "") -> dict:
+    """Checks subscriber status in NetSpark & KosherPlay database by phone or name mentioned in text."""
     norm = normalize_phone(phone)
-    if not norm:
-        return {"found": False}
     try:
         conn = sqlite3.connect(DB_PATH)
-        row = conn.execute(
-            "SELECT name, system_name, status, current_level, device_id, whitelist, renewal_date "
-            "FROM subscribers WHERE phone = ? OR phone LIKE ? LIMIT 1",
-            (norm, f"%{norm[-9:]}%" if len(norm) >= 9 else f"%{norm}%")
-        ).fetchone()
+        row = None
+        if norm:
+            row = conn.execute(
+                "SELECT name, system_name, status, current_level, device_id, whitelist, renewal_date, phone "
+                "FROM subscribers WHERE phone = ? OR phone LIKE ? LIMIT 1",
+                (norm, f"%{norm[-9:]}%" if len(norm) >= 9 else f"%{norm}%")
+            ).fetchone()
+        if not row and message_text:
+            all_subs = conn.execute(
+                "SELECT name, system_name, status, current_level, device_id, whitelist, renewal_date, phone FROM subscribers"
+            ).fetchall()
+            for s in all_subs:
+                if s[0] and s[0] in message_text:
+                    row = s
+                    break
         conn.close()
         if row:
             return {
@@ -382,7 +467,8 @@ def lookup_subscriber(phone: str) -> dict:
                 "level": row[3],
                 "deviceId": row[4],
                 "whitelist": row[5],
-                "renewalDate": row[6]
+                "renewalDate": row[6],
+                "phone": row[7]
             }
     except Exception:
         pass
@@ -413,6 +499,7 @@ def save_contact_name(phone: str, name: str):
         """, (norm_phone, clean_name, datetime.now().isoformat(), datetime.now().isoformat()))
         conn.commit()
         conn.close()
+        sync_contacts_to_json()
     except Exception as exc:
         print(f"[Save Contact Notice]: {exc}")
 
@@ -454,7 +541,7 @@ def get_contact_name(phone: str) -> str:
         if clean_p and len(clean_p) >= 9 and len(norm) >= 9:
             if clean_p[-9:] == norm[-9:]:
                 return n.split()[0]
-    
+
     try:
         conn = sqlite3.connect(DB_PATH)
         row = conn.execute(
@@ -532,7 +619,7 @@ def purge_unwanted_phrases(text: str) -> str:
 
 def apply_customer_name_guard(reply_text: str, customer_name: str, already_greeted: bool) -> str:
     cleaned = reply_text.strip()
-    
+
     cleaned = re.sub(
         r"(?:ו?איך\s+קוראים\s+לך(?:\s+כדי\s+שאדע\s+למי\s+לפנות)?[\s?!.,]*|ו?מה\s+שמך(?:\s+בבקשה)?[\s?!.,]*|תגיד\s+מה\s+השם\s+שלך[\s?!.,]*|למי\s+לפנות[\s?!.,]*)",
         "",
@@ -567,7 +654,7 @@ def apply_customer_name_guard(reply_text: str, customer_name: str, already_greet
                 cleaned = re.sub(r"^(?:שלום|היי|בוקר טוב|ערב טוב|אהלן)[\s!.,]*", f"{salutation} ", cleaned, count=1)
             else:
                 cleaned = f"{salutation} {cleaned}"
-                
+
     return cleaned
 
 # ----------------- Routes & Health Endpoints -----------------
@@ -610,8 +697,34 @@ def list_contacts():
             db_map[norm_p] = {"name": n, "source": "permanent_seed", "updated_at": "permanent"}
     return {"total": len(db_map), "contacts": db_map}
 
+@app.post("/api/contacts/add")
+async def add_contact_api(req: Request):
+    try:
+        body = await req.json()
+        phone = normalize_phone(body.get("phone", ""))
+        name = str(body.get("name", "")).strip()
+        if not phone or not name:
+            return {"ok": False, "error": "phone and name are required"}
+        save_contact_name(phone, name)
+        return {"ok": True, "phone": phone, "name": name}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/api/backup/export")
+def export_backup():
+    contacts_data = list_contacts().get("contacts", {})
+    kb_data = []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT id, keywords, answer, created_at FROM learned_kb").fetchall()
+        conn.close()
+        kb_data = [{"id": r[0], "keywords": r[1], "answer": r[2], "created_at": r[3]} for r in rows]
+    except Exception:
+        pass
+    return {"contacts": contacts_data, "learned_kb": kb_data, "exported_at": datetime.now().isoformat()}
+
 @app.get("/test_send")
-def test_send(phone: str = "0553164770"):
+def test_send(phone: str = "0524043644"):
     success = send_whatsapp_message(
         phone,
         "שלום! זוהי הודעת בדיקה משרת הסוכן ShieldBot AI. החיבור לווצאפ פעיל ומסונכרן בהצלחה! 🛡️"
@@ -622,21 +735,21 @@ def test_send(phone: str = "0553164770"):
         "note": "הודעת בדיקה נשלחה."
     }
 
-# ----------------- Automated Green-API Diagnostic & Auto-Fix -----------------
+# ----------------- Automated Green-API Diagnostic & Manual Webhook Repair -----------------
 @app.get("/api/green_api_status")
 def green_api_status():
-    """Queries Green-API directly to see current webhook settings, instance state, and queue."""
+    """Queries Green-API directly to see current webhook settings and instance state without rebooting."""
     base, token = get_green_api_base_and_token()
     if not base or not token:
         return {"error": "WHATSAPP_API_URL is missing or invalid format"}
-    
+
     results = {}
     try:
         resp = http_session.get(f"{base}/getSettings/{token}", timeout=8)
         results["settings"] = resp.json() if resp.status_code == 200 else resp.text
     except Exception as e:
         results["settings_error"] = str(e)
-        
+
     try:
         resp2 = http_session.get(f"{base}/getStateInstance/{token}", timeout=8)
         results["stateInstance"] = resp2.json() if resp2.status_code == 200 else resp2.text
@@ -647,17 +760,20 @@ def green_api_status():
 
 @app.get("/api/fix_green_api_webhook")
 def fix_green_api_webhook():
-    """Forces Green-API via API to set the exact current Render webhook URL and incoming notifications."""
+    """Manually forces Green-API via API to set the Render webhook URL (Note: Green-API takes ~2-5 mins to apply)."""
     base, token = get_green_api_base_and_token()
     if not base or not token:
         return {"error": "WHATSAPP_API_URL is missing or invalid format"}
 
-    target_webhook = "https://ns-whatsapp-agent-1.onrender.com/webhook/whatsapp"
+    render_url = (RENDER_EXTERNAL_URL or "https://ns-whatsapp-agent-1.onrender.com").strip().rstrip("/")
+    target_webhook = f"{render_url}/webhook/whatsapp"
     payload = {
         "webhookUrl": target_webhook,
         "webhookUrlToken": "",
         "incomingWebhook": "yes",
-        "stateWebhook": "yes"
+        "outgoingMessageWebhook": "no",
+        "outgoingAPIMessageWebhook": "no",
+        "stateWebhook": "no"
     }
     try:
         resp = http_session.post(f"{base}/setSettings/{token}", json=payload, timeout=8)
@@ -694,26 +810,44 @@ async def unified_whatsapp_webhook(req: Request):
     if isinstance(payload, dict) and "body" in payload and isinstance(payload["body"], dict):
         payload = payload["body"]
 
-    # 2. Filter system and outgoing API status webhooks to prevent infinite loops
+    # 2. Strictly process ONLY incomingMessageReceived when typeWebhook is present
     type_webhook = payload.get("typeWebhook", "")
     print(f"[Payload Received]: typeWebhook={type_webhook}")
-    if type_webhook in ["outgoingAPIMessageReceived", "statusMessage", "deviceInfo", "stateInstanceChanged"]:
-        return {"ok": True, "note": f"Ignored system/status webhook: {type_webhook}"}
+    if type_webhook and type_webhook != "incomingMessageReceived":
+        return {"ok": True, "note": f"Ignored non-incoming webhook: {type_webhook}"}
 
-    # 3. Extract Sender Phone cleanly
+    # 3. Extract Sender Phone cleanly & ignore group chats or self-messages
     sender_data = payload.get("senderData", {}) if isinstance(payload.get("senderData"), dict) else {}
     message_data = payload.get("messageData", {}) if isinstance(payload.get("messageData"), dict) else {}
+    instance_data = payload.get("instanceData", {}) if isinstance(payload.get("instanceData"), dict) else {}
 
-    raw_sender = (
-        sender_data.get("chatId", "")
-        or sender_data.get("sender", "")
-        or payload.get("senderPhone", "")
-        or payload.get("chatId", "")
-        or payload.get("sender", "")
-        or payload.get("from", "")
-    )
+    raw_chat_id = str(sender_data.get("chatId", "") or payload.get("chatId", ""))
+    if raw_chat_id.endswith("@g.us"):
+        print(f"[Ignored Group Message] chatId={raw_chat_id}")
+        return {"ok": True, "note": "Ignored group chat message"}
+
+    # Prefer a @c.us phone identifier if either sender or chatId has it
+    raw_sender_field = str(sender_data.get("sender", "") or payload.get("sender", ""))
+    if "@c.us" in raw_sender_field:
+        raw_sender = raw_sender_field
+    elif "@c.us" in raw_chat_id:
+        raw_sender = raw_chat_id
+    else:
+        raw_sender = (
+            raw_chat_id
+            or raw_sender_field
+            or str(payload.get("senderPhone", ""))
+            or str(payload.get("from", ""))
+        )
+
     clean_sender_raw = str(raw_sender).split("@")[0].split(":")[0]
     sender_phone = normalize_phone(clean_sender_raw)
+
+    # Guard against bot replying to its own number
+    bot_own_phone = normalize_phone(str(instance_data.get("wid", "")))
+    if bot_own_phone and sender_phone and bot_own_phone == sender_phone and raw_sender_field == str(instance_data.get("wid", "")):
+        print(f"[Ignored Self Message] sender={sender_phone} matches instance wid={bot_own_phone}")
+        return {"ok": True, "note": "Ignored self message"}
 
     # 4. Extract Message Text across all message types
     type_msg = message_data.get("typeMessage", "")
@@ -733,6 +867,16 @@ async def unified_whatsapp_webhook(req: Request):
             message_data.get("buttonsResponseMessage", {}).get("selectedDisplayText", "")
             or message_data.get("buttonsResponseMessage", {}).get("selectedButtonId", "")
         )
+    elif type_msg == "templateButtonsReplyMessage":
+        message_text = (
+            message_data.get("templateButtonReplyMessage", {}).get("selectedDisplayText", "")
+            or message_data.get("templateButtonReplyMessage", {}).get("selectedId", "")
+        )
+    elif type_msg == "listResponseMessage":
+        message_text = (
+            message_data.get("listResponseMessage", {}).get("title", "")
+            or message_data.get("listResponseMessage", {}).get("singleSelectReply", {}).get("selectedRowId", "")
+        )
 
     if not message_text:
         message_text = (
@@ -744,7 +888,7 @@ async def unified_whatsapp_webhook(req: Request):
     message_text = (message_text or "").strip()
 
     if not sender_phone or not message_text:
-        print(f"[Ignored] Non-message webhook event: sender={sender_phone}, text={message_text[:30] if message_text else 'None'}")
+        print(f"[Ignored] Non-message webhook event: sender={sender_phone}, typeMessage={type_msg}")
         return {"ok": True, "note": "Ignored non-text or system event"}
 
     print(f"[Incoming WhatsApp] From {sender_phone}: {message_text}")
@@ -779,11 +923,11 @@ async def unified_whatsapp_webhook(req: Request):
             conn.commit()
             conn.close()
             confirm_msg = f"✅ התשובה נשמרה במאגר הידע של הסוכן ונשלחה ללקוח ({customer_dest})!"
-            send_whatsapp_message(sender_phone, confirm_msg)
+            send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
             return {"ok": True, "admin_action": "knowledge_saved", "customer": customer_dest}
         except Exception as exc:
             print(f"[Admin Learning Error]: {exc}")
-            send_whatsapp_message(sender_phone, f"⚠️ שגיאה בשמירת התשובה: {exc}")
+            send_whatsapp_message(sender_phone, f"⚠️ שגיאה בשמירת התשובה: {exc}", raw_chat_id)
             return {"ok": False, "error": str(exc)}
 
     customer_name = get_contact_name(sender_phone)
@@ -795,7 +939,7 @@ async def unified_whatsapp_webhook(req: Request):
     already_greeted = has_already_greeted_customer(sender_phone)
     recent_history = get_recent_chat_history(sender_phone, limit=6)
 
-    # 1. FAST DETERMINISTIC PATH: Pure Greetings
+    # 1. FAST DETERMINISTIC PATH: Pure Greetings (Send WhatsApp FIRST, then save to DB)
     if is_pure_greeting(message_text):
         if not customer_name:
             greeting_reply = "שלום , על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום ."
@@ -803,42 +947,44 @@ async def unified_whatsapp_webhook(req: Request):
             greeting_reply = f"שלום {customer_name}, במה אוכל לעזור לך היום? 😃"
         else:
             greeting_reply = f"שלום {customer_name}, מה שלומך? במה אוכל לעזור לך היום? 😃"
-        
+
+        send_whatsapp_message(sender_phone, greeting_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", greeting_reply)
-        send_whatsapp_message(sender_phone, greeting_reply)
         return {"ok": True, "reply": greeting_reply, "type": "greeting_reply"}
 
-    # 2. FAST DETERMINISTIC PATH: Store Address & Hours
+    # 2. FAST DETERMINISTIC PATH: Store Address & Hours (Send WhatsApp FIRST, then save to DB)
     if is_store_info_question(message_text):
         store_reply = get_store_info_reply(customer_name)
+        send_whatsapp_message(sender_phone, store_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", store_reply)
-        send_whatsapp_message(sender_phone, store_reply)
         return {"ok": True, "reply": store_reply, "type": "store_info"}
 
-    # 3. FAST DETERMINISTIC PATH: Warranty Confirmation / Inquiry (Step 2)
+    # 3. FAST DETERMINISTIC PATH: Warranty Confirmation / Inquiry (Send WhatsApp FIRST, then save to DB)
     if is_warranty_followup_confirmation(message_text, recent_history):
         name_prefix = f"{customer_name}, " if customer_name else ""
         warranty_reply = f"{name_prefix}{WARRANTY_FULL_EXPLANATION}"
+        send_whatsapp_message(sender_phone, warranty_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", warranty_reply)
-        send_whatsapp_message(sender_phone, warranty_reply)
         return {"ok": True, "reply": warranty_reply, "type": "warranty_full_explanation"}
 
-    # 4. LLM Generation
+    # 4. LLM Generation (Strictly ONLY 3.8 & 3.5 Flash models with zero thinking overhead)
     reply_text = None
     used_model = None
+    sub_info = lookup_subscriber(sender_phone, message_text)
 
     if client:
+        if sub_info.get("found") and not customer_name:
+            customer_name = sub_info["name"].split()[0]
+
         name_instruction = f"הלקוח מוכר ושמו הפרטי הוא: '{customer_name}'." if customer_name else "אינך יודע עדיין את שמו של הלקוח."
-        sub_info = lookup_subscriber(sender_phone)
         if sub_info.get("found"):
-            if not customer_name:
-                customer_name = sub_info["name"].split()[0]
             subscriber_context = (
                 f"פרטי מנוי מאומת: שם מלא '{sub_info['name']}', מערכת '{sub_info['system']}', "
-                f"סטטוס '{sub_info['status']}', מסלול/רמה: '{sub_info['level']}', מזהה מכשיר: '{sub_info['deviceId']}', תוקף: '{sub_info['renewalDate']}'."
+                f"סטטוס '{sub_info['status']}', מסלול/רמה: '{sub_info['level']}', מזהה מכשיר: '{sub_info['deviceId']}', "
+                f"אתרים פתוחים: '{sub_info['whitelist']}', תוקף: '{sub_info['renewalDate']}'."
             )
         else:
             subscriber_context = "הלקוח אינו מופיע ברשימת מנויי נטספרק או כשר פליי הקיימים במערכת."
@@ -887,23 +1033,19 @@ async def unified_whatsapp_webhook(req: Request):
 8. כללים שנלמדו:
    {learned_rules}
 """
-        config_args = {
-            "system_instruction": system_instruction,
-            "temperature": 0.2,
-            "max_output_tokens": 250,
-        }
-        gen_config = types.GenerateContentConfig(**config_args) if types else None
-
+        gen_config = build_fast_gen_config(system_instruction)
         prompt_content = f"היסטוריית שיחה:\n{recent_history}\n\nהודעת לקוח: {message_text}" if recent_history else f"לקוח {sender_phone}: {message_text}"
 
         for model_candidate in ACTIVE_MODELS:
             try:
-                # Async thread-pool execution so event loop never freezes
-                response = await asyncio.to_thread(
-                    client.models.generate_content,
-                    model=model_candidate,
-                    contents=prompt_content,
-                    config=gen_config
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        client.models.generate_content,
+                        model=model_candidate,
+                        contents=prompt_content,
+                        config=gen_config
+                    ),
+                    timeout=5.5
                 )
                 if response and response.text:
                     reply_text = response.text.strip()
@@ -912,7 +1054,7 @@ async def unified_whatsapp_webhook(req: Request):
             except Exception as exc:
                 print(f"[Gemini Error on {model_candidate}]: {exc}")
 
-    # Fallback
+    # Fallback if AI is unreachable
     if not reply_text:
         cust_label = f" {customer_name}" if customer_name else ""
         reply_text = f"אני בודק כעת את המחיר העדכני{cust_label}, ומיד חוזר אליך עם תשובה מדויקת."
@@ -930,7 +1072,7 @@ async def unified_whatsapp_webhook(req: Request):
         else:
             reply_text = "שלום! במה אוכל לעזור לך היום? 😃"
 
-    # Escalation
+    # Escalation parsing
     is_escalated = False
     escalation_question = message_text
     if "[ESCALATE:" in reply_text:
@@ -940,14 +1082,27 @@ async def unified_whatsapp_webhook(req: Request):
         reply_text = re.sub(r"\[ESCALATE:\s*[^\]]+\]", "", reply_text).strip()
         is_escalated = True
 
-    # Save to history & requests safely
+    # SEND WHATSAPP MESSAGE TO CUSTOMER FIRST FOR MAXIMUM SPEED!
+    send_whatsapp_message(sender_phone, reply_text, raw_chat_id)
+
+    # Save to history & requests after customer already received the reply
+    save_chat_message(sender_phone, "customer", message_text)
+    save_chat_message(sender_phone, "agent", reply_text)
     try:
         status = "pending" if is_escalated else "handled"
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
             "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (sender_phone, "מעבדה/שירות", message_text, "הועבר למנהל" if is_escalated else f"מענה אוטונומי ({used_model})", "", status, datetime.now().isoformat())
+            (
+                sender_phone,
+                sub_info.get("system", "מעבדה/שירות"),
+                message_text,
+                "הועבר למנהל" if is_escalated else f"מענה אוטונומי ({used_model})",
+                "",
+                status,
+                datetime.now().isoformat()
+            )
         )
         conn.commit()
         conn.close()
@@ -967,9 +1122,6 @@ async def unified_whatsapp_webhook(req: Request):
         except Exception as e_adm:
             print(f"[Admin Escalation Notice]: {e_adm}")
 
-    save_chat_message(sender_phone, "customer", message_text)
-    save_chat_message(sender_phone, "agent", reply_text)
-    send_whatsapp_message(sender_phone, reply_text)
     return {"ok": True, "reply": reply_text, "escalated": is_escalated, "model": used_model}
 
 # Catch-all for any incoming POST to any sub-path (to never miss a webhook)
