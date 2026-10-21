@@ -1,10 +1,10 @@
 """
 ShieldBot AI - WhatsApp Autonomous Agent Server
-Powered by Google Gemini (gemini-2.0-flash & gemini-1.5-flash for sub-second responses)
+Powered by Google Gemini (ultra-fast sub-second responses)
 Integrations: Green-API / Meta WhatsApp Webhook, NetSpark & KosherPlay Filtering, Lab & Repair Services
 Persistent Memory & Sync: Permanent Code Seed, Local JSON Cache, SQLite with Render Persistent Disk Support
 Keep-Alive: Built-in background ping loop to prevent Render cold starts!
-Multi-Route Webhook: Listens on /webhook/whatsapp, /webhook, /whatsapp, / and all POST paths!
+Multi-Route Webhook: Listens on /, /webhook/whatsapp, /webhook, /whatsapp, and all POST paths!
 """
 
 import os
@@ -34,19 +34,38 @@ PORT = os.getenv("PORT", "8000")
 # ----------------- Gemini Client Setup -----------------
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Active official production models: ultra-fast gemini-2.0-flash with stable gemini-1.5-flash fallback
-ACTIVE_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+# Active official production models with automatic fallback
+ACTIVE_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite"
+]
 
 # ----------------- Database & Persistent Storage Setup -----------------
-DB_PATH = os.getenv("DB_PATH", "")
-if not DB_PATH:
-    for disk_candidate in ["/var/data", "/data", "/opt/render/project/src/data"]:
-        if os.path.exists(disk_candidate) and os.path.isdir(disk_candidate):
-            DB_PATH = os.path.join(disk_candidate, "agent_memory.db")
-            break
-    if not DB_PATH:
-        DB_PATH = "agent_memory.db"
+def resolve_working_db_path() -> str:
+    explicit = os.getenv("DB_PATH", "").strip()
+    candidates = []
+    if explicit:
+        candidates.append(explicit)
+    for disk in ["/var/data", "/data", "/opt/render/project/src/data"]:
+        if os.path.exists(disk) and os.path.isdir(disk):
+            candidates.append(os.path.join(disk, "agent_memory.db"))
+    candidates.extend(["agent_memory.db", "/tmp/agent_memory.db"])
+    for p in candidates:
+        try:
+            conn = sqlite3.connect(p, timeout=5)
+            conn.execute("CREATE TABLE IF NOT EXISTS _probe (id INT)")
+            conn.commit()
+            conn.close()
+            return p
+        except Exception:
+            continue
+    return ":memory:"
 
+DB_PATH = resolve_working_db_path()
 BACKUP_JSON_PATH = os.path.join(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else ".", "contacts_cache.json")
 
 # Shared HTTP connection pool to avoid SSL handshake overhead
@@ -60,7 +79,6 @@ async def keep_alive_loop():
         target_url = f"https://{target_url}"
     ping_url = f"{target_url.rstrip('/')}/healthz"
     
-    # Wait 45 seconds after startup before first ping
     await asyncio.sleep(45)
     async with httpx.AsyncClient(timeout=10) as aclient:
         while True:
@@ -69,7 +87,6 @@ async def keep_alive_loop():
                 print(f"[Keep-Alive] Pinged {ping_url} - Status: {resp.status_code}")
             except Exception as e:
                 print(f"[Keep-Alive] Ping notice: {e}")
-            # Ping every 9 minutes (540 seconds) — Render sleeps after 15 mins
             await asyncio.sleep(540)
 
 @asynccontextmanager
@@ -82,8 +99,13 @@ app = FastAPI(title="ShieldBot AI - WhatsApp Agent", lifespan=lifespan)
 
 # ----------------- Phone Normalization -----------------
 def normalize_phone(phone: str) -> str:
-    """Normalizes Israeli and international phone numbers into a single canonical digit string."""
-    digits = re.sub(r"[^0-9]", "", phone or "")
+    """
+    Normalizes phone numbers, stripping WhatsApp device IDs (e.g. :0, :12) and domain suffixes (@c.us, @s.whatsapp.net).
+    """
+    if not phone:
+        return ""
+    raw = str(phone).split("@")[0].split(":")[0]
+    digits = re.sub(r"[^0-9]", "", raw)
     if not digits:
         return ""
     if digits.startswith("9720"):
@@ -188,7 +210,12 @@ def is_warranty_followup_confirmation(text: str, history_text: str) -> bool:
     ]
     had_warranty_offer = "ההבדלים המלאים בין מסלולי האחריות" in history_text or "מסלול ימות המשיח" in history_text
     is_positive = any(clean == sig or clean.startswith(sig) for sig in positive_signals)
-    return (had_warranty_offer and is_positive) or any(phrase in clean for phrase in ["מה ההבדל בין האחריות", "הבדל בין המסלולים", "פירוט מסלולי אחריות", "מסלול גלות", "ימות המשיח"])
+    direct_warranty_triggers = [
+        "מסלולי אחריות", "מסלולי האחריות", "פירוט אחריות", "פירוט האחריות", "האחריות שלכם",
+        "הבדל בין האחריות", "הבדל בין המסלולים", "הבדלים בין המסלולים", "מסלול גלות",
+        "ימות המשיח", "מסלול גאולה", "פירוט של מסלולי", "אחריות מורחבת"
+    ]
+    return (had_warranty_offer and is_positive) or any(phrase in clean for phrase in direct_warranty_triggers)
 
 # ----------------- Database Initialization -----------------
 def init_db():
@@ -273,14 +300,15 @@ init_db()
 # ----------------- Helper Functions -----------------
 def send_whatsapp_message(phone: str, text: str) -> bool:
     clean_phone = normalize_phone(phone)
-    if not clean_phone or not WHATSAPP_API_URL:
-        print(f"[WhatsApp DryRun] To {clean_phone}: {text}")
+    clean_text = (text or "").strip()
+    if not clean_phone or not clean_text or not WHATSAPP_API_URL:
+        print(f"[WhatsApp DryRun / Skip] To {clean_phone}: {clean_text[:40] if clean_text else 'EMPTY_MESSAGE'}")
         return False
     
     clean_url = WHATSAPP_API_URL.strip().rstrip("/")
     payload = {
         "chatId": f"{clean_phone}@c.us",
-        "message": text
+        "message": clean_text
     }
     try:
         resp = http_session.post(clean_url, json=payload, timeout=8)
@@ -509,7 +537,13 @@ def apply_customer_name_guard(reply_text: str, customer_name: str, already_greet
     return cleaned
 
 # ----------------- Routes & Health Endpoints -----------------
-@app.api_route("/", methods=["GET", "HEAD"])
+@app.api_route("/", methods=["GET", "POST", "HEAD"])
+async def root_handler(request: Request):
+    """Handles GET/HEAD health check, and POST webhooks if Green-API is configured to hit root /."""
+    if request.method == "POST":
+        return await unified_whatsapp_webhook(request)
+    return health_check()
+
 def health_check():
     return {
         "status": "online",
@@ -604,8 +638,14 @@ def fix_green_api_webhook():
 
 # ----------------- Unified Multi-Route Webhook Handler -----------------
 @app.post("/webhook/whatsapp")
+@app.post("/webhook/whatsapp/")
 @app.post("/webhook")
+@app.post("/webhook/")
 @app.post("/whatsapp")
+@app.post("/whatsapp/")
+async def webhook_direct(req: Request):
+    return await unified_whatsapp_webhook(req)
+
 async def unified_whatsapp_webhook(req: Request):
     print(f"[HTTP Incoming] Received {req.method} to {req.url.path}")
     try:
@@ -614,32 +654,58 @@ async def unified_whatsapp_webhook(req: Request):
         print(f"[HTTP Incoming Error]: Cannot parse JSON: {e}")
         return JSONResponse(content={"ok": False, "error": "Invalid JSON"}, status_code=200)
 
-    # Log incoming payload overview
-    print(f"[Payload Received]: typeWebhook={payload.get('typeWebhook')}")
+    # 1. Unwrap if wrapped in {"receiptId": ..., "body": {...}}
+    if isinstance(payload, dict) and "body" in payload and isinstance(payload["body"], dict):
+        payload = payload["body"]
 
-    # Extract Sender Phone & Message Text across all Green-API / Meta formats
-    sender_data = payload.get("senderData", {})
+    # 2. Filter system and outgoing API status webhooks to prevent infinite loops
+    type_webhook = payload.get("typeWebhook", "")
+    print(f"[Payload Received]: typeWebhook={type_webhook}")
+    if type_webhook in ["outgoingAPIMessageReceived", "statusMessage", "deviceInfo", "stateInstanceChanged"]:
+        return {"ok": True, "note": f"Ignored system/status webhook: {type_webhook}"}
+
+    # 3. Extract Sender Phone cleanly
+    sender_data = payload.get("senderData", {}) if isinstance(payload.get("senderData"), dict) else {}
+    message_data = payload.get("messageData", {}) if isinstance(payload.get("messageData"), dict) else {}
+
     raw_sender = (
-        sender_data.get("chatId", "").replace("@c.us", "").replace("@s.whatsapp.net", "").strip()
-        or sender_data.get("sender", "").replace("@c.us", "").replace("@s.whatsapp.net", "").strip()
+        sender_data.get("chatId", "")
+        or sender_data.get("sender", "")
         or payload.get("senderPhone", "")
-        or payload.get("chatId", "").replace("@c.us", "").replace("@s.whatsapp.net", "").strip()
+        or payload.get("chatId", "")
+        or payload.get("sender", "")
+        or payload.get("from", "")
     )
-    sender_phone = normalize_phone(raw_sender)
-    
-    message_data = payload.get("messageData", {})
+    clean_sender_raw = str(raw_sender).split("@")[0].split(":")[0]
+    sender_phone = normalize_phone(clean_sender_raw)
+
+    # 4. Extract Message Text across all message types
     type_msg = message_data.get("typeMessage", "")
     message_text = ""
     if type_msg == "textMessage":
         message_text = message_data.get("textMessageData", {}).get("textMessage", "")
-    elif type_msg == "extendedTextMessage":
-        message_text = message_data.get("extendedTextMessageData", {}).get("text", "")
-    
+    elif type_msg in ["extendedTextMessage", "quotedMessage"]:
+        message_text = (
+            message_data.get("extendedTextMessageData", {}).get("text", "")
+            or message_data.get("quotedMessage", {}).get("textMessage", "")
+            or message_data.get("quotedMessage", {}).get("text", "")
+        )
+    elif type_msg in ["imageMessage", "videoMessage", "documentMessage", "audioMessage"]:
+        message_text = message_data.get("fileMessageData", {}).get("caption", "")
+    elif type_msg == "buttonsResponseMessage":
+        message_text = (
+            message_data.get("buttonsResponseMessage", {}).get("selectedDisplayText", "")
+            or message_data.get("buttonsResponseMessage", {}).get("selectedButtonId", "")
+        )
+
     if not message_text:
         message_text = (
             message_data.get("textMessageData", {}).get("textMessage", "")
+            or message_data.get("extendedTextMessageData", {}).get("text", "")
             or payload.get("text", "")
+            or payload.get("message", "")
         )
+    message_text = (message_text or "").strip()
 
     if not sender_phone or not message_text:
         print(f"[Ignored] Non-message webhook event: sender={sender_phone}, text={message_text[:30] if message_text else 'None'}")
@@ -694,12 +760,18 @@ async def unified_whatsapp_webhook(req: Request):
     recent_history = get_recent_chat_history(sender_phone, limit=6)
 
     # 1. FAST DETERMINISTIC PATH: Pure Greetings
-    if not customer_name and not already_greeted and is_pure_greeting(message_text):
-        greeting_prompt_reply = "שלום , על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום ."
+    if is_pure_greeting(message_text):
+        if not customer_name:
+            greeting_reply = "שלום , על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום ."
+        elif already_greeted:
+            greeting_reply = f"שלום {customer_name}, במה אוכל לעזור לך היום? 😃"
+        else:
+            greeting_reply = f"שלום {customer_name}, מה שלומך? במה אוכל לעזור לך היום? 😃"
+        
         save_chat_message(sender_phone, "customer", message_text)
-        save_chat_message(sender_phone, "agent", greeting_prompt_reply)
-        send_whatsapp_message(sender_phone, greeting_prompt_reply)
-        return {"ok": True, "reply": greeting_prompt_reply, "type": "initial_greeting_prompt"}
+        save_chat_message(sender_phone, "agent", greeting_reply)
+        send_whatsapp_message(sender_phone, greeting_reply)
+        return {"ok": True, "reply": greeting_reply, "type": "greeting_reply"}
 
     # 2. FAST DETERMINISTIC PATH: Store Address & Hours
     if is_store_info_question(message_text):
@@ -790,7 +862,9 @@ async def unified_whatsapp_webhook(req: Request):
 
         for model_candidate in ACTIVE_MODELS:
             try:
-                response = client.models.generate_content(
+                # Async thread-pool execution so event loop never freezes
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
                     model=model_candidate,
                     contents=prompt_content,
                     config=gen_config
@@ -812,6 +886,13 @@ async def unified_whatsapp_webhook(req: Request):
         reply_text = apply_customer_name_guard(reply_text, customer_name, already_greeted)
     else:
         reply_text = purge_unwanted_phrases(reply_text)
+
+    # CRITICAL: Ensure reply_text is never empty
+    if not reply_text or not reply_text.strip():
+        if customer_name:
+            reply_text = f"שלום {customer_name}, במה אוכל לעזור לך היום? 😃"
+        else:
+            reply_text = "שלום! במה אוכל לעזור לך היום? 😃"
 
     # Escalation
     is_escalated = False
@@ -837,16 +918,18 @@ async def unified_whatsapp_webhook(req: Request):
     except Exception as e:
         print(f"[Save Request Notice]: {e}")
 
-    # Escalate to admin
-    if is_escalated and clean_admin and sender_phone != clean_admin:
-        customer_label = f"{customer_name} ({sender_phone})" if customer_name else sender_phone
-        admin_notification = (
-            f"❓ *שאלה מלקוח שדורשת את תשובתך* ({customer_label}):\n"
-            f"\"{escalation_question}\"\n\n"
-            f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
-            f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
-        )
-        send_whatsapp_message(clean_admin, admin_notification)
+    # Escalate to admin only if real admin number is configured (not dummy 972500000000)
+    if is_escalated and clean_admin and clean_admin != "972500000000" and sender_phone != clean_admin:
+        try:
+            customer_label = f"{customer_name} ({sender_phone})" if customer_name else sender_phone
+            admin_notification = (
+                f"❓ *שאלה מלקוח שדורשת את תשובתך* ({customer_label}):\n\"{escalation_question}\"\n\n"
+                f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
+                f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
+            )
+            send_whatsapp_message(clean_admin, admin_notification)
+        except Exception as e_adm:
+            print(f"[Admin Escalation Notice]: {e_adm}")
 
     save_chat_message(sender_phone, "customer", message_text)
     save_chat_message(sender_phone, "agent", reply_text)
