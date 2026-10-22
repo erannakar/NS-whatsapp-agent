@@ -12,7 +12,8 @@ import json
 import sqlite3
 import re
 import asyncio
-from datetime import datetime
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 import base64
@@ -288,6 +289,32 @@ def get_closing_reply(customer_name: str = "") -> str:
     name_str = f" {customer_name}" if customer_name else ""
     return f"בשמחה רבה{name_str}! תמיד כאן לשירותך. בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
 
+def format_admin_answer_for_customer(target_phone: str, admin_answer: str, request_text: str = "") -> str:
+    cust_name = get_contact_name(target_phone)
+    name_str = f" {cust_name}" if cust_name else ""
+    combined = f"{request_text} {admin_answer}".lower()
+
+    is_price = any(w in combined for w in ["מחיר", "עולה", "עלות", "כמה", "₪", "שח", 'ש"ח'])
+    is_water = any(w in combined for w in ["מים", "קורוזיה", "רטוב", "נפל למים"])
+
+    if is_water:
+        lead_in = f"שלום{name_str}, חזרתי אליך עם מענה עדכני ומדויק לגבי הטיפול במכשיר:"
+    elif is_price:
+        lead_in = f"שלום{name_str}, חזרתי אליך עם המחיר והפרטים העדכניים:"
+    else:
+        lead_in = f"שלום{name_str}, חזרתי אליך עם תשובה מדויקת ועדכנית:"
+
+    clean_ans = str(admin_answer).strip()
+    if clean_ans.startswith(("שלום", "היי", "הי")):
+        reply = clean_ans
+    else:
+        reply = f"{lead_in}\n{clean_ans}"
+
+    if not any(blessing in reply for blessing in ["בשורות טובות", "כל טוב", "ברכה והצלחה", "בהצלחה"]):
+        reply += "\n\nבשורות טובות וכל טוב! 🌟"
+
+    return reply
+
 def is_pure_greeting(text: str) -> bool:
     clean = re.sub(r"[^\w\sא-תa-zA-Z]", " ", text or "").strip().lower()
     words = clean.split()
@@ -315,6 +342,116 @@ STORE_HOURS_DETAILS = """אנחנו נמצאים ברחוב ישעיהו 10, ח�
   - שעון חורף: 10:30-13:30
 • מוצאי שבת וחג: בתיאום מראש בלבד"""
 
+def get_store_status_now(dt: datetime = None) -> dict:
+    """
+    Evaluates current Israel time against Noam Siach store hours:
+    • Sunday - Thursday: 12:00 - 20:00
+    • Friday:
+      - Summer time (DST): 12:00 - 15:30
+      - Winter time: 10:30 - 13:30
+    • Saturday & Holidays: Closed (Motzash by prior appointment only)
+    """
+    if dt is None:
+        try:
+            dt = datetime.now(ZoneInfo("Asia/Jerusalem"))
+        except Exception:
+            dt = datetime.now()
+    
+    day_names = {6: "ראשון", 0: "שני", 1: "שלישי", 2: "רביעי", 3: "חמישי", 4: "שישי", 5: "שבת"}
+    w = dt.weekday()
+    cur_time = dt.time()
+    day_name = day_names.get(w, "היום")
+    
+    # Check DST (Summer time)
+    is_dst = bool(dt.dst()) if (dt.tzinfo and dt.dst() is not None) else True
+    
+    if w in [6, 0, 1, 2, 3]:  # Sun-Thu
+        open_t = time(12, 0)
+        close_t = time(20, 0)
+        is_today_workday = True
+    elif w == 4:  # Fri
+        is_today_workday = True
+        if is_dst:
+            open_t = time(12, 0)
+            close_t = time(15, 30)
+        else:
+            open_t = time(10, 30)
+            close_t = time(13, 30)
+    else:  # Sat
+        is_today_workday = False
+        open_t = None
+        close_t = None
+        
+    if is_today_workday and open_t <= cur_time < close_t:
+        is_open = True
+        status_msg = f"החנות כעת פתוחה (היום, יום {day_name}, פתוח עד {close_t.strftime('%H:%M')})."
+        arrival_advice = f"החנות כעת פתוחה ומוזמן להגיע אלינו היום עד השעה {close_t.strftime('%H:%M')} (רחוב ישעיהו 10, חדרה)."
+        next_open_str = f"היום עד {close_t.strftime('%H:%M')}"
+    else:
+        is_open = False
+        if is_today_workday and cur_time < open_t:
+            status_msg = f"החנות כעת סגורה ותיפתח היום (יום {day_name}) בשעה {open_t.strftime('%H:%M')} (פתוח עד {close_t.strftime('%H:%M')})."
+            arrival_advice = f"החנות כעת סגורה ותיפתח היום בשעה {open_t.strftime('%H:%M')}. מומלץ להגיע אלינו בשעות הפעילות בין {open_t.strftime('%H:%M')} ל-{close_t.strftime('%H:%M')} (רחוב ישעיהו 10, חדרה)."
+            next_open_str = f"היום בשעה {open_t.strftime('%H:%M')}"
+        elif w in [6, 0, 1, 2]:  # Sun-Wed after close -> opens tomorrow at 12:00
+            next_day_name = day_names.get((w + 1) % 7, "מחר")
+            status_msg = f"החנות כעת סגורה לשעות הלילה, ותיפתח מחר (יום {next_day_name}) בשעה 12:00 (12:00-20:00)."
+            arrival_advice = f"החנות כעת סגורה לשעות הלילה. נשמח שתגיע אלינו מחר בשעות הפעילות (12:00-20:00, רחוב ישעיהו 10, חדרה)."
+            next_open_str = f"מחר (יום {next_day_name}) בשעה 12:00"
+        elif w == 3:  # Thu after close -> opens Friday
+            fri_open = "12:00" if is_dst else "10:30"
+            fri_close = "15:30" if is_dst else "13:30"
+            status_msg = f"החנות כעת סגורה לשעות הלילה, ותיפתח מחר (יום שישי) בשעות {fri_open}-{fri_close}."
+            arrival_advice = f"החנות כעת סגורה לשעות הלילה. מומלץ להגיע מחר (יום שישי) בשעות הפעילות ({fri_open}-{fri_close}, רחוב ישעיהו 10, חדרה)."
+            next_open_str = f"מחר (יום שישי) בשעה {fri_open}"
+        else:  # Fri after close or Sat -> opens Sunday 12:00
+            status_msg = "החנות סגורה כעת (סוף שבוע / שבת), ותיפתח ביום ראשון בשעה 12:00 (12:00-20:00). מוצ\"ש בתיאום מראש בלבד."
+            arrival_advice = "החנות סגורה כעת לרגל סוף השבוע. נשמח שתגיע אלינו ביום ראשון בשעות הפעילות (12:00-20:00, רחוב ישעיהו 10, חדרה)."
+            next_open_str = "יום ראשון בשעה 12:00"
+
+    return {
+        "is_open": is_open,
+        "current_time_str": f"יום {day_name}, {dt.strftime('%d/%m/%Y')}, שעה {cur_time.strftime('%H:%M')}",
+        "status_msg": status_msg,
+        "arrival_advice": arrival_advice,
+        "next_open_str": next_open_str
+    }
+
+def sanitize_closed_store_advice(text: str, is_open: bool, arrival_advice: str) -> str:
+    """
+    Guarantees that when the store is closed, the message never instructs the customer
+    to come 'now' or 'already right now', and explicitly states opening hours advice.
+    """
+    if is_open:
+        return text
+    
+    cleaned = text
+    has_come_now = bool(re.search(r'(?:בוא|לבוא|תבוא|תגיע|להגיע|להביא|תביא)\s+(?:אותו\s+)?(?:כבר\s+)?(?:עכשיו|כעת|מיד)', cleaned))
+    
+    def _repl_now(m):
+        word = m.group(1)
+        has_vav = word.startswith("ו")
+        base = word[1:] if has_vav else word
+        if base in ["תבוא", "תגיע", "בוא"]:
+            res = "תגיע בשעות הפעילות"
+        elif base in ["לבוא", "להגיע"]:
+            res = "להגיע בשעות הפעילות"
+        elif base in ["להביא"]:
+            res = "להביא בשעות הפעילות"
+        elif base in ["תביא"]:
+            res = "תביא בשעות הפעילות"
+        else:
+            res = "להגיע בשעות הפעילות"
+        return ("ו" + res) if has_vav else res
+    
+    pat_now = re.compile(r'\b(ו?(?:תבוא|תגיע|בוא|לבוא|להגיע|להביא|תביא))\s+(?:אותו\s+)?(?:כבר\s+)?(?:עכשיו|כעת|מיד)\b')
+    cleaned = pat_now.sub(_repl_now, cleaned)
+    
+    if (has_come_now or any(w in cleaned for w in ['להגיע', 'לבוא', 'להביא', 'ישעיהו 10', 'מעבדה'])) and 'סגור' not in cleaned:
+        cleaned = cleaned.rstrip() + f'\n\n📌 שים לב: {arrival_advice}'
+            
+    return cleaned
+
 def is_store_info_question(text: str) -> bool:
     clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
     indicators = [
@@ -330,10 +467,13 @@ def is_store_info_question(text: str) -> bool:
     return any(ind in clean for ind in indicators)
 
 def get_store_info_reply(customer_name: str = "", already_greeted: bool = False) -> str:
+    store_st = get_store_status_now()
     salutation = f"שלום {customer_name}! 😃\n\n" if (customer_name and not already_greeted) else ""
-    name_str = f" {customer_name}" if customer_name else ""
-    closing = f"מוזמן להגיע אלינו{name_str}! 😃"
-    return f"{salutation}{STORE_HOURS_DETAILS}\n\n{closing}"
+    return (
+        f"{salutation}📍 *מצב פתיחה עדכני:* {store_st['status_msg']}\n\n"
+        f"{STORE_HOURS_DETAILS}\n\n"
+        f"{store_st['arrival_advice']}"
+    )
 
 # ----------------- Warranty Tracks Content (Noam Siach 3 Tracks) -----------------
 WARRANTY_FULL_EXPLANATION = """📋 *השוואת מסלולי האחריות במכשירי נעם שיח:*
@@ -1211,7 +1351,8 @@ async def unified_whatsapp_webhook(req: Request):
                     ("נענה על ידי מנהל ונלמד במאגר", last_pending[0])
                 )
                 target_cust_phone = last_pending[1]
-                cust_reply_msg = "שלום, חזרתי אליך עם תשובה מהמעבדה / מנהל השירות שלנו:\n" + str(admin_answer)
+                req_text = last_pending[2] if len(last_pending) > 2 else ""
+                cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text)
                 send_whatsapp_message(target_cust_phone, cust_reply_msg)
                 save_chat_message(target_cust_phone, "agent", cust_reply_msg)
                 customer_dest = target_cust_phone
@@ -1238,6 +1379,7 @@ async def unified_whatsapp_webhook(req: Request):
 
     recent_history = get_recent_chat_history(sender_phone, limit=6)
     already_greeted = has_already_greeted_customer(sender_phone) or ("[סוכן]:" in recent_history)
+    store_status = get_store_status_now()
 
     # 1. FAST DETERMINISTIC PATH: Pure Greetings (Send WhatsApp FIRST, then save to DB)
     if is_pure_greeting(message_text):
@@ -1340,6 +1482,10 @@ async def unified_whatsapp_webhook(req: Request):
             reply_kb = f"שלום {customer_name}, מה שלומך? {reply_kb}"
         reply_kb = ensure_warranty_question_in_device_quote(reply_kb, message_text)
         
+        # If the reply invites the customer to bring the device and the store is currently closed, add arrival advice
+        if not store_status["is_open"] and any(w in reply_kb for w in ["מוזמן להביא", "במקום", "להגיע", "לבוא"]):
+            reply_kb = sanitize_closed_store_advice(reply_kb, store_status["is_open"], store_status["arrival_advice"])
+        
         send_whatsapp_message(sender_phone, reply_kb, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", reply_kb)
@@ -1422,14 +1568,35 @@ async def unified_whatsapp_webhook(req: Request):
      "האם תרצה פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות? 😃"
    • אם הדגם או המחיר ידועים לך מהרשימה לעיל — ענה מיד במדויק! לעולם אל תגיד שאתה בודק או שתחזור אליו על מכשירים שמחירם ידוע!
 
-4. מעבדת תיקונים ומסכים ובדיקת זמינות מכשירים:
-   • אנו מתקנים ומחליפים מסכים לכל המכשירים: מכשירי מקשים (שיאומי מקשים / Qin / F21 / F22) וסמארטפונים.
-   • אם המחיר או הזמינות של דגם מכשיר/חלק אינם ידועים לך בוודאות:
-     אמור תמיד שאתה בודק כעת את הזמינות והמחיר העדכני ומיד חוזר אליו עם תשובה מדויקת (לעולם אל תגיד שתבדוק מחר!).
-     וצרף בסוף ההודעה: [ESCALATE: מחיר וזמינות עבור {message_text} ללקוח {customer_name or sender_phone}]
+4. מעבדת תיקונים, מסכים, נזקי מים/קורוזיה ובדיקת עלויות:
+   • אנו מתקנים ומחליפים מסכים ורכיבים לכל המכשירים: מכשירי מקשים (שיאומי מקשים / Qin / F21 / F22 וכו') וסמארטפונים (גלקסי, אייפון וכו').
+   • נזקי מים / מכשיר שנפל למים / תקלות דחופות:
+     - הנחיות מיידיות ומצילות מכשיר ללקוח: לכבות את המכשיר מיד, לא לחבר בשום אופן למטען, לא לנסות להדליק, ולהוציא סים ומגש כרטיס אם אפשר.
+     - שים לב לשעת פעילות החנות כעת ({store_status['status_msg']}):
+       * אם החנות סגורה כעת ({'סגורה' if not store_status['is_open'] else 'פתוחה'}):
+         חל איסור מוחלט לומר ללקוח "בוא עכשיו", "תגיע כעת", או "אנחנו מחכים לך עכשיו"!
+         הסבר לו במפורש שהחנות סגורה כעת, שישמור על המכשיר כבוי לחלוטין, והמלץ לו להביא אותו ברגע שנפתח בשעות הפעילות:
+         "{store_status['arrival_advice']}"
+       * אם החנות פתוחה כעת:
+         הזמן אותו להביא את המכשיר בהקדם בשעות הפעילות למעבדה ברחוב ישעיהו 10, חדרה לייבוש מקצועי וטיפול בקורוזיה.
+   • אם המחיר, עלות התיקון, או אפשרויות הטיפול אינם ידועים לך בוודאות מתוך המחירון:
+     - ענה ללקוח שאתה בודק כעת את הפרטים והמחיר העדכני וכבר חוזר אליו עם תשובה מדויקת (לעולם אל תגיד שתבדוק מחר, ולעולם אל תגיד "מול המעבדה").
+     - חובה קריטית לתגית ההסלמה [ESCALATE]: פרט בתוכה את מהות הבעיה המדויקת של הלקוח כדי שהמנהל יבין מיד מה קרה ויענה במדויק!
+       לדוגמה: [ESCALATE: סמסונג גלקסי נפל למים - עלות בדיקה וטיפול קורוזיה]
+       או: [ESCALATE: החלפת שקע טעינה לשיאומי F21]
+       או: [ESCALATE: החלפת גב זכוכית לאייפון 14]
+       לעולם אל תרשום רק "מחיר וזמינות עבור..." ללא פירוט מהות התקלה!
 
-5. כתובת ושעות פעילות:
-   • רחוב ישעיהו 10, חדרה בלבד (ימים א'-ה' 12:00-20:00, ימי ו' שעון קיץ 12:00-15:30 / חורף 10:30-13:30).
+5. כתובת ושעות פעילות (זמן אמת):
+   • כתובת: רחוב ישעיהו 10, חדרה בלבד.
+   • שעות פעילות קבועות: ימים א'-ה' 12:00-20:00 | ימי ו' וערבי חג: שעון קיץ 12:00-15:30, שעון חורף 10:30-13:30 | מוצאי שבת וחג: בתיאום מראש בלבד.
+   • זמן נוכחי בישראל: {store_status['current_time_str']}
+   • מצב החנות עכשיו: {store_status['status_msg']}
+   • הנחיית הגעה ללקוח: {store_status['arrival_advice']}
+   • כלל ברזל קריטי להגעת לקוחות:
+     - בדוק תמיד את מצב החנות כעת לפני שאתה מציע ללקוח להגיע!
+     - אם החנות כעת סגורה ({'סגורה' if not store_status['is_open'] else 'פתוחה'}): לעולם אל תגיד ללקוח "בוא עכשיו" או "אנחנו מחכים לך עכשיו"! ציין תמיד שהחנות סגורה כעת, והמלץ לו להגיע בשעות הפעילות הקרובות כפי שמפורט לעיל.
+     - אם החנות כעת פתוחה: הוא מוזמן להגיע עכשיו עד שעת הסגירה.
 
 6. מסלולי סינון והגנה (כשר פליי ונטספרק):
    • כשר פליי (KosherPlay):
@@ -1510,6 +1677,9 @@ async def unified_whatsapp_webhook(req: Request):
     else:
         reply_text = purge_unwanted_phrases(reply_text)
 
+    # Sanitize arrival advice when the store is currently closed (never tell customer to come 'now')
+    reply_text = sanitize_closed_store_advice(reply_text, store_status["is_open"], store_status["arrival_advice"])
+
     # CRITICAL GUARD: Warranty inquiries and comparisons must NEVER be escalated to admin!
     if is_warranty_followup_confirmation(message_text, recent_history) or any(w in message_text.lower() for w in ["הבדל", "הבדלים", "מסלולי אחריות", "אחריות"]):
         is_escalated = False
@@ -1548,7 +1718,7 @@ async def unified_whatsapp_webhook(req: Request):
     except Exception as e:
         print(f"[Save Request Notice]: {e}")
 
-    # ESCALATE TO ADMIN: Send question to Admin WhatsApp so they can answer and teach the bot!
+    # ESCALATE TO ADMIN: Send detailed notification to Admin WhatsApp with full problem context
     if is_escalated:
         try:
             # CRITICAL RULE: NEVER send the admin notification to sender_phone!
@@ -1558,8 +1728,17 @@ async def unified_whatsapp_webhook(req: Request):
             target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
 
             customer_label = f"{customer_name} ({sender_phone})" if customer_name else sender_phone
+            summary_issue = escalation_question if (escalation_question and escalation_question != message_text) else "בירור מקצועי / הצעת מחיר"
+
+            history_lines = [l for l in recent_history.strip().split("\n") if l.strip()][-4:] if recent_history else []
+            history_context = "\n".join(history_lines) if history_lines else ""
+            history_block = f"\n\n*הקשר השיחה האחרונה:*\n{history_context}" if history_context else ""
+
             admin_notification = (
-                f"❓ *שאלה מלקוח שדורשת את תשובתך* ({customer_label}):\n\"{escalation_question}\"\n\n"
+                f"❓ *פנייה מלקוח שדורשת את תשובתך* ({customer_label}):\n"
+                f"📌 *מהות הפנייה והתקלה:* {summary_issue}\n\n"
+                f"💬 *הודעת הלקוח:* \"{message_text}\""
+                f"{history_block}\n\n"
                 f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
                 f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
             )
@@ -1568,7 +1747,7 @@ async def unified_whatsapp_webhook(req: Request):
             await asyncio.sleep(1.0)
             for adm in target_admins:
                 if adm and adm != "972500000000":
-                    print(f"[Admin Escalation] Sending question to Admin ({adm}): {escalation_question}")
+                    print(f"[Admin Escalation] Sending question to Admin ({adm}): {summary_issue}")
                     send_whatsapp_message(adm, admin_notification)
         except Exception as e_adm:
             print(f"[Admin Escalation Notice]: {e_adm}")
