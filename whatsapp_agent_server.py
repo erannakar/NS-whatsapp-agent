@@ -12,6 +12,7 @@ import json
 import sqlite3
 import re
 import asyncio
+import time as std_time
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
@@ -270,6 +271,30 @@ PERMANENT_LEARNED_KB = [
     }
 ]
 
+
+# ----------------- Inactivity & Satisfaction Timers -----------------
+PENDING_SATISFACTION_CHECKS = {}
+
+async def inactivity_closing_timer(phone: str, prompt_timestamp: float, raw_chat_id: str = "", customer_name: str = ""):
+    """
+    Waits 35 seconds (>30s) after the satisfaction question is asked.
+    If the customer has not responded, automatically sends:
+    'מקווה שעזרתי לך היום, אני כאן לכל שאלה נוספת. בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟'
+    """
+    await asyncio.sleep(35)
+    
+    # Check if this timer was cancelled by an incoming reply
+    if PENDING_SATISFACTION_CHECKS.get(phone) != prompt_timestamp:
+        return
+    
+    PENDING_SATISFACTION_CHECKS[phone] = None
+    
+    name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
+    closing_msg = f"מקווה שעזרתי לך היום{name_str}, אני כאן לכל שאלה נוספת. בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
+    send_whatsapp_message(phone, closing_msg, raw_chat_id)
+    save_chat_message(phone, "agent", closing_msg)
+    print(f"[Inactivity Closing Sent] To {phone} after 35s timeout.")
+
 # ----------------- Greeting Detection -----------------
 def is_thank_you_or_closing(text: str) -> bool:
     clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
@@ -285,33 +310,40 @@ def is_thank_you_or_closing(text: str) -> bool:
     ]
     return any(phrase in clean for phrase in closing_phrases)
 
+def is_satisfaction_yes(text: str) -> bool:
+    clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
+    words = clean.split()
+    if not words or len(words) > 6:
+        return False
+    yes_signals = [
+        "כן", "כן תודה", "כן מאוד", "מאוד", "עזרת מאוד", "עזרת לי מאוד",
+        "כן עזרת", "כן מעולה", "מעולה תודה", "יופי תודה", "בטח", "ודאי",
+        "תודה רבה", "תודה", "תודה לך", "יישר כח", "יישר כוח", "שכוייח",
+        "עזרת לי", "עזרת", "כן בטח", "מעולה", "מצוין", "אחלה", "סבבה תודה"
+    ]
+    return any(clean == sig or clean.startswith(sig) for sig in yes_signals)
+
 def get_closing_reply(customer_name: str = "") -> str:
-    name_str = f" {customer_name}" if customer_name else ""
-    return f"בשמחה רבה{name_str}! תמיד כאן לשירותך. בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
+    name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
+    return f"שמחתי לעזור{name_str}! תמיד כאן לשירותך. בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
 
-def format_admin_answer_for_customer(target_phone: str, admin_answer: str, request_text: str = "") -> str:
-    cust_name = get_contact_name(target_phone)
-    name_str = f" {cust_name}" if cust_name else ""
-    combined = f"{request_text} {admin_answer}".lower()
-
-    is_price = any(w in combined for w in ["מחיר", "עולה", "עלות", "כמה", "₪", "שח", 'ש"ח'])
-    is_water = any(w in combined for w in ["מים", "קורוזיה", "רטוב", "נפל למים"])
-
-    if is_water:
-        lead_in = f"שלום{name_str}, חזרתי אליך עם מענה עדכני ומדויק לגבי הטיפול במכשיר:"
-    elif is_price:
-        lead_in = f"שלום{name_str}, חזרתי אליך עם המחיר והפרטים העדכניים:"
-    else:
-        lead_in = f"שלום{name_str}, חזרתי אליך עם תשובה מדויקת ועדכנית:"
+def format_admin_answer_for_customer(target_phone: str, admin_answer: str, request_text: str = "", customer_name: str = "", msg_count: int = 2) -> str:
+    # Reduce name usage: only at the very start of conversation
+    name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES and msg_count <= 1) else ""
+    
+    # Generic accurate lead-in: "חזרתי אליך בנוגע לפנייתך"
+    lead_in = f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:" if name_str else "חזרתי אליך בנוגע לפנייתך:"
 
     clean_ans = str(admin_answer).strip()
     if clean_ans.startswith(("שלום", "היי", "הי")):
         reply = clean_ans
     else:
-        reply = f"{lead_in}\n{clean_ans}"
+        reply = lead_in + "\n" + clean_ans
 
-    if not any(blessing in reply for blessing in ["בשורות טובות", "כל טוב", "ברכה והצלחה", "בהצלחה"]):
-        reply += "\n\nבשורות טובות וכל טוב! 🌟"
+    # Do NOT append Hasidic blessings here! Instead, ask if helped:
+    closing_q = "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+    if not any(q in reply for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "לעזור לך"]):
+        reply = reply.rstrip() + "\n\n" + closing_q
 
     return reply
 
@@ -975,6 +1007,34 @@ def has_already_greeted_customer(phone: str) -> bool:
     except Exception:
         return False
 
+
+def get_conversation_message_count(phone: str) -> int:
+    norm_phone = normalize_phone(phone)
+    if not norm_phone:
+        return 0
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        count = conn.execute("""
+            SELECT COUNT(*) FROM conversation_history
+            WHERE phone = ? OR phone LIKE ?
+        """, (norm_phone, f"%{norm_phone[-9:]}%" if len(norm_phone) >= 9 else f"%{norm_phone}%")).fetchone()[0]
+        conn.close()
+        return count
+    except Exception:
+        return 0
+
+def strip_customer_name(text: str, name: str) -> str:
+    if not name or name in COMMON_NON_NAMES:
+        return text
+    cleaned = text
+    # Strip from start: e.g. "ערן, ", "היי ערן, ", "שלום ערן: "
+    cleaned = re.sub(rf"^(?:שלום|היי|הי|אהלן)?[\s,]*{re.escape(name)}[\s,:-]*", "", cleaned, flags=re.IGNORECASE).strip()
+    # Strip vocative in middle: e.g. "אני מבין ערן ש..." -> "אני מבין ש..."
+    cleaned = re.sub(rf"[\s,]+{re.escape(name)}[\s,]+", " ", cleaned).strip()
+    # Strip from end: e.g. "... ערן." -> "..."
+    cleaned = re.sub(rf"[\s,]+{re.escape(name)}[?!.]*$", "", cleaned).strip()
+    return cleaned
+
 def purge_unwanted_phrases(text: str) -> str:
     cleaned = text
     cleaned = re.sub(r"בודק(?:\s+זאת|\s+כעת)?\s+מול\s+המעבדה(?:\s+שלנו)?", "בודק כעת את המחיר העדכני", cleaned)
@@ -982,7 +1042,7 @@ def purge_unwanted_phrases(text: str) -> str:
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
 
-def apply_customer_name_guard(reply_text: str, customer_name: str, already_greeted: bool) -> str:
+def apply_customer_name_guard(reply_text: str, customer_name: str, already_greeted: bool, msg_count: int = 2, is_closing: bool = False) -> str:
     cleaned = reply_text.strip()
 
     # Strip unwanted prompts asking for customer's name
@@ -995,33 +1055,37 @@ def apply_customer_name_guard(reply_text: str, customer_name: str, already_greet
 
     cleaned = purge_unwanted_phrases(cleaned)
 
-    if not customer_name:
+    if not customer_name or customer_name in COMMON_NON_NAMES:
         return cleaned
 
-    if already_greeted:
-        # Strip repetitive greetings at the start of ongoing conversation messages:
-        # E.g. 'היי ערן,', 'הי ערן', 'שלום ערן, מה שלומך?', 'היי ערן עד 19:30' -> leaves direct answer
-        pattern_with_name = rf"^(?:שלום|היי|הי|אהלן|בוקר טוב|ערב טוב|צהריים טובים)[\s,]+(?:{re.escape(customer_name)})[\s,]+(?:מה\s+שלומך|מה\s+נשמע|שלומך)?[\s?!.,-]*"
-        pattern_with_name_simple = rf"^(?:שלום|היי|הי|אהלן|בוקר טוב|ערב טוב|צהריים טובים)[\s,]+(?:{re.escape(customer_name)})[\s?!.,-]*"
-        pattern_standalone = r"^(?:שלום|היי|הי|אהלן|בוקר טוב|ערב טוב|צהריים טובים)[\s,]+(?:מה\s+שלומך|מה\s+נשמע)[\s?!.,-]*"
-        pattern_just_greeting = r"^(?:שלום|היי|הי|אהלן)[\s,!-]+"
+    is_start = (msg_count <= 1 and not already_greeted)
+    is_middle = (msg_count in [4, 5])
 
-        cleaned = re.sub(pattern_with_name, "", cleaned, flags=re.IGNORECASE).strip()
-        cleaned = re.sub(pattern_with_name_simple, "", cleaned, flags=re.IGNORECASE).strip()
-        cleaned = re.sub(pattern_standalone, "", cleaned, flags=re.IGNORECASE).strip()
-        cleaned = re.sub(pattern_just_greeting, "", cleaned, flags=re.IGNORECASE).strip()
-    else:
-        # First greeting in conversation - always include warm "מה שלומך?"
+    # 1. End of conversation (סוף): Name is warmly allowed
+    if is_closing:
+        return cleaned
+
+    # 2. Beginning of conversation (התחלה): Name is used with greeting
+    if is_start:
         has_name = customer_name in cleaned
         has_how_are_you = any(p in cleaned for p in ["מה שלומך", "מה נשמע"])
         if not has_name or not has_how_are_you:
-            salutation = f"שלום {customer_name}, מה שלומך?" if customer_name else "שלום, מה שלומך?"
+            salutation = f"שלום {customer_name}, מה שלומך?"
             greeting_pattern = r"^(?:שלום|היי|הי|בוקר טוב|ערב טוב|אהלן)(?:\s+[א-ת]+)?(?:[\s,]+(?:מה\s+שלומך|מה\s+נשמע))?[\s!.,]*"
             if re.match(greeting_pattern, cleaned):
                 cleaned = re.sub(greeting_pattern, f"{salutation} ", cleaned, count=1)
             else:
                 cleaned = f"{salutation} {cleaned}"
+        return cleaned.strip()
 
+    # 3. Middle of conversation (אמצע, turns 4-5): Allow name once, but strip opening greetings
+    if is_middle:
+        pattern_with_name_simple = rf"^(?:שלום|היי|הי|אהלן|בוקר טוב|ערב טוב|צהריים טובים)[\s,]+(?:{re.escape(customer_name)})[\s?!.,-]*"
+        cleaned = re.sub(pattern_with_name_simple, "", cleaned, flags=re.IGNORECASE).strip()
+        return cleaned
+
+    # 4. All other intermediate turns: Strictly strip customer name so the bot is not tiresome or repetitive!
+    cleaned = strip_customer_name(cleaned, customer_name)
     return cleaned.strip()
 
 # ----------------- Routes & Health Endpoints -----------------
@@ -1352,9 +1416,18 @@ async def unified_whatsapp_webhook(req: Request):
                 )
                 target_cust_phone = last_pending[1]
                 req_text = last_pending[2] if len(last_pending) > 2 else ""
-                cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text)
+                target_cust_name = get_contact_name(target_cust_phone)
+                target_msg_count = get_conversation_message_count(target_cust_phone)
+                cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count)
                 send_whatsapp_message(target_cust_phone, cust_reply_msg)
                 save_chat_message(target_cust_phone, "agent", cust_reply_msg)
+                
+                # Start 35s timer for satisfaction closing check
+                if "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in cust_reply_msg:
+                    ts = std_time.time()
+                    PENDING_SATISFACTION_CHECKS[target_cust_phone] = ts
+                    asyncio.create_task(inactivity_closing_timer(target_cust_phone, ts, "", target_cust_name))
+                
                 customer_dest = target_cust_phone
             conn.commit()
             conn.close()
@@ -1380,13 +1453,16 @@ async def unified_whatsapp_webhook(req: Request):
     recent_history = get_recent_chat_history(sender_phone, limit=6)
     already_greeted = has_already_greeted_customer(sender_phone) or ("[סוכן]:" in recent_history)
     store_status = get_store_status_now()
+    msg_count = get_conversation_message_count(sender_phone)
 
-    # 1. FAST DETERMINISTIC PATH: Pure Greetings (Send WhatsApp FIRST, then save to DB)
+    # Cancel any pending inactivity timer as customer has sent a message
+    if sender_phone in PENDING_SATISFACTION_CHECKS:
+        PENDING_SATISFACTION_CHECKS[sender_phone] = None
+
+    # 1. FAST DETERMINISTIC PATH: Pure Greetings (Start of conversation: use name + greeting)
     if is_pure_greeting(message_text):
         if not customer_name:
             greeting_reply = "שלום, מה שלומך? על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום. 😃"
-        elif already_greeted:
-            greeting_reply = f"שלום {customer_name}, מה שלומך? במה אוכל לעזור לך היום? 😃"
         else:
             greeting_reply = f"שלום {customer_name}, מה שלומך? במה אוכל לעזור לך היום? 😃"
 
@@ -1395,8 +1471,8 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "agent", greeting_reply)
         return {"ok": True, "reply": greeting_reply, "type": "greeting_reply"}
 
-    # 1.5 FAST DETERMINISTIC PATH: Thank You & Closing with Hasidic Blessing (בשורות טובות / ברכה והצלחה / כל טוב)
-    if is_thank_you_or_closing(message_text):
+    # 1.5 FAST DETERMINISTIC PATH: Satisfaction "YES" or Thank You -> Send Hasidic Blessing
+    if is_satisfaction_yes(message_text) or is_thank_you_or_closing(message_text):
         closing_reply = get_closing_reply(customer_name)
         send_whatsapp_message(sender_phone, closing_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
@@ -1410,7 +1486,7 @@ async def unified_whatsapp_webhook(req: Request):
                     sender_phone,
                     "נעם שיח - שירות לקוחות",
                     message_text,
-                    "סיום שיחה ואיחול חסידי (בשורות טובות, ברכה והצלחה)",
+                    "מענה חיובי לשביעות רצון / סיום שיחה ואיחול חסידי",
                     "",
                     "handled",
                     datetime.now().isoformat()
@@ -1425,9 +1501,16 @@ async def unified_whatsapp_webhook(req: Request):
     # 2. FAST DETERMINISTIC PATH: Store Address & Hours (Send WhatsApp FIRST, then save to DB)
     if is_store_info_question(message_text):
         store_reply = get_store_info_reply(customer_name, already_greeted)
+        store_reply = f"{store_reply.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
         send_whatsapp_message(sender_phone, store_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", store_reply)
+        
+        # Schedule inactivity timer (>30 seconds)
+        ts = std_time.time()
+        PENDING_SATISFACTION_CHECKS[sender_phone] = ts
+        asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
+        
         return {"ok": True, "reply": store_reply, "type": "store_info"}
 
     # 3. FAST DETERMINISTIC PATH: Warranty Confirmation / Inquiry (Send WhatsApp FIRST, then save to DB)
@@ -1478,7 +1561,7 @@ async def unified_whatsapp_webhook(req: Request):
     kb_answer = find_matching_learned_knowledge(message_text)
     if kb_answer:
         reply_kb = kb_answer
-        if customer_name and not already_greeted:
+        if customer_name and msg_count <= 1 and not already_greeted:
             reply_kb = f"שלום {customer_name}, מה שלומך? {reply_kb}"
         reply_kb = ensure_warranty_question_in_device_quote(reply_kb, message_text)
         
@@ -1486,6 +1569,10 @@ async def unified_whatsapp_webhook(req: Request):
         if not store_status["is_open"] and any(w in reply_kb for w in ["מוזמן להביא", "במקום", "להגיע", "לבוא"]):
             reply_kb = sanitize_closed_store_advice(reply_kb, store_status["is_open"], store_status["arrival_advice"])
         
+        # If not asking warranty followup, append satisfaction question
+        if not any(q in reply_kb for q in ["פירוט מורחב", "בין מסלולי האחריות", "האם הצלחתי לעזור"]):
+            reply_kb = f"{reply_kb.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+            
         send_whatsapp_message(sender_phone, reply_kb, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", reply_kb)
@@ -1521,16 +1608,18 @@ async def unified_whatsapp_webhook(req: Request):
         if sub_info.get("found") and not customer_name:
             customer_name = sub_info["name"].split()[0]
 
+        is_start = (msg_count <= 1 and not already_greeted)
+        is_middle = (msg_count in [4, 5])
+        
         if customer_name:
-            if already_greeted:
-                name_instruction = f"""• שיחה מתמשכת עם הלקוח ששמו {customer_name}:
-     - חל איסור מוחלט לפתוח שוב כל הודעה ב-"היי {customer_name}", "הי {customer_name}" או "שלום {customer_name}"! זה רובוטי, טרחני ומעייף.
-     - ענה ישירות, מקצועי ובגובה העיניים לשאלת הלקוח (לדוגמה: "נשתדל לתת לך מענה עד 20:00...", "עד 19:30...").
-     - ליצירת קרבה ואנושיות, מותר להשתמש בשמו בלבד ללא "היי" (לדוגמה: "{customer_name}, אני מבין את הצורך שלך לקבל מענה כבר היום...", או לפנות בשמו בגוף המשפט), אך אל תפתח ב-"היי/שלום"."""
+            if is_start:
+                name_instruction = f"• תחילת התכתבות עם הלקוח ({customer_name}): פתח בברכת שלום אישית עם שמו והתעניינות: 'שלום {customer_name}, מה שלומך?'."
+            elif is_middle:
+                name_instruction = f"• אמצע שיחה מתמשכת: מותר להשתמש בשם '{customer_name}' פעם אחת בלבד בגוף המשפט ליצירת קרבה, אך אל תפתח ב'היי {customer_name}'."
             else:
-                name_instruction = f"• הלקוח מוכר ושמו הפרטי הוא: '{customer_name}'. מכיוון שזו תחילת שיחה, ברך אותו לשלום בטבעיות."
+                name_instruction = f"• הודעה שוטפת ברצף השיחה: חל איסור מוחלט להשתמש בשם '{customer_name}' בהודעה זו! ענה ישירות, מקצועי ובגובה העיניים לשאלת הלקוח ללא שמו כלל."
         else:
-            name_instruction = "• אינך יודע עדיין את שמו של הלקוח. ענה ישירות ובאדיבות."
+            name_instruction = "• אינך יודע עדיין את שמו של הלקוח. ענה ישירות ובאדיבות ללא שם."
         if sub_info.get("found"):
             subscriber_context = (
                 f"פרטי מנוי מאומת: שם מלא '{sub_info['name']}', מערכת '{sub_info['system']}', "
@@ -1612,10 +1701,12 @@ async def unified_whatsapp_webhook(req: Request):
 8. כללים שנלמדו:
    {learned_rules}
 
-9. ברכות ואיחולים חסידיים (תחילת מענה וסיום שיחה):
-   • בתחילת התכתבות ראשונה/מענה חדש: שלב תמיד התעניינות מנומסת "מה שלומך?" (לדוגמה: "שלום {customer_name}, מה שלומך?").
-   • בסיום השיחה (אם הלקוח מודה, אומר תודה/יישר כוח, או שנראה שהשיחה לקראת סיום):
-     אחל תמיד מכל הלב איחול חסידי חם: "בשורות טובות! 🌸", "שפע ברכה והצלחה! 🌟", או "כל טוב וברכה והצלחה!".
+9. כלל סיום מענה ואיחולים חסידיים (חשוב ביותר!):
+   • חל איסור מוחלט להוסיף איחולים חסידיים ("בשורות טובות", "כל טוב", "ברכה והצלחה") בכל הודעה או בתשובות שוטפות! זה יוצר תחושה שאתה מנסה להתפטר מהלקוח.
+   • כאשר אתה נותן ללקוח מענה מלא לשאלתו, סיים תמיד את הודעתך בשאלה:
+     "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+   • אם שאלת שאלת המשך על אחריות ("האם תרצה פירוט מורחב של ההבדלים..."), אל תוסיף את שאלת המענה.
+   • איחול חסידי ("בשורות טובות", "ברכה והצלחה", "כל טוב") יינתן אך ורק כאשר הלקוח מאשר שאכן עזרת לו (אומר כן / תודה) או בסיום השיחה.
 """
         gen_config = build_fast_gen_config(system_instruction)
         prompt_content = f"היסטוריית שיחה:\n{recent_history}\n\nהודעת לקוח: {message_text}" if recent_history else f"לקוח {sender_phone}: {message_text}"
@@ -1671,11 +1762,16 @@ async def unified_whatsapp_webhook(req: Request):
     # Ensure device price quotes always conclude with the mandatory warranty question
     reply_text = ensure_warranty_question_in_device_quote(reply_text, message_text)
 
-    # Guard and clean salutations/name
+    # Guard and clean salutations/name (enforcing 3 stages: Start, Middle, End)
     if customer_name:
-        reply_text = apply_customer_name_guard(reply_text, customer_name, already_greeted)
+        reply_text = apply_customer_name_guard(reply_text, customer_name, already_greeted, msg_count=msg_count, is_closing=False)
     else:
         reply_text = purge_unwanted_phrases(reply_text)
+
+    # Ensure satisfaction question is asked on complete answers
+    if not is_escalated and not is_pure_greeting(message_text):
+        if not any(q in reply_text for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "פירוט מורחב", "בין מסלולי האחריות", "אני בודק כעת"]):
+            reply_text = f"{reply_text.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
 
     # Sanitize arrival advice when the store is currently closed (never tell customer to come 'now')
     reply_text = sanitize_closed_store_advice(reply_text, store_status["is_open"], store_status["arrival_advice"])
@@ -1697,6 +1793,12 @@ async def unified_whatsapp_webhook(req: Request):
     # Save to history & requests after customer already received the reply
     save_chat_message(sender_phone, "customer", message_text)
     save_chat_message(sender_phone, "agent", reply_text)
+
+    # If satisfaction question was asked, schedule 35s inactivity closing timer (>30s)
+    if "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in reply_text:
+        ts = std_time.time()
+        PENDING_SATISFACTION_CHECKS[sender_phone] = ts
+        asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
     try:
         status = "pending" if is_escalated else "handled"
         conn = sqlite3.connect(DB_PATH)
