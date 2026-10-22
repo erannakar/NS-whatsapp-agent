@@ -270,6 +270,24 @@ PERMANENT_LEARNED_KB = [
 ]
 
 # ----------------- Greeting Detection -----------------
+def is_thank_you_or_closing(text: str) -> bool:
+    clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
+    words = clean.split()
+    if not words or len(words) > 7:
+        return False
+    closing_phrases = [
+        "תודה", "תודה רבה", "תודה לך", "תודה רבה לך", "תודה על העזרה", "תודה על המענה",
+        "יישר כח", "יישר כוח", "שכוייח", "תזכו למצוות", "תבורכו", "מעולה תודה",
+        "אחלה תודה", "יופי תודה", "בסדר גמור תודה", "מצוין תודה", "הבנתי תודה",
+        "תודה רבה עזרת לי", "עזרת לי מאוד", "עזרתם לי מאוד", "יום טוב", "שבוע טוב",
+        "שבת שלום", "חג שמח", "להתראות", "ביי", "לילה טוב"
+    ]
+    return any(phrase in clean for phrase in closing_phrases)
+
+def get_closing_reply(customer_name: str = "") -> str:
+    name_str = f" {customer_name}" if customer_name else ""
+    return f"בשמחה רבה{name_str}! תמיד כאן לשירותך. בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
+
 def is_pure_greeting(text: str) -> bool:
     clean = re.sub(r"[^\w\sא-תa-zA-Z]", " ", text or "").strip().lower()
     words = clean.split()
@@ -311,8 +329,8 @@ def is_store_info_question(text: str) -> bool:
     ]
     return any(ind in clean for ind in indicators)
 
-def get_store_info_reply(customer_name: str = "") -> str:
-    salutation = f"שלום {customer_name}! 😃\n\n" if customer_name else ""
+def get_store_info_reply(customer_name: str = "", already_greeted: bool = False) -> str:
+    salutation = f"שלום {customer_name}! 😃\n\n" if (customer_name and not already_greeted) else ""
     name_str = f" {customer_name}" if customer_name else ""
     closing = f"מוזמן להגיע אלינו{name_str}! 😃"
     return f"{salutation}{STORE_HOURS_DETAILS}\n\n{closing}"
@@ -810,8 +828,8 @@ def has_already_greeted_customer(phone: str) -> bool:
         conn = sqlite3.connect(DB_PATH)
         count = conn.execute("""
             SELECT COUNT(*) FROM conversation_history
-            WHERE phone = ? AND role = 'agent'
-        """, (norm_phone,)).fetchone()[0]
+            WHERE (phone = ? OR phone LIKE ?) AND role = 'agent'
+        """, (norm_phone, f"%{norm_phone[-9:]}%" if len(norm_phone) >= 9 else f"%{norm_phone}%")).fetchone()[0]
         conn.close()
         return count > 0
     except Exception:
@@ -841,32 +859,30 @@ def apply_customer_name_guard(reply_text: str, customer_name: str, already_greet
         return cleaned
 
     if already_greeted:
-        # Strip redundant repeated greetings in ongoing conversation
-        cleaned = re.sub(
-            rf"^(?:שלום|היי|אהלן)\s+{re.escape(customer_name)}[\s,]+(?:מה\s+שלומך|מה\s+נשמע|שלומך)[\s?!.,]*",
-            "",
-            cleaned,
-            flags=re.IGNORECASE
-        ).strip()
-        cleaned = re.sub(
-            r"^(?:שלום|היי|אהלן)?[\s,]+(?:מה\s+שלומך|מה\s+נשמע)[\s?!.,]*",
-            "",
-            cleaned,
-            flags=re.IGNORECASE
-        ).strip()
+        # Strip repetitive greetings at the start of ongoing conversation messages:
+        # E.g. 'היי ערן,', 'הי ערן', 'שלום ערן, מה שלומך?', 'היי ערן עד 19:30' -> leaves direct answer
+        pattern_with_name = rf"^(?:שלום|היי|הי|אהלן|בוקר טוב|ערב טוב|צהריים טובים)[\s,]+(?:{re.escape(customer_name)})[\s,]+(?:מה\s+שלומך|מה\s+נשמע|שלומך)?[\s?!.,-]*"
+        pattern_with_name_simple = rf"^(?:שלום|היי|הי|אהלן|בוקר טוב|ערב טוב|צהריים טובים)[\s,]+(?:{re.escape(customer_name)})[\s?!.,-]*"
+        pattern_standalone = r"^(?:שלום|היי|הי|אהלן|בוקר טוב|ערב טוב|צהריים טובים)[\s,]+(?:מה\s+שלומך|מה\s+נשמע)[\s?!.,-]*"
+        pattern_just_greeting = r"^(?:שלום|היי|הי|אהלן)[\s,!-]+"
+
+        cleaned = re.sub(pattern_with_name, "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(pattern_with_name_simple, "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(pattern_standalone, "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(pattern_just_greeting, "", cleaned, flags=re.IGNORECASE).strip()
     else:
+        # First greeting in conversation - always include warm "מה שלומך?"
         has_name = customer_name in cleaned
         has_how_are_you = any(p in cleaned for p in ["מה שלומך", "מה נשמע"])
         if not has_name or not has_how_are_you:
-            salutation = f"שלום {customer_name}, מה שלומך?"
-            # Cleanly replace leading greeting without duplicating customer name
-            greeting_pattern = rf"^(?:שלום|היי|בוקר טוב|ערב טוב|אהלן)(?:\s+{re.escape(customer_name)})?[\s!.,]*"
+            salutation = f"שלום {customer_name}, מה שלומך?" if customer_name else "שלום, מה שלומך?"
+            greeting_pattern = r"^(?:שלום|היי|הי|בוקר טוב|ערב טוב|אהלן)(?:\s+[א-ת]+)?(?:[\s,]+(?:מה\s+שלומך|מה\s+נשמע))?[\s!.,]*"
             if re.match(greeting_pattern, cleaned):
                 cleaned = re.sub(greeting_pattern, f"{salutation} ", cleaned, count=1)
             else:
                 cleaned = f"{salutation} {cleaned}"
 
-    return cleaned
+    return cleaned.strip()
 
 # ----------------- Routes & Health Endpoints -----------------
 @app.api_route("/", methods=["GET", "POST", "HEAD"])
@@ -1220,15 +1236,15 @@ async def unified_whatsapp_webhook(req: Request):
             customer_name = extracted_name
             save_contact_name(sender_phone, extracted_name)
 
-    already_greeted = has_already_greeted_customer(sender_phone)
     recent_history = get_recent_chat_history(sender_phone, limit=6)
+    already_greeted = has_already_greeted_customer(sender_phone) or ("[סוכן]:" in recent_history)
 
     # 1. FAST DETERMINISTIC PATH: Pure Greetings (Send WhatsApp FIRST, then save to DB)
     if is_pure_greeting(message_text):
         if not customer_name:
-            greeting_reply = "שלום! על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום. 😃"
+            greeting_reply = "שלום, מה שלומך? על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום. 😃"
         elif already_greeted:
-            greeting_reply = f"שלום {customer_name}, במה אוכל לעזור לך היום? 😃"
+            greeting_reply = f"שלום {customer_name}, מה שלומך? במה אוכל לעזור לך היום? 😃"
         else:
             greeting_reply = f"שלום {customer_name}, מה שלומך? במה אוכל לעזור לך היום? 😃"
 
@@ -1237,9 +1253,36 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "agent", greeting_reply)
         return {"ok": True, "reply": greeting_reply, "type": "greeting_reply"}
 
+    # 1.5 FAST DETERMINISTIC PATH: Thank You & Closing with Hasidic Blessing (בשורות טובות / ברכה והצלחה / כל טוב)
+    if is_thank_you_or_closing(message_text):
+        closing_reply = get_closing_reply(customer_name)
+        send_whatsapp_message(sender_phone, closing_reply, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", closing_reply)
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute(
+                "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sender_phone,
+                    "נעם שיח - שירות לקוחות",
+                    message_text,
+                    "סיום שיחה ואיחול חסידי (בשורות טובות, ברכה והצלחה)",
+                    "",
+                    "handled",
+                    datetime.now().isoformat()
+                )
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return {"ok": True, "reply": closing_reply, "type": "closing_blessing"}
+
     # 2. FAST DETERMINISTIC PATH: Store Address & Hours (Send WhatsApp FIRST, then save to DB)
     if is_store_info_question(message_text):
-        store_reply = get_store_info_reply(customer_name)
+        store_reply = get_store_info_reply(customer_name, already_greeted)
         send_whatsapp_message(sender_phone, store_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", store_reply)
@@ -1332,7 +1375,16 @@ async def unified_whatsapp_webhook(req: Request):
         if sub_info.get("found") and not customer_name:
             customer_name = sub_info["name"].split()[0]
 
-        name_instruction = f"הלקוח מוכר ושמו הפרטי הוא: '{customer_name}'." if customer_name else "אינך יודע עדיין את שמו של הלקוח."
+        if customer_name:
+            if already_greeted:
+                name_instruction = f"""• שיחה מתמשכת עם הלקוח ששמו {customer_name}:
+     - חל איסור מוחלט לפתוח שוב כל הודעה ב-"היי {customer_name}", "הי {customer_name}" או "שלום {customer_name}"! זה רובוטי, טרחני ומעייף.
+     - ענה ישירות, מקצועי ובגובה העיניים לשאלת הלקוח (לדוגמה: "נשתדל לתת לך מענה עד 20:00...", "עד 19:30...").
+     - ליצירת קרבה ואנושיות, מותר להשתמש בשמו בלבד ללא "היי" (לדוגמה: "{customer_name}, אני מבין את הצורך שלך לקבל מענה כבר היום...", או לפנות בשמו בגוף המשפט), אך אל תפתח ב-"היי/שלום"."""
+            else:
+                name_instruction = f"• הלקוח מוכר ושמו הפרטי הוא: '{customer_name}'. מכיוון שזו תחילת שיחה, ברך אותו לשלום בטבעיות."
+        else:
+            name_instruction = "• אינך יודע עדיין את שמו של הלקוח. ענה ישירות ובאדיבות."
         if sub_info.get("found"):
             subscriber_context = (
                 f"פרטי מנוי מאומת: שם מלא '{sub_info['name']}', מערכת '{sub_info['system']}', "
@@ -1392,6 +1444,11 @@ async def unified_whatsapp_webhook(req: Request):
 
 8. כללים שנלמדו:
    {learned_rules}
+
+9. ברכות ואיחולים חסידיים (תחילת מענה וסיום שיחה):
+   • בתחילת התכתבות ראשונה/מענה חדש: שלב תמיד התעניינות מנומסת "מה שלומך?" (לדוגמה: "שלום {customer_name}, מה שלומך?").
+   • בסיום השיחה (אם הלקוח מודה, אומר תודה/יישר כוח, או שנראה שהשיחה לקראת סיום):
+     אחל תמיד מכל הלב איחול חסידי חם: "בשורות טובות! 🌸", "שפע ברכה והצלחה! 🌟", או "כל טוב וברכה והצלחה!".
 """
         gen_config = build_fast_gen_config(system_instruction)
         prompt_content = f"היסטוריית שיחה:\n{recent_history}\n\nהודעת לקוח: {message_text}" if recent_history else f"לקוח {sender_phone}: {message_text}"
