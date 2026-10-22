@@ -463,6 +463,32 @@ def is_pure_greeting(text: str) -> bool:
             return False
     return True
 
+# ----------------- Store Owner & Brand Identity -----------------
+STORE_NAME = "נעם שיח (נעם שיח תקשורת)"
+STORE_OWNER_NAME = "ערן נקר"
+STORE_OWNER_SHORT = "ערן"
+
+def is_store_owner_question(text: str) -> bool:
+    clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
+    owner_triggers = [
+        "בעל החנות", "בעל המקום", "בעל העסק", "בעל המעבדה", "בעל בית", "בעל הבית",
+        "איך קוראים לבעל", "מה השם של בעל", "שם בעל החנות", "שם הבעלים",
+        "מי הבעלים", "מי הבעל", "מי מנהל", "איך קוראים למנהל", "מי בעל החנות",
+        "מי בעל המקום", "שם המנהל", "מי זה נעם שיח", "מי עומד מאחורי",
+        "מי הבוס", "איך קוראים לבוס", "מי אחראי", "למי שייכת החנות",
+        "למי שייך", "מי פתח את החנות", "מי אתה", "מי זה", "עם מי אני מדבר",
+        "איך קוראים לך", "שם שלך", "מה שמך", "איך קוראים לסוכן"
+    ]
+    return any(trig in clean for trig in owner_triggers)
+
+def get_store_owner_reply(customer_name: str = "", already_greeted: bool = False) -> str:
+    salutation = f"שלום {customer_name}! 😃\n\n" if (customer_name and not already_greeted) else ""
+    return (
+        f"{salutation}לבעל החנות והמעבדה ('נעם שיח') קוראים **ערן נקר**. 📱🛠️\n"
+        f"אנחנו נמצאים ברחוב ישעיהו 10, חדרה 📍\n\n"
+        f"במה נוכל לעזור לך היום? 😃"
+    )
+
 # ----------------- Store Address & Opening Hours (Hadera) -----------------
 STORE_ADDRESS = "רחוב ישעיהו 10, חדרה"
 STORE_HOURS_DETAILS = """אנחנו נמצאים ברחוב ישעיהו 10, חדרה 📍
@@ -705,10 +731,16 @@ def sync_learned_kb_to_json():
 def find_matching_learned_knowledge(message_text: str) -> str:
     """
     Direct deterministic lookup for learned rules and known product prices.
-    Returns the answer immediately without LLM delay or unnecessary admin escalation!
+    Uses whole-word and phrase matching, preventing spurious matches on stopwords or single words.
     """
     clean = (message_text or "").lower().strip()
-    clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean])
+    clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
+
+    STOP_KEYWORDS = {
+        "חנות", "בעל", "בית", "איך", "מה", "זה", "שלי", "שלך", "הוא", "היא",
+        "יש", "אין", "לא", "כן", "פה", "כאן", "טוב", "תודה", "שלום", "היי",
+        "של", "על", "עם", "את", "או", "גם", "רק", "עוד", "כל"
+    }
 
     # 1. Check database first (dynamic learned knowledge)
     try:
@@ -720,8 +752,12 @@ def find_matching_learned_knowledge(message_text: str) -> str:
                 continue
             keywords = [k.strip().lower() for k in kw_str.replace(";", ",").replace("|", ",").split(",") if k.strip()]
             for kw in keywords:
+                if len(kw) < 3 or kw in STOP_KEYWORDS:
+                    continue
                 kw_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in kw]).strip()
-                if kw in clean or (kw_clean and kw_clean in clean_no_punct):
+                if not kw_clean or len(kw_clean) < 3 or kw_clean in STOP_KEYWORDS:
+                    continue
+                if re.search(rf"(?:^|\s){re.escape(kw)}(?:$|\s)", clean) or (re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct)):
                     return ans
     except Exception:
         pass
@@ -730,8 +766,12 @@ def find_matching_learned_knowledge(message_text: str) -> str:
     for item in PERMANENT_LEARNED_KB:
         keywords = [k.strip().lower() for k in item["keywords"].split(",") if k.strip()]
         for kw in keywords:
+            if len(kw) < 3 or kw in STOP_KEYWORDS:
+                continue
             kw_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in kw]).strip()
-            if kw in clean or (kw_clean and kw_clean in clean_no_punct):
+            if not kw_clean or len(kw_clean) < 3 or kw_clean in STOP_KEYWORDS:
+                continue
+            if re.search(rf"(?:^|\s){re.escape(kw)}(?:$|\s)", clean) or (re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct)):
                 return item["answer"]
 
     return ""
@@ -1507,25 +1547,93 @@ async def unified_whatsapp_webhook(req: Request):
     if sender_phone in admin_numbers_set and ("תשובה:" in message_text or "תשובה " in message_text):
         parts = message_text.replace("תשובה:", "תשובה ").split("|")
         admin_answer = parts[0].replace("תשובה", "").strip()
-        keywords = parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip() if len(parts) > 1 else admin_answer[:25]
+
+        # Extract Quoted Message (if admin swiped to reply in WhatsApp)
+        quoted_text = ""
+        if isinstance(message_data.get("quotedMessage"), dict):
+            quoted_text = str(message_data["quotedMessage"].get("textMessage") or message_data["quotedMessage"].get("text") or "")
+        elif isinstance(message_data.get("extendedTextMessageData"), dict):
+            q_obj = message_data["extendedTextMessageData"].get("quotedMessage", {})
+            if isinstance(q_obj, dict):
+                quoted_text = str(q_obj.get("textMessage") or q_obj.get("text") or "")
+
         try:
             conn = sqlite3.connect(DB_PATH)
-            conn.execute(
-                "INSERT INTO learned_kb (keywords, answer, created_at) VALUES (?, ?, ?)",
-                (keywords, admin_answer, datetime.now().isoformat())
-            )
-            sync_learned_kb_to_json()
-            last_pending = conn.execute(
-                "SELECT id, phone, request_text FROM customer_requests WHERE status='pending' ORDER BY id DESC LIMIT 1"
-            ).fetchone()
+            
+            # 1. Match by explicit Request ID (#REQ-123 or #123) in admin reply or quoted notification
+            target_pending = None
+            m_req = re.search(r"#REQ-(\d+)", message_text, re.IGNORECASE) or re.search(r"#(\d+)", message_text) or re.search(r"#REQ-(\d+)", quoted_text, re.IGNORECASE) or re.search(r"\[#REQ-(\d+)\]", quoted_text, re.IGNORECASE) or re.search(r"\[#(\d+)\]", quoted_text)
+            if m_req:
+                req_id_val = int(m_req.group(1))
+                target_pending = conn.execute(
+                    "SELECT id, phone, request_text FROM customer_requests WHERE id = ? AND status='pending'",
+                    (req_id_val,)
+                ).fetchone()
+
+            # 2. Match by customer phone number in quoted notification
+            if not target_pending and quoted_text:
+                m_ph = re.search(r"(?:972|0)([2-9]\d{7,8})", quoted_text)
+                if m_ph:
+                    q_phone = normalize_phone(m_ph.group(0))
+                    target_pending = conn.execute(
+                        "SELECT id, phone, request_text FROM customer_requests WHERE (phone = ? OR phone LIKE ?) AND status='pending' ORDER BY id DESC LIMIT 1",
+                        (q_phone, f"%{q_phone[-9:]}%")
+                    ).fetchone()
+
+            # 3. Match by inline phone number in admin's answer text
+            if not target_pending:
+                m_in_ph = re.search(r"(?:ל-|עבור\s+)?(?:972|0)([2-9]\d{7,8})", message_text)
+                if m_in_ph:
+                    q_phone = normalize_phone(m_in_ph.group(1))
+                    target_pending = conn.execute(
+                        "SELECT id, phone, request_text FROM customer_requests WHERE (phone = ? OR phone LIKE ?) AND status='pending' ORDER BY id DESC LIMIT 1",
+                        (q_phone, f"%{q_phone[-9:]}%")
+                    ).fetchone()
+
+            # 4. If neither specified nor quoted, match pending requests intelligently by semantic context
+            if not target_pending:
+                all_pending = conn.execute(
+                    "SELECT id, phone, request_text FROM customer_requests WHERE status='pending' ORDER BY id ASC"
+                ).fetchall()
+                if all_pending:
+                    ans_lower = admin_answer.lower()
+                    matched_req = None
+                    for r in all_pending:
+                        req_str = (r[2] or "").lower()
+                        # Keywords matching topic between request and answer
+                        req_words = [w for w in re.sub(r"[^\w\sא-ת]", " ", req_str).split() if len(w) >= 3 and w not in COMMON_NON_NAMES]
+                        if any(w in ans_lower for w in req_words):
+                            matched_req = r
+                            break
+                    # If semantic match found, pick it; otherwise pick oldest pending request (ASC)
+                    target_pending = matched_req or all_pending[0]
+
+            # Determine clean keywords to save
+            if len(parts) > 1 and parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip():
+                keywords = parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip()
+            else:
+                if target_pending and target_pending[2]:
+                    req_words = [w for w in re.sub(r"[^\w\sא-ת]", " ", target_pending[2]).split() if len(w) >= 3 and w not in COMMON_NON_NAMES]
+                    keywords = ", ".join(req_words[:3]) if req_words else "תמיכה טכנית"
+                else:
+                    keywords = "תמיכה טכנית"
+
+            # Save clean rule to learned_kb
+            if keywords and len(keywords) >= 3:
+                conn.execute(
+                    "INSERT OR IGNORE INTO learned_kb (keywords, answer, created_at) VALUES (?, ?, ?)",
+                    (keywords, admin_answer, datetime.now().isoformat())
+                )
+                sync_learned_kb_to_json()
+
             customer_dest = "אין לקוח ממתין (נשמר ישירות למאגר)"
-            if last_pending:
+            if target_pending:
                 conn.execute(
                     "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
-                    ("נענה על ידי מנהל ונלמד במאגר", last_pending[0])
+                    ("נענה על ידי מנהל ונלמד במאגר", target_pending[0])
                 )
-                target_cust_phone = last_pending[1]
-                req_text = last_pending[2] if len(last_pending) > 2 else ""
+                target_cust_phone = target_pending[1]
+                req_text = target_pending[2] if len(target_pending) > 2 else ""
                 target_cust_name = get_contact_name(target_cust_phone)
                 target_msg_count = get_conversation_message_count(target_cust_phone)
                 cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count)
@@ -1538,7 +1646,7 @@ async def unified_whatsapp_webhook(req: Request):
                     PENDING_SATISFACTION_CHECKS[target_cust_phone] = ts
                     asyncio.create_task(inactivity_closing_timer(target_cust_phone, ts, "", target_cust_name))
                 
-                customer_dest = target_cust_phone
+                customer_dest = f"{target_cust_phone} (#{target_pending[0]})"
             conn.commit()
             conn.close()
             confirm_msg = f"✅ התשובה נשמרה במאגר הידע של הסוכן ונשלחה ללקוח ({customer_dest})!"
@@ -1622,6 +1730,14 @@ async def unified_whatsapp_webhook(req: Request):
         asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
         
         return {"ok": True, "reply": store_reply, "type": "store_info"}
+
+    # 2.5 FAST DETERMINISTIC PATH: Store Owner & Identity ("איך קוראים לבעל החנות")
+    if is_store_owner_question(message_text):
+        owner_reply = get_store_owner_reply(customer_name, already_greeted)
+        send_whatsapp_message(sender_phone, owner_reply, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", owner_reply)
+        return {"ok": True, "reply": owner_reply, "type": "store_owner_info"}
 
     # 3. FAST DETERMINISTIC PATH: Warranty Confirmation / Inquiry (Send WhatsApp FIRST, then save to DB)
     if is_warranty_followup_confirmation(message_text, recent_history):
@@ -1804,8 +1920,13 @@ async def unified_whatsapp_webhook(req: Request):
    • איסור מוחלט על שאלת שביעות רצון או איחולי סיום באמצע תהליך:
      כל עוד אתה מברר דגם/הגנה, ממתין למידע מהלקוח, ממתין להנחיות, או מנחה את הלקוח לנסות פעולה — אל תשאל "האם הצלחתי לעזור" ואל תחתור לסיום השיחה. שאלת שביעות הרצון תופיע אך ורק בסיום מענה שלם וסופי!
 
-5. כתובת ושעות פעילות (זמן אמת):
+5. פרטי החנות, הבעלים והמותג ("נעם שיח"):
+   • שם העסק: "נעם שיח" / "נעם שיח תקשורת" (חנות ומעבדת סלולר, מכשירים כשרים וסינונים).
+   • הבעלים ומנהל החנות והמעבדה: ערן נקר.
    • כתובת: רחוב ישעיהו 10, חדרה בלבד.
+   • כאשר לקוח שואל: "איך קוראים לבעל החנות?", "מי הבעלים?", "מי מנהל את המקום?", "איך קוראים לך?" או "מי זה נעם שיח?" — ענה תמיד בגאווה, אדיבות וחום: לבעל החנות והמעבדה קוראים ערן נקר!
+
+6. שעות פעילות (זמן אמת):
    • שעות פעילות קבועות: ימים א'-ה' 12:00-20:00 | ימי ו' וערבי חג: שעון קיץ 12:00-15:30, שעון חורף 10:30-13:30 | מוצאי שבת וחג: בתיאום מראש בלבד.
    • זמן נוכחי בישראל: {store_status['current_time_str']}
    • מצב החנות עכשיו: {store_status['status_msg']}
@@ -1815,7 +1936,7 @@ async def unified_whatsapp_webhook(req: Request):
      - אם החנות כעת סגורה ({'סגורה' if not store_status['is_open'] else 'פתוחה'}): לעולם אל תגיד ללקוח "בוא עכשיו" או "אנחנו מחכים לך עכשיו"! ציין תמיד שהחנות סגורה כעת, והמלץ לו להגיע בשעות הפעילות הקרובות כפי שמפורט לעיל.
      - אם החנות כעת פתוחה: הוא מוזמן להגיע עכשיו עד שעת הסגירה.
 
-6. מסלולי סינון והגנה (כשר פליי ונטספרק):
+7. מסלולי סינון והגנה (כשר פליי ונטספרק):
    • כשר פליי (KosherPlay):
      - בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, כ-200 אפליקציות כשרות חיוניות: בנקים, קופות חולים, Waze, וואטסאפ). הרישיון פעיל על המכשיר בלבד (בהחלפת מכשיר יש לרכוש רישיון חדש).
      - מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות כשרות ומוגנות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר. הרישיון נייד ועובר בחינם למכשיר חדש (משלמים רק 180 ₪ התקנה)!
@@ -1823,13 +1944,13 @@ async def unified_whatsapp_webhook(req: Request):
      - 350 ₪ לשנה (רישיון שנתי).
      - שינוי רמות סינון מיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית).
 
-7. מצב מנוי הלקוח הנוכחי:
+8. מצב מנוי הלקוח הנוכחי:
    {subscriber_context}
 
-8. כללים שנלמדו:
+9. כללים שנלמדו:
    {learned_rules}
 
-9. כלל סיום מענה ואיחולים חסידיים (חשוב ביותר!):
+10. כלל סיום מענה ואיחולים חסידיים (חשוב ביותר!):
    • חל איסור מוחלט להוסיף איחולים חסידיים ("בשורות טובות", "כל טוב", "ברכה והצלחה") בכל הודעה או בתשובות שוטפות! זה יוצר תחושה שאתה מנסה להתפטר מהלקוח.
    • כאשר אתה נותן ללקוח מענה מלא לשאלתו, סיים תמיד את הודעתך בשאלה:
      "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
@@ -1928,10 +2049,12 @@ async def unified_whatsapp_webhook(req: Request):
         ts = std_time.time()
         PENDING_SATISFACTION_CHECKS[sender_phone] = ts
         asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
+    saved_req_id = None
     try:
         status = "pending" if is_escalated else "handled"
         conn = sqlite3.connect(DB_PATH)
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
@@ -1944,6 +2067,7 @@ async def unified_whatsapp_webhook(req: Request):
                 datetime.now().isoformat()
             )
         )
+        saved_req_id = cur.lastrowid
         conn.commit()
         conn.close()
     except Exception as e:
@@ -1965,13 +2089,14 @@ async def unified_whatsapp_webhook(req: Request):
             history_context = "\n".join(history_lines) if history_lines else ""
             history_block = f"\n\n*הקשר השיחה האחרונה:*\n{history_context}" if history_context else ""
 
+            req_tag = f"[#REQ-{saved_req_id}]" if saved_req_id else ""
             admin_notification = (
-                f"❓ *פנייה מלקוח שדורשת את תשובתך* ({customer_label}):\n"
+                f"❓ *פנייה מלקוח שדורשת את תשובתך* {req_tag} ({customer_label}):\n"
                 f"📌 *מהות הפנייה והתקלה:* {summary_issue}\n\n"
                 f"💬 *הודעת הלקוח:* \"{message_text}\""
                 f"{history_block}\n\n"
-                f"השב להודעה זו כדי לענות ללקוח וללמד את הבוט:\n"
-                f"תשובה: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
+                f"🆔 *למענה ישיר, השב (Swipe / Reply) להודעה זו או שלח:*\n"
+                f"תשובה {req_tag}: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
             )
             
             # Small pause before admin send so Green-API never drops consecutive messages to the same chat
