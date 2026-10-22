@@ -313,19 +313,117 @@ def is_thank_you_or_closing(text: str) -> bool:
 def is_satisfaction_yes(text: str) -> bool:
     clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
     words = clean.split()
-    if not words or len(words) > 6:
+    if not words or len(words) > 7:
         return False
     yes_signals = [
         "כן", "כן תודה", "כן מאוד", "מאוד", "עזרת מאוד", "עזרת לי מאוד",
         "כן עזרת", "כן מעולה", "מעולה תודה", "יופי תודה", "בטח", "ודאי",
         "תודה רבה", "תודה", "תודה לך", "יישר כח", "יישר כוח", "שכוייח",
-        "עזרת לי", "עזרת", "כן בטח", "מעולה", "מצוין", "אחלה", "סבבה תודה"
+        "עזרת לי", "עזרת", "כן בטח", "מעולה", "מצוין", "אחלה", "סבבה תודה",
+        "הסתדר", "הסתדר לי", "הסתדר מעולה", "עובד", "זה עובד", "עובד מעולה",
+        "עובד תודה", "הצליח", "הצלחתי", "עכשיו עובד", "בסדר גמור תודה",
+        "עכשיו בסדר", "הכל הסתדר", "הכל עובד", "תודה רבה הסתדר", "מעולה הסתדר"
     ]
-    return any(clean == sig or clean.startswith(sig) for sig in yes_signals)
+    return any(clean == sig or clean.startswith(sig) or f" {sig} " in f" {clean} " for sig in yes_signals)
 
 def get_closing_reply(customer_name: str = "") -> str:
     name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
     return f"שמחתי לעזור{name_str}! תמיד כאן לשירותך. בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
+
+def is_in_progress_or_question(text: str) -> bool:
+    """
+    Checks if a message is an open question, diagnostic inquiry, or intermediate step
+    expecting a customer response or action, where asking 'did I help you' is strictly premature.
+    """
+    if not text:
+        return False
+    clean = text.strip()
+    
+    # Check for question marks (excluding satisfaction / warranty followup questions themselves)
+    clean_no_closing = (
+        clean.replace("האם הצלחתי לעזור לך ולתת לך מענה לפנייתך", "")
+        .replace("האם הצלחתי לעזור", "")
+        .replace("האם תרצה פירוט מורחב של ההבדלים", "")
+        .replace("האם תרצה פירוט מורחב", "")
+    )
+    if "?" in clean_no_closing or "؟" in clean_no_closing:
+        return True
+
+    question_stems = [
+        "איזה", "איזו", "אילו", "מה סוג", "איזה סוג", "מה הדגם", "איזה דגם",
+        "מה התקלה", "מה קורה", "מה מופיע", "מה רשום", "סוג ההגנה", "סוג הגנה",
+        "כשר פליי או נטספרק", "איזה סינון", "איזה הגנה", "תוכל לבדוק",
+        "תוכל לפרט", "תוכל לשלוח", "תעדכן אותי", "תעדכני אותי", "עדכן אותי",
+        "עדכני אותי", "עדכן", "תעדכן", "תנסה", "תנסו", "תבדוק", "תבדקי", "נסה",
+        "היכנס", "לחץ", "בצע", "הפעל", "הפעל מחדש", "התקן", "בדוק", "שישאל", "תשאל", "לשאול",
+        "באיזה מכשיר", "באיזה דגם", "איך זה קרה", "ממתי", "שלח לי", "תשלח",
+        "אם זה הסתדר", "אם הסתדר"
+    ]
+    if any(stem in clean for stem in question_stems):
+        return True
+
+    checking_stems = [
+        "אני בודק כעת", "בודק כעת", "אבדוק כעת", "אברר כעת", "נברר עבורך",
+        "כבר חוזר אליך", "כבר מעדכן", "מיד חוזר", "אחזור אליך עם השלבים",
+        "מברר כעת את ההנחיות"
+    ]
+    if any(stem in clean for stem in checking_stems):
+        return True
+
+    return False
+
+def adapt_admin_answer(raw_answer: str) -> tuple[str, bool]:
+    """
+    Converts 3rd person admin instructions (e.g. 'שישאל מה סוג ההגנה שיש ללקוח')
+    into direct, polite 2nd person statements/questions for the customer.
+    Returns (adapted_text, is_question_or_in_progress).
+    """
+    clean = str(raw_answer).strip()
+
+    # Common admin instruction patterns
+    if re.search(r'(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+)?מה\s+סוג\s+ההגנה', clean, re.IGNORECASE):
+        adapted = "כדי שנוכל לעזור לך לסדר את המכשיר מרחוק, מה סוג ההגנה שמותקן עליו כרגע? (למשל: כשר פליי / נטספרק / אחר)"
+        return adapted, True
+
+    if re.search(r'(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+)?איזה\s+(?:סוג\s+)?הגנה', clean, re.IGNORECASE):
+        adapted = "כדי שנוכל לעזור לך לסדר את המכשיר מרחוק, איזה סוג הגנה יש לך על המכשיר? (כשר פליי / נטספרק / אחר)"
+        return adapted, True
+
+    if re.search(r'(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+)?(?:מה\s+)?איזה\s+דגם', clean, re.IGNORECASE):
+        adapted = "באיזה דגם מכשיר מדובר בדיוק?"
+        return adapted, True
+
+    # Generic 'שישאל...' or 'תשאל...'
+    m_ask = re.match(r'^(?:שישאל|תשאל|לשאול)\s+(?:אותו\s+|את\s+הלקוח\s+)?(.+)$', clean)
+    if m_ask:
+        content = m_ask.group(1).strip()
+        content = re.sub(r'לו', 'לך', content)
+        content = re.sub(r'שלו', 'שלך', content)
+        content = re.sub(r'אותו', 'אותך', content)
+        content = re.sub(r'המכשיר שלו', 'המכשיר שלך', content)
+        if not content.endswith('?'):
+            content += '?'
+        return content, True
+
+    # Instruction steps like 'שיכנס להגדרות ואז...'
+    m_step = re.match(r'^(?:שיכנס|שילחץ|שיבצע|שיוריד|שיעדכן|שיפעיל)\s+(.+)$', clean)
+    if m_step:
+        verb = clean.split()[0]
+        rest = clean[len(verb):].strip()
+        verb_map = {
+            "שיכנס": "היכנס",
+            "שילחץ": "לחץ",
+            "שיבצע": "בצע",
+            "שיוריד": "הורד",
+            "שיעדכן": "עדכן",
+            "שיפעיל": "הפעל"
+        }
+        direct_verb = verb_map.get(verb, verb)
+        adapted = f"{direct_verb} {rest}\nעדכן אותי בבקשה אם זה הסתדר לך."
+        return adapted, True
+
+    is_q = is_in_progress_or_question(clean)
+    return clean, is_q
 
 def format_admin_answer_for_customer(target_phone: str, admin_answer: str, request_text: str = "", customer_name: str = "", msg_count: int = 2) -> str:
     # Reduce name usage: only at the very start of conversation
@@ -334,16 +432,18 @@ def format_admin_answer_for_customer(target_phone: str, admin_answer: str, reque
     # Generic accurate lead-in: "חזרתי אליך בנוגע לפנייתך"
     lead_in = f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:" if name_str else "חזרתי אליך בנוגע לפנייתך:"
 
-    clean_ans = str(admin_answer).strip()
-    if clean_ans.startswith(("שלום", "היי", "הי")):
-        reply = clean_ans
-    else:
-        reply = lead_in + "\n" + clean_ans
+    adapted_ans, is_in_prog = adapt_admin_answer(admin_answer)
 
-    # Do NOT append Hasidic blessings here! Instead, ask if helped:
-    closing_q = "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
-    if not any(q in reply for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "לעזור לך"]):
-        reply = reply.rstrip() + "\n\n" + closing_q
+    if adapted_ans.startswith(("שלום", "היי", "הי")):
+        reply = adapted_ans
+    else:
+        reply = f"{lead_in}\n{adapted_ans}"
+
+    # Strictly do NOT append satisfaction question if the message is in progress, asking a question, or awaiting customer action!
+    if not is_in_prog and not is_in_progress_or_question(reply):
+        closing_q = "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+        if not any(q in reply for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "לעזור לך"]):
+            reply = f"{reply.rstrip()}\n\n{closing_q}"
 
     return reply
 
@@ -594,7 +694,7 @@ def sync_learned_kb_to_json():
     """Exports learned_kb to local JSON cache for extra durability across restarts."""
     try:
         conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute("SELECT keywords, answer FROM learned_kb").fetchall()
+        rows = conn.execute("SELECT DISTINCT keywords, answer FROM learned_kb").fetchall()
         conn.close()
         data = [{"keywords": r[0], "answer": r[1]} for r in rows if r[0] and r[1]]
         with open(BACKUP_KB_JSON_PATH, "w", encoding="utf-8") as f:
@@ -660,6 +760,16 @@ def init_db():
                 created_at TEXT
             )
         """)
+        # Deduplicate learned_kb if any duplicates exist and add unique index
+        try:
+            c.execute("""
+                DELETE FROM learned_kb WHERE id NOT IN (
+                    SELECT MIN(id) FROM learned_kb GROUP BY keywords, answer
+                )
+            """)
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_learned_kb_kw_ans ON learned_kb(keywords, answer)")
+        except Exception:
+            pass
         c.execute("""
             CREATE TABLE IF NOT EXISTS customer_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1422,8 +1532,8 @@ async def unified_whatsapp_webhook(req: Request):
                 send_whatsapp_message(target_cust_phone, cust_reply_msg)
                 save_chat_message(target_cust_phone, "agent", cust_reply_msg)
                 
-                # Start 35s timer for satisfaction closing check
-                if "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in cust_reply_msg:
+                # Start 35s timer for satisfaction closing check ONLY if not an in-progress question/step
+                if "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in cust_reply_msg and not is_in_progress_or_question(cust_reply_msg):
                     ts = std_time.time()
                     PENDING_SATISFACTION_CHECKS[target_cust_phone] = ts
                     asyncio.create_task(inactivity_closing_timer(target_cust_phone, ts, "", target_cust_name))
@@ -1569,9 +1679,10 @@ async def unified_whatsapp_webhook(req: Request):
         if not store_status["is_open"] and any(w in reply_kb for w in ["מוזמן להביא", "במקום", "להגיע", "לבוא"]):
             reply_kb = sanitize_closed_store_advice(reply_kb, store_status["is_open"], store_status["arrival_advice"])
         
-        # If not asking warranty followup, append satisfaction question
+        # If not asking warranty followup, and not an open question or in progress, append satisfaction question
         if not any(q in reply_kb for q in ["פירוט מורחב", "בין מסלולי האחריות", "האם הצלחתי לעזור"]):
-            reply_kb = f"{reply_kb.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+            if not is_in_progress_or_question(reply_kb):
+                reply_kb = f"{reply_kb.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
             
         send_whatsapp_message(sender_phone, reply_kb, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
@@ -1657,24 +1768,41 @@ async def unified_whatsapp_webhook(req: Request):
      "האם תרצה פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות? 😃"
    • אם הדגם או המחיר ידועים לך מהרשימה לעיל — ענה מיד במדויק! לעולם אל תגיד שאתה בודק או שתחזור אליו על מכשירים שמחירם ידוע!
 
-4. מעבדת תיקונים, מסכים, נזקי מים/קורוזיה ובדיקת עלויות:
-   • אנו מתקנים ומחליפים מסכים ורכיבים לכל המכשירים: מכשירי מקשים (שיאומי מקשים / Qin / F21 / F22 וכו') וסמארטפונים (גלקסי, אייפון וכו').
-   • נזקי מים / מכשיר שנפל למים / תקלות דחופות:
+4. תקלות במכשירים, מכשיר פרוץ, ותיקונים — עזרה אסרטיבית מרחוק תחילה (Remote-First Troubleshooting):
+   • עיקרון מנחה קריטי:
+     רוב מוחלט של בעיות המכשיר, הסינון וההגנה (ובפרט: "מכשיר פרוץ", "נפרץ לי המכשיר", "הסינון נעלם/קרס", "כשר פליי תקול/נחסם", "נטספרק לא מסנן", אפליקציות שלא נפתחות, או שיבושי הגדרות) — ניתנות לפתרון מלא ופשוט על ידי הלקוח עצמו בעזרת הנחיות מרחוק!
+   • איסור מוחלט על שליחת לקוח למעבדה בתקלות תוכנה, סינון ומכשיר פרוץ:
+     חל איסור מוחלט לומר ללקוח "עליך להגיע למעבדה ונסדר לך", "מוזמן להגיע למעבדה", "תביא אותו ונבדוק", או "צריך להגיע אלינו" כאשר מדובר בתקלת תוכנה, סינון, הגנה, או מכשיר פרוץ!
+     היה אסרטיבי לעזור ללקוח לפתור בעצמו מרחוק.
+   • מתי כן ממליצים להגיע למעבדה?
+     אך ורק עבור תקלות חומרה פיזיות ממשיות:
+     - מסך שבור / החלפת מסך
+     - נזקי מים / קורוזיה / מכשיר שנפל למים (הנחיות חירום: לכבות מיד, לא לחבר למטען, ולהביא למעבדה בשעות הפעילות)
+     - סוללה גמורה / תפוחה / החלפת סוללה
+     - שקע טעינה שבור / תקלת טעינה פיזית
+     - תיקוני לוח ורכיבים פיזיים
+   • תהליך דיאגנוסטיקה והסלמה למנהל בתקלות תוכנה ומכשיר פרוץ (שלב אחר שלב):
+     - שלב א' (בירור): אם לקוח מדווח על תקלה בתוכנה או שהמכשיר פרוץ — שאל באדיבות ובענייניות מה דגם המכשיר ומה סוג ההגנה שמותקן עליו (כשר פליי / נטספרק / אחר).
+     - שלב ב' (איתור פתרון מרחוק או פנייה למנהל):
+       כאשר ידועים דגם המכשיר וסוג ההגנה (למשל: שיאומי עם כשר פליי):
+       * אם ההנחיות המדויקות לסידור התקלה מרחוק אינן ידועות לך בוודאות מתוך מאגר הכללים שנלמדו:
+         חובה להסלים למנהל מיד עם תגית מדויקת:
+         [ESCALATE: לקוח עם מכשיר [דגם] והגנת [סוג הגנה] מדווח שהמכשיר פרוץ - מה ההנחיות המדויקות לפתרון התקלה מרחוק?]
+         וענה ללקוח:
+         "תודה על העדכון. אני בודק כעת את ההנחיות המדויקות לסידור התקלה מרחוק בכשר פליי, וכבר חוזר אליך עם שלבי הפתרון."
+         (לעולם אל תגיד לו להגיע למעבדה, ולעולם אל תשאל "האם הצלחתי לעזור" באמצע תהליך דיאגנוסטיקה או בירור!)
+     - שלב ג' (הנחיות לביצוע וציפייה לתשובה):
+       כאשר מתקבלות ההנחיות מהמנהל, העבר אותן ללקוח ובקש ממנו לבצע ולעדכן אותך אם זה הסתדר.
+   • אם המחיר, עלות התיקון, או אפשרויות הטיפול בתקלות חומרה אינם ידועים לך בוודאות:
+     ענה ללקוח שאתה בודק כעת את הפרטים והמחיר העדכני וכבר חוזר אליו עם תשובה מדויקת (לעולם אל תגיד שתבדוק מחר, ולעולם אל תגיד "מול המעבדה").
+     חובה לתגית הסלמה מפורטת [ESCALATE: ...].
+   • נזקי מים / מכשיר שנפל למים / תקלות חומרה דחופות:
      - הנחיות מיידיות ומצילות מכשיר ללקוח: לכבות את המכשיר מיד, לא לחבר בשום אופן למטען, לא לנסות להדליק, ולהוציא סים ומגש כרטיס אם אפשר.
      - שים לב לשעת פעילות החנות כעת ({store_status['status_msg']}):
-       * אם החנות סגורה כעת ({'סגורה' if not store_status['is_open'] else 'פתוחה'}):
-         חל איסור מוחלט לומר ללקוח "בוא עכשיו", "תגיע כעת", או "אנחנו מחכים לך עכשיו"!
-         הסבר לו במפורש שהחנות סגורה כעת, שישמור על המכשיר כבוי לחלוטין, והמלץ לו להביא אותו ברגע שנפתח בשעות הפעילות:
-         "{store_status['arrival_advice']}"
-       * אם החנות פתוחה כעת:
-         הזמן אותו להביא את המכשיר בהקדם בשעות הפעילות למעבדה ברחוב ישעיהו 10, חדרה לייבוש מקצועי וטיפול בקורוזיה.
-   • אם המחיר, עלות התיקון, או אפשרויות הטיפול אינם ידועים לך בוודאות מתוך המחירון:
-     - ענה ללקוח שאתה בודק כעת את הפרטים והמחיר העדכני וכבר חוזר אליו עם תשובה מדויקת (לעולם אל תגיד שתבדוק מחר, ולעולם אל תגיד "מול המעבדה").
-     - חובה קריטית לתגית ההסלמה [ESCALATE]: פרט בתוכה את מהות הבעיה המדויקת של הלקוח כדי שהמנהל יבין מיד מה קרה ויענה במדויק!
-       לדוגמה: [ESCALATE: סמסונג גלקסי נפל למים - עלות בדיקה וטיפול קורוזיה]
-       או: [ESCALATE: החלפת שקע טעינה לשיאומי F21]
-       או: [ESCALATE: החלפת גב זכוכית לאייפון 14]
-       לעולם אל תרשום רק "מחיר וזמינות עבור..." ללא פירוט מהות התקלה!
+       * אם החנות סגורה כעת: הסבר במפורש שהחנות סגורה כעת, שישמור על המכשיר כבוי לחלוטין, והמלץ לו להביא אותו ברגע שנפתח בשעות הפעילות: "{store_status['arrival_advice']}"
+       * אם החנות פתוחה כעת: הזמן אותו להביא את המכשיר בהקדם בשעות הפעילות למעבדה ברחוב ישעיהו 10, חדרה לייבוש מקצועי וטיפול בקורוזיה.
+   • איסור מוחלט על שאלת שביעות רצון או איחולי סיום באמצע תהליך:
+     כל עוד אתה מברר דגם/הגנה, ממתין למידע מהלקוח, ממתין להנחיות, או מנחה את הלקוח לנסות פעולה — אל תשאל "האם הצלחתי לעזור" ואל תחתור לסיום השיחה. שאלת שביעות הרצון תופיע אך ורק בסיום מענה שלם וסופי!
 
 5. כתובת ושעות פעילות (זמן אמת):
    • כתובת: רחוב ישעיהו 10, חדרה בלבד.
@@ -1768,10 +1896,11 @@ async def unified_whatsapp_webhook(req: Request):
     else:
         reply_text = purge_unwanted_phrases(reply_text)
 
-    # Ensure satisfaction question is asked on complete answers
+    # Ensure satisfaction question is asked on complete answers ONLY (not when asking questions or in progress)
     if not is_escalated and not is_pure_greeting(message_text):
         if not any(q in reply_text for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "פירוט מורחב", "בין מסלולי האחריות", "אני בודק כעת"]):
-            reply_text = f"{reply_text.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+            if not is_in_progress_or_question(reply_text):
+                reply_text = f"{reply_text.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
 
     # Sanitize arrival advice when the store is currently closed (never tell customer to come 'now')
     reply_text = sanitize_closed_store_advice(reply_text, store_status["is_open"], store_status["arrival_advice"])
@@ -1794,8 +1923,8 @@ async def unified_whatsapp_webhook(req: Request):
     save_chat_message(sender_phone, "customer", message_text)
     save_chat_message(sender_phone, "agent", reply_text)
 
-    # If satisfaction question was asked, schedule 35s inactivity closing timer (>30s)
-    if "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in reply_text:
+    # If satisfaction question was asked on a definitive answer, schedule 35s inactivity closing timer (>30s)
+    if "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in reply_text and not is_in_progress_or_question(reply_text):
         ts = std_time.time()
         PENDING_SATISFACTION_CHECKS[sender_phone] = ts
         asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
