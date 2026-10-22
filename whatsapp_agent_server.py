@@ -234,14 +234,19 @@ PERMANENT_CONTACTS = {
 }
 
 COMMON_NON_NAMES = {
-    "רוצה", "צריך", "יכול", "מדבר", "שואל", "מבקש", "שלום", "היי", "בוקר", "ערב",
+    "רוצה", "צריך", "יכול", "מדבר", "שואל", "מבקש", "שלום", "היי", "הי", "אהלן", "בוקר", "ערב",
     "יש", "אין", "לא", "כן", "פה", "כאן", "זה", "אני", "מה", "מי", "איפה", "למה",
     "כמה", "מתי", "איך", "טוב", "תודה", "בסדר", "אחלה", "יופי", "סבבה", "מסך",
     "סוללה", "שקע", "תיקון", "מעבדה", "מחיר", "עלות", "שיאומי", "סמסונג", "אייפון",
     "בדיקה", "בבקשה", "החלפה", "עזרה", "טלפון", "מכשיר", "דגם", "מנוי", "סינון",
     "הוא", "היא", "הם", "הן", "שלי", "שלך", "שלו", "שלנו", "שלכם", "אותי", "אותך",
     "אפשר", "רוצים", "בדיוק", "תגיד", "תגידו", "רציתי", "לשאול", "דבר", "נוסף",
-    "מעולה", "מצוין", "מגיע", "אליכם", "מחר", "היום", "עכשיו", "בתור", "לחכות"
+    "מעולה", "מצוין", "מגיע", "אליכם", "מחר", "היום", "עכשיו", "בתור", "לחכות",
+    "שעה", "שעות", "פתיחה", "סגירה", "פתוח", "פתוחים", "פותחים", "סגור", "סגורים", "סוגרים",
+    "פעילות", "זמן", "דקה", "דקות", "שנייה", "שניות", "יום", "ימים", "שבוע", "שבועות", "חודש", "שנה",
+    "איזה", "איזו", "אילו", "מדוע", "כיצד", "האם", "חנות", "סניף", "כתובת", "מיקום",
+    "רחוב", "עבודה", "עובדים", "נפתח", "נסגר", "קבלת", "קהל", "שירות", "הודעה", "קודם",
+    "משהו", "מישהו", "דברים", "פשוט", "ברור", "סגור", "מובן", "אמת", "נכון", "טעות"
 }
 
 # ----------------- Permanent Learned KB Seed (Immune to Server Rebuilds) -----------------
@@ -296,18 +301,21 @@ def is_store_info_question(text: str) -> bool:
     clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
     indicators = [
         "כתובת", "איפה אתם", "איפה החנות", "איפה המעבדה", "מיקום", "שעות פעילות",
-        "שעות פתיחה", "מתי פתוח", "מתי אתם פתוחים", "מתי סגור", "שעות קבלה",
+        "שעות פתיחה", "שעות סגירה", "מתי פתוח", "מתי אתם פתוחים", "מתי פותחים",
+        "מתי אתם פותחים", "מתי סגור", "מתי סוגרים", "מתי אתם סוגרים", "שעות קבלה",
         "איפה אתם יושבים", "איפה נמצאים", "איפה יושבים", "איזה רחוב", "איך מגיעים",
-        "איפה הסניף", "כתובת שלכם", "שעות הפעילות", "הכתובת שלכם"
+        "איפה הסניף", "כתובת שלכם", "שעות הפעילות", "הכתובת שלכם", "פתוחים היום",
+        "פתוח היום", "פתוח עכשיו", "פתוחים עכשיו", "עובדים היום", "עד מתי פתוח",
+        "עד מתי אתם פתוחים", "עד איזה שעה", "באיזה שעה פתוח", "באיזו שעה פתוח",
+        "מאיזה שעה", "מתי נפתח", "מתי נסגר", "שעות עבודה", "פתוחים", "פותחים"
     ]
     return any(ind in clean for ind in indicators)
 
 def get_store_info_reply(customer_name: str = "") -> str:
+    salutation = f"שלום {customer_name}! 😃\n\n" if customer_name else ""
     name_str = f" {customer_name}" if customer_name else ""
     closing = f"מוזמן להגיע אלינו{name_str}! 😃"
-    return f"""{STORE_HOURS_DETAILS}
-
-{closing}"""
+    return f"{salutation}{STORE_HOURS_DETAILS}\n\n{closing}"
 
 # ----------------- Warranty Tracks Content (Noam Siach 3 Tracks) -----------------
 WARRANTY_FULL_EXPLANATION = """📋 *השוואת מסלולי האחריות במכשירי נעם שיח:*
@@ -686,6 +694,9 @@ def save_contact_name(phone: str, name: str):
     norm_phone = normalize_phone(phone)
     if not clean_name or not norm_phone or clean_name in COMMON_NON_NAMES:
         return
+    # Guard: never overwrite permanent admin/owner contacts
+    if norm_phone in PERMANENT_CONTACTS:
+        return
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.execute("""
@@ -700,29 +711,29 @@ def save_contact_name(phone: str, name: str):
         print(f"[Save Contact Notice]: {exc}")
 
 def extract_name_from_text(text: str) -> str:
-    cleaned = text.strip()
+    cleaned = re.sub(r"[^\w\sא-ת]", " ", text or "").strip()
     if not cleaned:
         return ""
-    patterns = [
-        r"(?:שמי\s+הוא|שמי|קוראים\s+לי|השם\s+שלי\s+הוא|השם\s+שלי|מדבר|זה)\s+([א-ת]{2,15}(?:\s+[א-ת]{2,15})?)",
-        r"^(?:אני)\s+([א-ת]{2,15}(?:\s+[א-ת]{2,15})?)",
-        r"^([א-ת]{2,15}(?:\s+[א-ת]{2,15})?)\s*[:,\-]\s*",
-        r"([א-ת]{2,15})\s+כאן\b"
+
+    # 1. Explicit self-identification patterns only
+    explicit_patterns = [
+        r"(?:שמי(?:\s+הוא)?|קוראים\s+לי|השם\s+שלי(?:\s+הוא)?)\s+([א-ת]{2,15})",
+        r"^(?:שלום\s*,?\s*)?(?:מדבר|מדברת)\s+([א-ת]{2,15})",
+        r"^(?:אני|זה)\s+([א-ת]{2,15})\s*$",
+        r"^([א-ת]{2,15})\s+כאן\s*$"
     ]
-    for pattern in patterns:
+    for pattern in explicit_patterns:
         match = re.search(pattern, cleaned)
         if match:
             candidate = match.group(1).strip()
-            first_word = candidate.split()[0]
-            if first_word not in COMMON_NON_NAMES:
-                return first_word
+            if candidate not in COMMON_NON_NAMES:
+                return candidate
 
+    # 2. Strict 1-2 words name ONLY if all words are valid Hebrew letters and NOT in COMMON_NON_NAMES
     words = cleaned.split()
     if 1 <= len(words) <= 2:
-        if all(re.fullmatch(r"[א-ת]{2,15}", w) for w in words):
-            first_w = words[0]
-            if first_w not in COMMON_NON_NAMES:
-                return first_w
+        if all(re.fullmatch(r"[א-ת]{2,15}", w) and w not in COMMON_NON_NAMES for w in words):
+            return words[0]
 
     return ""
 
@@ -1000,6 +1011,54 @@ def fix_green_api_webhook():
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/api/green_api_reboot")
+def green_api_reboot():
+    """Forces Green-API instance to reboot via API to unfreeze stuck starting/loading containers."""
+    base, token = get_green_api_base_and_token()
+    if not base or not token:
+        return {"error": "WHATSAPP_API_URL is missing or invalid format"}
+    try:
+        resp = http_session.get(f"{base}/reboot/{token}", timeout=10)
+        return {
+            "action": "reboot",
+            "status_code": resp.status_code,
+            "response": resp.json() if resp.status_code == 200 else resp.text,
+            "instructions": "המופע אותחל בהצלחה. המתן כדקה עד שתיים, ובדוק ב-Green-API אם הסטטוס הפך ל-authorized או שמופיע QR חדש לסריקה."
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/green_api_logout")
+def green_api_logout():
+    """Forces Green-API to drop the old stuck session and return to notAuthorized state so a new QR code appears."""
+    base, token = get_green_api_base_and_token()
+    if not base or not token:
+        return {"error": "WHATSAPP_API_URL is missing or invalid format"}
+    try:
+        resp = http_session.get(f"{base}/logout/{token}", timeout=10)
+        return {
+            "action": "logout",
+            "status_code": resp.status_code,
+            "response": resp.json() if resp.status_code == 200 else resp.text,
+            "instructions": "הסשן הישן נותק. המופע מתאפס ל-notAuthorized. כעת הגלגל המסתובב נעלם וניתן לסרוק QR חדש!"
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/green_api_qr")
+def green_api_qr():
+    """Fetches a fresh QR code from Green-API directly for quick re-authorization."""
+    base, token = get_green_api_base_and_token()
+    if not base or not token:
+        return {"error": "WHATSAPP_API_URL is missing or invalid format"}
+    try:
+        resp = http_session.get(f"{base}/qr/{token}", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"status_code": resp.status_code, "response": resp.text}
+    except Exception as e:
+        return {"error": str(e)}
+
 # ----------------- Unified Multi-Route Webhook Handler -----------------
 @app.api_route("/webhook/whatsapp", methods=["GET", "POST", "HEAD", "OPTIONS"])
 @app.api_route("/webhook/whatsapp/", methods=["GET", "POST", "HEAD", "OPTIONS"])
@@ -1152,9 +1211,14 @@ async def unified_whatsapp_webhook(req: Request):
 
     customer_name = get_contact_name(sender_phone)
     extracted_name = extract_name_from_text(message_text)
-    if extracted_name:
-        customer_name = extracted_name
-        save_contact_name(sender_phone, extracted_name)
+
+    # Permanent contacts are immutable - Eran is ALWAYS Eran and can never be overwritten
+    if normalize_phone(sender_phone) in PERMANENT_CONTACTS:
+        customer_name = PERMANENT_CONTACTS[normalize_phone(sender_phone)].split()[0]
+    elif extracted_name:
+        if not customer_name or any(sig in message_text for sig in ["שמי", "קוראים לי", "השם שלי"]):
+            customer_name = extracted_name
+            save_contact_name(sender_phone, extracted_name)
 
     already_greeted = has_already_greeted_customer(sender_phone)
     recent_history = get_recent_chat_history(sender_phone, limit=6)
@@ -1162,7 +1226,7 @@ async def unified_whatsapp_webhook(req: Request):
     # 1. FAST DETERMINISTIC PATH: Pure Greetings (Send WhatsApp FIRST, then save to DB)
     if is_pure_greeting(message_text):
         if not customer_name:
-            greeting_reply = "שלום , על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום ."
+            greeting_reply = "שלום! על מנת לתת לך את המענה המדויק והמהיר ביותר אשמח שתרשום לי את שמך ובמה אוכל לעזור לך היום. 😃"
         elif already_greeted:
             greeting_reply = f"שלום {customer_name}, במה אוכל לעזור לך היום? 😃"
         else:
