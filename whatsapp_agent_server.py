@@ -359,12 +359,14 @@ def get_closing_reply(customer_name: str = "", incoming_text: str = "") -> str:
 
 def is_scheduling_request(text: str) -> bool:
     """
-    Detects if the customer is requesting, suggesting, or coordinating an appointment, queue slot, or installation time.
+    Detects if the customer is requesting, suggesting, or coordinating an appointment, queue slot, purchase visit, or installation time.
     """
     clean = re.sub(r"[^\w\sא-ת0-9:-]", " ", text or "").strip().lower()
     scheduling_keywords = [
         "לקבוע", "לתאם", "קביעת", "תיאום", "לתאם התקנה", "לקבוע התקנה",
         "לקבוע תור", "לתאם תור", "תור לתיקון", "חור לתיקון", "תור למעבדה",
+        "תור לרכוש", "תור לקנות", "תור לרכישת", "תור לקניית", "תור למכשיר",
+        "תור לחנות", "תור להתקנה", "תור להתקנת", "תור לסינון", "תור לסים",
         "לקבוע מחר", "לקבוע להיום", "לתאם למחר", "מתי אפשר לקבוע", "מתי אפשר לתאם",
         "לקבוע שעה", "לתאם שעה", "לקבוע יום", "מתאים לי ב", "אפשר לקבוע", "אפשר לתאם",
         "בוא נקבע", "תקבע לי", "תתאם לי", "מתי אתם פנויים", "מתי פנוי",
@@ -381,35 +383,155 @@ def is_scheduling_request(text: str) -> bool:
     )
     return bool(has_day and has_time_term)
 
-def get_appointment_meta(text: str) -> dict:
+def _classify_single_service_text(text: str):
     """
-    Distinguishes between in-store lab repair appointments ('תור לתיקון מכשיר במעבדה')
-    and remote PC protection installations ('התקנה מרחוק במחשב').
+    Internal helper to classify a single text snippet into one of Noam Siach's distinct service categories.
+    Returns None if no specific service keyword is present in the text.
     """
     clean = (text or "").lower()
-    remote_pc_keywords = ["מחשב", "מרחוק", "נייח", "נייד", "לפטופ", "anydesk", "אנידסק", "שליטה מרחוק", "התקנה מרחוק"]
-    repair_keywords = ["תיקון", "לתקן", "מעבדה", "מסך", "שקע", "סוללה", "רמקול", "מיקרופון", "קורוזיה", "מים", "להגיע", "להביא", "תור לתיקון", "חור לתיקון", "תור למעבדה", "להמתין"]
+    if not clean.strip():
+        return None
+
+    # 1. Explicit Device Purchase / Sales in Store (רכישת מכשיר כשר / מכשיר חדש בחנות)
+    purchase_verbs = [
+        "לרכוש", "רכישת", "רכישה", "לקנות", "קניית", "קניה", "קנייה",
+        "לראות מכשירים", "התאמת מכשיר", "שדרוג מכשיר", "החלפת מכשיר", "מכירה", "מכירות"
+    ]
+    purchase_nouns = [
+        "מכשיר חדש", "טלפון חדש", "פלאפון חדש", "מכשיר כשר", "פלאפון כשר", "טלפון כשר",
+        "מכשירים כשרים", "שיאומי כשר", "f21", "f22", "f25", "qin"
+    ]
+    explicit_repair_words = [
+        "תיקון", "לתקן", "מעבדה", "מסך שבור", "החלפת מסך", "שקע טעינה",
+        "החלפת סוללה", "סוללה", "רמקול", "מיקרופון", "קורוזיה", "נפל למים",
+        "שבר", "נשבר", "שבור", "תקול", "מקולקל", "בדיקת מעבדה", "תור לתיקון", "חור לתיקון", "תור למעבדה"
+    ]
+    has_purchase_verb = any(k in clean for k in purchase_verbs)
+    has_purchase_noun = any(k in clean for k in purchase_nouns)
+    has_explicit_repair = any(k in clean for k in explicit_repair_words)
+
+    if has_purchase_verb or (has_purchase_noun and not has_explicit_repair):
+        is_kosher_mentioned = "כשר" in clean
+        if is_kosher_mentioned:
+            return {
+                "type_label": "תור לרכישת מכשיר כשר בחנות",
+                "short_label": "תור לרכישת מכשיר כשר",
+                "cal_title_prefix": "תור לרכישת מכשיר כשר בחנות",
+                "venue_phrase": "בחנות שלנו (רחוב ישעיהו 10, חדרה)",
+                "location": "רחוב ישעיהו 10, חדרה (חנות נעם שיח)",
+                "is_remote": False
+            }
+        return {
+            "type_label": "תור לרכישת מכשיר בחנות",
+            "short_label": "תור לרכישת מכשיר",
+            "cal_title_prefix": "תור לרכישת מכשיר בחנות",
+            "venue_phrase": "בחנות שלנו (רחוב ישעיהו 10, חדרה)",
+            "location": "רחוב ישעיהו 10, חדרה (חנות נעם שיח)",
+            "is_remote": False
+        }
+
+    # 2. Remote PC / Device Filtering & Protection Installation (התקנת סינון והגנה מרחוק במחשב)
+    remote_pc_keywords = [
+        "מחשב", "מרחוק", "נייח", "נייד", "לפטופ", "anydesk", "אנידסק",
+        "שליטה מרחוק", "התקנה מרחוק", "התחברות מרחוק"
+    ]
     if any(k in clean for k in remote_pc_keywords):
         return {
-            "type_label": "התקנה מרחוק במחשב",
+            "type_label": "התקנת סינון והגנה מרחוק במחשב",
             "short_label": "התקנה מרחוק",
-            "cal_title_prefix": "התקנת הגנה במחשב",
+            "cal_title_prefix": "התקנת הגנה מרחוק במחשב",
+            "venue_phrase": "מרחוק",
             "location": "מרחוק (AnyDesk / שליטה מרחוק)",
             "is_remote": True
         }
-    if any(k in clean for k in repair_keywords) or "תור" in clean:
+
+    # 3. In-Store Filtering / Protection / Koshering Installation (התקנת סינון והגנה / הכשרת מכשיר בחנות)
+    instore_filter_keywords = [
+        "סינון", "הגנה", "כשר פליי", "נטספרק", "הכשרה", "להכשיר", "הכשרת",
+        "התקנת הגנה", "התקנת סינון", "חסימה", "עדכון גרסה", "להתקין הגנה", "להתקין סינון", "התקנה"
+    ]
+    if any(k in clean for k in instore_filter_keywords) and not has_explicit_repair:
+        return {
+            "type_label": "תור להתקנת סינון והגנה בחנות",
+            "short_label": "תור להתקנת סינון והגנה",
+            "cal_title_prefix": "תור להתקנת סינון והגנה בחנות",
+            "venue_phrase": "בחנות שלנו (רחוב ישעיהו 10, חדרה)",
+            "location": "רחוב ישעיהו 10, חדרה (חנות נעם שיח)",
+            "is_remote": False
+        }
+
+    # 4. SIM / Kosher Line / Cellular Porting in Store (טיפול בסים / קו סלולר / ניוד בחנות)
+    sim_keywords = [
+        "סים", "sim", "ניוד", "לנייד", "קו כשר", "החלפת סים",
+        "חבילת סלולר", "קו חדש", "נטפרי סים"
+    ]
+    if any(k in clean for k in sim_keywords) and not has_explicit_repair:
+        return {
+            "type_label": "תור לטיפול בסים / קו סלולר בחנות",
+            "short_label": "תור לטיפול בסים / קו",
+            "cal_title_prefix": "תור לטיפול בסים / קו סלולר בחנות",
+            "venue_phrase": "בחנות שלנו (רחוב ישעיהו 10, חדרה)",
+            "location": "רחוב ישעיהו 10, חדרה (חנות נעם שיח)",
+            "is_remote": False
+        }
+
+    # 5. Data Transfer & Backup in Store (העברת נתונים / אנשי קשר / גיבוי בחנות)
+    data_transfer_keywords = [
+        "העברת נתונים", "העברת אנשי קשר", "העברת מידע", "גיבוי",
+        "העברת תכנים", "להעביר מידע", "להעביר אנשי קשר", "העברה ממכשיר"
+    ]
+    if any(k in clean for k in data_transfer_keywords) and not has_explicit_repair:
+        return {
+            "type_label": "תור להעברת נתונים ומידע בחנות",
+            "short_label": "תור להעברת נתונים",
+            "cal_title_prefix": "תור להעברת נתונים ומידע בחנות",
+            "venue_phrase": "בחנות שלנו (רחוב ישעיהו 10, חדרה)",
+            "location": "רחוב ישעיהו 10, חדרה (חנות נעם שיח)",
+            "is_remote": False
+        }
+
+    # 6. Lab Hardware / Device Repair (תור לתיקון מכשיר במעבדה) — ONLY genuine repair/fault keywords!
+    repair_keywords = [
+        "תיקון", "לתקן", "מעבדה", "מסך", "שקע", "סוללה", "רמקול",
+        "מיקרופון", "קורוזיה", "מים", "שבר", "נשבר", "שבור", "תקול",
+        "מקולקל", "בדיקת מעבדה", "תור לתיקון", "חור לתיקון", "תור למעבדה"
+    ]
+    if any(k in clean for k in repair_keywords):
         return {
             "type_label": "תור לתיקון מכשיר במעבדה",
             "short_label": "תור לתיקון מכשיר",
             "cal_title_prefix": "תור לתיקון מכשיר במעבדה",
+            "venue_phrase": "במעבדה שלנו (רחוב ישעיהו 10, חדרה)",
             "location": "רחוב ישעיהו 10, חדרה (מעבדת נעם שיח)",
             "is_remote": False
         }
+
+    return None
+
+def get_appointment_meta(text: str, recent_history: str = "") -> dict:
+    """
+    Distinguishes accurately between all services offered by Noam Siach:
+    1. Purchasing a kosher/new device in the store ('תור לרכישת מכשיר כשר בחנות' / 'תור לרכישת מכשיר בחנות')
+    2. Remote PC protection installation ('התקנת סינון והגנה מרחוק במחשב')
+    3. In-store filtering/protection installation ('תור להתקנת סינון והגנה בחנות')
+    4. SIM / cellular line / porting in store ('תור לטיפול בסים / קו סלולר בחנות')
+    5. Data transfer & backup in store ('תור להעברת נתונים ומידע בחנות')
+    6. Hardware/device lab repair ('תור לתיקון מכשיר במעבדה')
+    7. General store appointment fallback ('תור לשירות בחנות')
+    """
+    matched = _classify_single_service_text(text)
+    if matched:
+        return matched
+    if recent_history:
+        matched_hist = _classify_single_service_text(recent_history)
+        if matched_hist:
+            return matched_hist
     return {
-        "type_label": "תיאום תור / התקנה",
-        "short_label": "תור",
-        "cal_title_prefix": "תיאום שירות ללקוח",
-        "location": "רחוב ישעיהו 10, חדרה / מרחוק",
+        "type_label": "תור לשירות בחנות",
+        "short_label": "תור בחנות",
+        "cal_title_prefix": "תור ללקוח בחנות",
+        "venue_phrase": "בחנות שלנו (רחוב ישעיהו 10, חדרה)",
+        "location": "רחוב ישעיהו 10, חדרה (חנות נעם שיח)",
         "is_remote": False
     }
 
@@ -1950,7 +2072,7 @@ async def unified_whatsapp_webhook(req: Request):
                 callback_phone = found_cb or format_phone_display(target_cust_phone)
 
                 if is_sched_req:
-                    appt_meta = get_appointment_meta(req_text)
+                    appt_meta = get_appointment_meta(req_text, recent_cust_text)
                     req_hr, req_mn = extract_explicit_hour_minute(req_text)
                     adm_hr, adm_mn = extract_explicit_hour_minute(admin_answer)
                     admin_clean = admin_answer.strip().lower()
@@ -2033,7 +2155,7 @@ async def unified_whatsapp_webhook(req: Request):
                         else:
                             cust_reply_msg = (
                                 f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\n"
-                                f"התור שלך אושר בהצלחה! קבענו {appt_meta['short_label']} ל{disp_time} במעבדה שלנו ({appt_meta['location']}).\n"
+                                f"התור שלך אושר בהצלחה! קבענו {appt_meta['short_label']} ל{disp_time} {appt_meta['venue_phrase']}.\n"
                                 f"מספר הטלפון לחזרה אליך: {callback_phone}. נשמח לראותך! 😃"
                             )
                         send_whatsapp_message(target_cust_phone, cust_reply_msg)
@@ -2162,7 +2284,7 @@ async def unified_whatsapp_webhook(req: Request):
 
     if active_sched_row and is_scheduling_request(active_sched_row[1] or ""):
         sched_req_id, sched_req_text, sched_req_status = active_sched_row
-        appt_meta = get_appointment_meta(sched_req_text)
+        appt_meta = get_appointment_meta(sched_req_text, recent_history)
         cust_clean = message_text.strip().lower()
         cust_has_neg = bool(re.search(r"\b(?:לא|אי\s+אפשר|תפוס|עמוס)\b", cust_clean))
         cust_hr, cust_mn = extract_explicit_hour_minute(message_text)
@@ -2188,7 +2310,7 @@ async def unified_whatsapp_webhook(req: Request):
                     )
                 else:
                     reply_final = (
-                        f"מעולה! התור שלך נקבע סופית ל{disp_time} במעבדה שלנו ({appt_meta['location']}).\n"
+                        f"מעולה! קבענו סופית {appt_meta['short_label']} ל{disp_time} {appt_meta['venue_phrase']}.\n"
                         f"מספר הטלפון לחזרה אליך: {callback_phone}. נשמח לראותך! 😃"
                     )
                 send_whatsapp_message(sender_phone, reply_final, raw_chat_id)
@@ -2388,10 +2510,10 @@ async def unified_whatsapp_webhook(req: Request):
             
         return {"ok": True, "reply": warranty_reply, "type": "warranty_full_explanation", "escalated": False}
 
-    # 3.4 FAST DETERMINISTIC PATH: Scheduling / Installation / Lab Queue Requests (Never let AI unilaterally book or invent 14:00!)
+    # 3.4 FAST DETERMINISTIC PATH: Scheduling / Store Purchase / Installation / Lab Queue Requests (Never let AI unilaterally book or invent 14:00!)
     if is_scheduling_request(message_text):
         sched_display, sched_s_iso, sched_e_iso = parse_scheduling_datetime(message_text)
-        appt_meta = get_appointment_meta(message_text)
+        appt_meta = get_appointment_meta(message_text, recent_history)
         cust_phone_fmt = format_phone_display(sender_phone)
         name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
         has_explicit_hour = bool(sched_s_iso)
@@ -2421,7 +2543,7 @@ async def unified_whatsapp_webhook(req: Request):
                 (
                     sender_phone,
                     f"נעם שיח - {appt_meta['short_label']}",
-                    message_text,
+                    message_text if _classify_single_service_text(message_text) else f"{message_text} ({appt_meta['type_label']})",
                     f"תיאום ל{sched_display} - ממתין לאישור מנהל",
                     "",
                     "pending",
@@ -2553,9 +2675,16 @@ async def unified_whatsapp_webhook(req: Request):
      "האם תרצה פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות? 😃"
    • אם הדגם או המחיר ידועים לך מהרשימה לעיל — ענה מיד במדויק! לעולם אל תגיד שאתה בודק או שתחזור אליו על מכשירים שמחירם ידוע!
 
-4. תיאום מועדי התקנות מרחוק ופגישות — חובת אישור מנהל (ערן), בירור מספר טלפון נוח לחזרה, ותזכורת 15 דקות לפני הפגישה:
-   • חל איסור מוחלט על הסוכן לקבוע, לסגור או לאשר מועד התקנה מרחוק, טכנאי או פגישה ישירות מול לקוח על דעת עצמו!
-   • אינך יודע את היומן והלו"ז הפרטי של ערן, ולכן לעולם אל תאמר ללקוח "קבענו ליום ראשון ב-14:00" או "נקבע לך" ללא אישור מראש של ערן!
+4. תיאום תורים, רכישת מכשירים בחנות, התקנות מרחוק ותיקוני מעבדה — הבחנה מדויקת בין השירותים, חובת אישור מנהל (ערן), בירור טלפון לחזרה ותזכורת 15 דקות:
+   • חובה להבדיל בצורה מדויקת בין השירותים השונים שהחנות מציעה (לעולם אל תקרא לרכישת מכשיר בחנות "תיקון במעבדה"!):
+     1. תור לרכישת מכשיר כשר / מכשיר חדש בחנות (ברחוב ישעיהו 10, חדרה — בחנות שלנו, לא במעבדה!)
+     2. תור להתקנת סינון והגנה / הכשרת מכשיר בחנות (כשר פליי / נטספרק בחנות)
+     3. התקנת סינון והגנה מרחוק במחשב (באמצעות AnyDesk / שליטה מרחוק)
+     4. תור לטיפול בסים / קו כשר / ניוד קווים בחנות
+     5. תור להעברת נתונים וגיבוי בחנות
+     6. תור לתיקון מכשיר במעבדה (אך ורק כאשר הלקוח מבקש לתקן תקלה פיזית או מכשיר במעבדה)
+   • חל איסור מוחלט על הסוכן לקבוע, לסגור או לאשר תור או מועד התקנה ישירות מול לקוח על דעת עצמו, ולעולם אין להמציא שעה שהלקוח לא ציין!
+   • אינך יודע את היומן והלו"ז הפרטי של ערן, ולכן לעולם אל תאמר ללקוח "קבענו" ללא אישור מראש של ערן!
    • כיצד לפעול כאשר לקוח מבקש לקבוע מועד (למשל: "אפשר לקבוע ליום ראשון ב-14:00?" או "תתאם לי למחר בבוקר"):
      1. ענה ללקוח שאתה בודק כעת את היומן והזמינות של ערן עבור המועד המבוקש וכבר חוזר אליו עם אישור.
      2. חובה לשאול תמיד את הלקוח: "בנוסף, האם המספר שממנו אנחנו מתכתבים כעת הוא המספר הנוח לחזרה אליך להתחברות, או שאתה מעדיף מספר אחר?"
@@ -2674,14 +2803,15 @@ async def unified_whatsapp_webhook(req: Request):
     is_scheduling = is_scheduling_request(message_text)
     if is_scheduling:
         sched_display, sched_s_iso, sched_e_iso = parse_scheduling_datetime(message_text)
+        appt_meta = get_appointment_meta(message_text, recent_history)
         cust_phone_fmt = format_phone_display(sender_phone)
         name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
         reply_text = (
-            f"תודה על העדכון{name_str}! אני בודק כעת את היומן והזמינות של ערן עבור {sched_display} וכבר חוזר אליך עם אישור סופי. 😃\n\n"
-            f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך להתחברות, או שאתה מעדיף מספר אחר?"
+            f"תודה על העדכון{name_str}! אני בודק כעת את היומן והזמינות של ערן עבור {appt_meta['short_label']} ל{sched_display} וכבר חוזר אליך עם אישור סופי. 😃\n\n"
+            f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך, או שאתה מעדיף מספר אחר?"
         )
         escalation_question = (
-            f"תיאום התקנה מרחוק ל{sched_display} עבור {customer_name or cust_phone_fmt} (טלפון לחזרה: {cust_phone_fmt}) - האם המועד מתאים לך? (השב 'כן' לאישור ביומן, או ציין שעה חלופית)"
+            f"תיאום {appt_meta['type_label']} ל{sched_display} עבור {customer_name or cust_phone_fmt} (טלפון לחזרה: {cust_phone_fmt}) - האם המועד מתאים לך? (השב 'כן' לאישור ביומן, או ציין שעה חלופית)"
         )
         is_escalated = True
     else:
