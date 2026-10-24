@@ -297,7 +297,7 @@ async def inactivity_closing_timer(phone: str, prompt_timestamp: float, raw_chat
     print(f"[Inactivity Closing Sent] To {phone} after 35s timeout.")
 
 # ----------------- Greeting Detection -----------------
-def is_thank_you_or_closing(text: str) -> bool:
+def is_thank_you_or_closing(text: str, recent_history: str = "") -> bool:
     clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
     words = clean.split()
     if not words or len(words) > 7:
@@ -307,9 +307,15 @@ def is_thank_you_or_closing(text: str) -> bool:
         "יישר כח", "יישר כוח", "שכוייח", "תזכו למצוות", "תבורכו", "מעולה תודה",
         "אחלה תודה", "יופי תודה", "בסדר גמור תודה", "מצוין תודה", "הבנתי תודה",
         "תודה רבה עזרת לי", "עזרת לי מאוד", "עזרתם לי מאוד", "יום טוב", "שבוע טוב",
-        "שבת שלום", "חג שמח", "להתראות", "ביי", "לילה טוב"
+        "שבת שלום", "חג שמח", "להתראות", "ביי", "לילה טוב",
+        "לא תודה", "לא הכל טוב", "זה הכל תודה", "זהו תודה", "הכל בסדר תודה"
     ]
-    return any(phrase in clean for phrase in closing_phrases)
+    if any(phrase in clean for phrase in closing_phrases):
+        return True
+    # If the bot just asked "האם אוכל לעזור לך במשהו נוסף?" and customer replies "לא" / "לא הכל בסדר" / "זה הכל"
+    if "במשהו נוסף" in (recent_history or "") and clean in ["לא", "לא הכל בסדר", "לא צריך", "זה הכל", "זהו", "הכל טוב"]:
+        return True
+    return False
 
 def is_satisfaction_yes(text: str) -> bool:
     clean = re.sub(r"[^\w\sא-ת]", " ", text or "").strip().lower()
@@ -728,8 +734,9 @@ def generate_google_calendar_link(title: str, start_iso: str, end_iso: str, deta
 
 def is_in_progress_or_question(text: str) -> bool:
     """
-    Checks if a message is an open question, diagnostic inquiry, or intermediate step
-    expecting a customer response or action, where asking 'did I help you' is strictly premature.
+    Checks if a message is an open question, diagnostic inquiry, conditional offer (e.g. ordering a part/device
+    if the customer wants), or intermediate step expecting a customer response or action, where asking
+    a closing satisfaction question is strictly premature.
     """
     if not text:
         return False
@@ -739,13 +746,15 @@ def is_in_progress_or_question(text: str) -> bool:
     clean_no_closing = (
         clean.replace("האם הצלחתי לעזור לך ולתת לך מענה לפנייתך", "")
         .replace("האם הצלחתי לעזור", "")
+        .replace("האם אוכל לעזור לך במשהו נוסף", "")
+        .replace("האם אוכל לעזור במשהו נוסף", "")
         .replace("האם תרצה פירוט מורחב של ההבדלים", "")
         .replace("האם תרצה פירוט מורחב", "")
     )
     if "?" in clean_no_closing or "؟" in clean_no_closing:
         return True
 
-    question_stems = [
+    question_and_open_offer_stems = [
         "איזה", "איזו", "אילו", "מה סוג", "איזה סוג", "מה הדגם", "איזה דגם",
         "מה התקלה", "מה קורה", "מה מופיע", "מה רשום", "סוג ההגנה", "סוג הגנה",
         "כשר פליי או נטספרק", "איזה סינון", "איזה הגנה", "תוכל לבדוק",
@@ -753,9 +762,15 @@ def is_in_progress_or_question(text: str) -> bool:
         "עדכני אותי", "עדכן", "תעדכן", "תנסה", "תנסו", "תבדוק", "תבדקי", "נסה",
         "היכנס", "לחץ", "בצע", "הפעל", "הפעל מחדש", "התקן", "בדוק", "שישאל", "תשאל", "לשאול",
         "באיזה מכשיר", "באיזה דגם", "איך זה קרה", "ממתי", "שלח לי", "תשלח",
-        "אם זה הסתדר", "אם הסתדר"
+        "אם זה הסתדר", "אם הסתדר",
+        # Open offers & conditional ordering phrases (customer is expected to reply yes/no!)
+        "אם אתה רוצה", "אם תרצה", "אם את רוצה", "אם תרצי", "אם הלקוח רוצה", "אם הוא רוצה",
+        "אם אתה מעוניין", "אם הלקוח מעוניין", "אם מתאים לך", "אם זה מתאים לך",
+        "אפשר להזמין", "ניתן להזמין", "צריך להזמין", "תרצה שנזמין", "רוצה שנזמין",
+        "נזמין לך", "נזמין עבורך", "להזמין לך", "להזמין עבורך", "תרצה שנשמור",
+        "מה אתה מעדיף", "מה דעתך"
     ]
-    if any(stem in clean for stem in question_stems):
+    if any(stem in clean for stem in question_and_open_offer_stems):
         return True
 
     checking_stems = [
@@ -768,41 +783,56 @@ def is_in_progress_or_question(text: str) -> bool:
 
     return False
 
-def adapt_admin_answer(raw_answer: str) -> tuple[str, bool]:
+def adapt_admin_answer(raw_answer: str, request_text: str = "") -> tuple[str, bool]:
     """
-    Converts 3rd person admin instructions (e.g. 'שישאל מה סוג ההגנה שיש ללקוח')
-    into direct, polite 2nd person statements/questions for the customer.
+    Converts 3rd-person admin notes/instructions (e.g. 'אין במלאי וצריך להזמין אם הלקוח רוצה',
+    'תגיד לו ש...', 'שישאל מה סוג ההגנה שיש ללקוח') into natural, direct 2nd-person
+    statements/questions addressed to the customer.
+    Never parrots 3rd-person admin phrasing verbatim!
     Returns (adapted_text, is_question_or_in_progress).
     """
-    clean = str(raw_answer).strip()
+    clean = str(raw_answer or "").strip()
+    if not clean:
+        return "", False
 
-    # Common admin instruction patterns
-    if re.search(r'(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+)?מה\s+סוג\s+ההגנה', clean, re.IGNORECASE):
-        adapted = "כדי שנוכל לעזור לך לסדר את המכשיר מרחוק, מה סוג ההגנה שמותקן עליו כרגע? (למשל: כשר פליי / נטספרק / אחר)"
-        return adapted, True
+    # 1. Specific diagnostic question templates
+    if re.search(r"(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+|אותו\s+)?מה\s+סוג\s+ההגנה", clean, re.IGNORECASE):
+        return "כדי שנוכל לעזור לך לסדר את המכשיר מרחוק, מה סוג ההגנה שמותקן עליו כרגע? (למשל: כשר פליי / נטספרק / אחר)", True
 
-    if re.search(r'(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+)?איזה\s+(?:סוג\s+)?הגנה', clean, re.IGNORECASE):
-        adapted = "כדי שנוכל לעזור לך לסדר את המכשיר מרחוק, איזה סוג הגנה יש לך על המכשיר? (כשר פליי / נטספרק / אחר)"
-        return adapted, True
+    if re.search(r"(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+|אותו\s+)?איזה\s+(?:סוג\s+)?הגנה", clean, re.IGNORECASE):
+        return "כדי שנוכל לעזור לך לסדר את המכשיר מרחוק, איזה סוג הגנה יש לך על המכשיר? (כשר פליי / נטספרק / אחר)", True
 
-    if re.search(r'(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+)?(?:מה\s+)?איזה\s+דגם', clean, re.IGNORECASE):
-        adapted = "באיזה דגם מכשיר מדובר בדיוק?"
-        return adapted, True
+    if re.search(r"(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+|אותו\s+)?(?:מה\s+)?איזה\s+דגם", clean, re.IGNORECASE):
+        return "באיזה דגם מכשיר מדובר בדיוק?", True
 
-    # Generic 'שישאל...' or 'תשאל...'
-    m_ask = re.match(r'^(?:שישאל|תשאל|לשאול)\s+(?:אותו\s+|את\s+הלקוח\s+)?(.+)$', clean)
+    # 2. Strip leading meta-directives directed at the bot ("תגיד לו ש...", "תרשום ללקוח ש...", "תמסור לו ש...")
+    clean = re.sub(
+        r"^(?:תגיד|תאמר|תמסור|תכתוב|תרשום|תעדכן|תענה|תשיב)\s+(?:לו|לה|ללקוח|אותו|את\s+הלקוח)\s*(?:ש-|ש|:)?\s*",
+        "",
+        clean,
+        flags=re.IGNORECASE
+    ).strip()
+
+    # 3. Generic "שישאל אותו..." / "תשאל את הלקוח..."
+    m_ask = re.match(r"^(?:שישאל|תשאל|לשאול)\s+(?:אותו\s+|את\s+הלקוח\s+)?(?:אם\s+|האם\s+)?(.+)$", clean)
     if m_ask:
+        is_if = bool(re.match(r"^(?:שישאל|תשאל|לשאול)\s+(?:אותו\s+|את\s+הלקוח\s+)?(?:אם|האם)\s+", clean))
         content = m_ask.group(1).strip()
-        content = re.sub(r'לו', 'לך', content)
-        content = re.sub(r'שלו', 'שלך', content)
-        content = re.sub(r'אותו', 'אותך', content)
-        content = re.sub(r'המכשיר שלו', 'המכשיר שלך', content)
-        if not content.endswith('?'):
-            content += '?'
+        content = re.sub(r"\bהלקוח\s+רוצה\b", "אתה רוצה", content)
+        content = re.sub(r"\bהוא\s+רוצה\b", "אתה רוצה", content)
+        content = re.sub(r"\bהוא\s+מעוניין\b", "אתה מעוניין", content)
+        content = re.sub(r"\bלו\b", "לך", content)
+        content = re.sub(r"\bשלו\b", "שלך", content)
+        content = re.sub(r"\bאותו\b", "אותך", content)
+        content = re.sub(r"\bהוא\b", "אתה", content)
+        if is_if and not content.startswith(("האם", "אם")):
+            content = f"האם {content}"
+        if not content.endswith("?"):
+            content += "?"
         return content, True
 
-    # Instruction steps like 'שיכנס להגדרות ואז...'
-    m_step = re.match(r'^(?:שיכנס|שילחץ|שיבצע|שיוריד|שיעדכן|שיפעיל)\s+(.+)$', clean)
+    # 4. Instruction steps starting with 3rd-person jussives ("שיכנס להגדרות ואז...")
+    m_step = re.match(r"^(?:שיכנס|שילחץ|שיבצע|שיוריד|שיעדכן|שיפעיל)\s+(.+)$", clean)
     if m_step:
         verb = clean.split()[0]
         rest = clean[len(verb):].strip()
@@ -815,11 +845,84 @@ def adapt_admin_answer(raw_answer: str) -> tuple[str, bool]:
             "שיפעיל": "הפעל"
         }
         direct_verb = verb_map.get(verb, verb)
+        rest = re.sub(r"\bלו\b", "לך", rest)
+        rest = re.sub(r"\bשלו\b", "שלך", rest)
         adapted = f"{direct_verb} {rest}\nעדכן אותי בבקשה אם זה הסתדר לך."
         return adapted, True
 
-    is_q = is_in_progress_or_question(clean)
-    return clean, is_q
+    # 5. General 3rd-person -> 2nd-person transformation for any Admin message (such as "אין במלאי וצריך להזמין אם הלקוח רוצה")
+    adapted = clean
+
+    # Convert "וצריך להזמין" / "צריך להזמין" into customer-facing "אפשר להזמין"
+    adapted = re.sub(r"\bוצריך\s+להזמין\b", "ואפשר להזמין", adapted)
+    adapted = re.sub(r"\bצריך\s+להזמין\b", "אפשר להזמין", adapted)
+
+    # Convert 3rd-person customer references into direct 2nd-person ("אתה" / "לך" / "שלך")
+    replacements = [
+        (r"אם\s+הלקוח\s+רוצה", "אם אתה רוצה"),
+        (r"אם\s+הוא\s+רוצה", "אם אתה רוצה"),
+        (r"אם\s+הלקוח\s+ירצה", "אם תרצה"),
+        (r"אם\s+הוא\s+ירצה", "אם תרצה"),
+        (r"אם\s+הלקוח\s+מעוניין", "אם אתה מעוניין"),
+        (r"אם\s+הוא\s+מעוניין", "אם אתה מעוניין"),
+        (r"אם\s+(?:זה\s+)?מתאים\s+ללקוח", "אם זה מתאים לך"),
+        (r"אם\s+(?:זה\s+)?מתאים\s+לו", "אם זה מתאים לך"),
+        (r"אם\s+נוח\s+ללקוח", "אם נוח לך"),
+        (r"אם\s+נוח\s+לו", "אם נוח לך"),
+        (r"עבור\s+הלקוח", "עבורך"),
+        (r"בשביל\s+הלקוח", "בשבילך"),
+        (r"\bעבורו\b", "עבורך"),
+        (r"\bבשבילו\b", "בשבילך"),
+        (r"להזמין\s+ללקוח", "להזמין לך"),
+        (r"להזמין\s+לו\b", "להזמין לך"),
+        (r"לסדר\s+ללקוח", "לסדר לך"),
+        (r"לסדר\s+לו\b", "לסדר לך"),
+        (r"לבדוק\s+ללקוח", "לבדוק לך"),
+        (r"לבדוק\s+לו\b", "לבדוק לך"),
+        (r"לשמור\s+ללקוח", "לשמור לך"),
+        (r"לשמור\s+לו\b", "לשמור לך"),
+        (r"המכשיר\s+של\s+הלקוח", "המכשיר שלך"),
+        (r"הטלפון\s+של\s+הלקוח", "הטלפון שלך"),
+        (r"הפלאפון\s+של\s+הלקוח", "הפלאפון שלך"),
+        (r"\bהמכשיר\s+שלו\b", "המכשיר שלך"),
+        (r"\bהטלפון\s+שלו\b", "הטלפון שלך"),
+        (r"\bהפלאפון\s+שלו\b", "הפלאפון שלך"),
+        (r"\bהמסך\s+שלו\b", "המסך שלך"),
+        (r"שיש\s+ללקוח", "שיש לך"),
+        (r"\bשיש\s+לו\b", "שיש לך"),
+        (r"\bשל\s+הלקוח\b", "שלך"),
+        (r"\bאת\s+הלקוח\b", "אותך"),
+        (r"\bללקוח\b", "לך"),
+        (r"\bהלקוח\s+יכול\b", "אתה יכול"),
+        (r"\bהלקוח\s+מוזמן\b", "אתה מוזמן"),
+        (r"\bהלקוח\s+צריך\b", "עליך"),
+        (r"\bשירשום\b", "תרשום לנו"),
+        (r"\bשיכתוב\b", "תכתוב לנו"),
+        (r"\bשיעדכן\b", "תעדכן אותנו"),
+        (r"\bשישלח\b", "שלח לנו"),
+        (r"\bשיביא\b", "אתה מוזמן להביא"),
+        (r"\bשיגיע\b", "אתה מוזמן להגיע"),
+        (r"\bשיבוא\b", "אתה מוזמן להגיע"),
+    ]
+    for pat, repl in replacements:
+        adapted = re.sub(pat, repl, adapted, flags=re.IGNORECASE)
+
+    # Smooth phrasing when "אין במלאי ואפשר להזמין..." is used
+    adapted = re.sub(r"^אין\s+במלאי\s+ואפשר\s+להזמין", "כרגע אין במלאי, אך אפשר להזמין", adapted)
+    adapted = re.sub(r"^אין\s+במלאי\s+אפשר\s+להזמין", "כרגע אין במלאי, אפשר להזמין", adapted)
+
+    # Check if this message is an open offer / ordering option or question awaiting the customer's response
+    is_order_offer = any(w in adapted for w in ["אפשר להזמין", "ניתן להזמין", "להזמין לך", "להזמין עבורך", "נזמין לך"])
+    is_conditional_choice = any(w in adapted for w in ["אם אתה רוצה", "אם תרצה", "אם אתה מעוניין", "אם זה מתאים לך", "אם נוח לך"])
+
+    if (is_order_offer or is_conditional_choice) and "?" not in adapted:
+        if is_order_offer:
+            adapted = adapted.rstrip(".!, ") + ". האם תרצה שנזמין עבורך? 😃"
+        else:
+            adapted = adapted.rstrip(".!, ") + " — האם זה מתאים לך? 😃"
+
+    is_q = is_in_progress_or_question(adapted) or is_order_offer or is_conditional_choice
+    return adapted, is_q
 
 def format_admin_answer_for_customer(target_phone: str, admin_answer: str, request_text: str = "", customer_name: str = "", msg_count: int = 2) -> str:
     # Reduce name usage: only at the very start of conversation
@@ -828,17 +931,17 @@ def format_admin_answer_for_customer(target_phone: str, admin_answer: str, reque
     # Generic accurate lead-in: "חזרתי אליך בנוגע לפנייתך"
     lead_in = f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:" if name_str else "חזרתי אליך בנוגע לפנייתך:"
 
-    adapted_ans, is_in_prog = adapt_admin_answer(admin_answer)
+    adapted_ans, is_in_prog = adapt_admin_answer(admin_answer, request_text)
 
     if adapted_ans.startswith(("שלום", "היי", "הי")):
         reply = adapted_ans
     else:
         reply = f"{lead_in}\n{adapted_ans}"
 
-    # Strictly do NOT append satisfaction question if the message is in progress, asking a question, or awaiting customer action!
+    # Strictly do NOT append satisfaction question if the message is in progress, asking a question, or awaiting customer decision (e.g. ordering a screen)!
     if not is_in_prog and not is_in_progress_or_question(reply):
         closing_q = "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
-        if not any(q in reply for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "לעזור לך"]):
+        if not any(q in reply for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "לעזור לך", "במשהו נוסף"]):
             reply = f"{reply.rstrip()}\n\n{closing_q}"
 
     return reply
@@ -2110,22 +2213,26 @@ async def unified_whatsapp_webhook(req: Request):
                     target_pending = matched_req or all_pending[0]
 
             is_sched_req = bool(target_pending and is_scheduling_request(target_pending[2] or ""))
+            req_text_for_adapt = (target_pending[2] if (target_pending and len(target_pending) > 2) else "") or ""
+            adapted_admin_ans, is_admin_ans_in_prog = adapt_admin_answer(admin_answer, req_text_for_adapt)
 
-            # Save clean rule to learned_kb ONLY for non-scheduling general knowledge questions!
-            if not is_sched_req:
-                if len(parts) > 1 and parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip():
+            # Save clean rule to learned_kb ONLY for general knowledge answers (not scheduling, not open questions, and not temporary out-of-stock/order offers unless explicit keywords were provided)
+            has_explicit_kb_kw = len(parts) > 1 and bool(parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip())
+            is_temp_stock_msg = any(w in admin_answer for w in ["אין במלאי", "אזל", "צריך להזמין", "אפשר להזמין"])
+            if not is_sched_req and (has_explicit_kb_kw or (not is_admin_ans_in_prog and not is_temp_stock_msg)):
+                if has_explicit_kb_kw:
                     keywords = parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip()
                 else:
                     if target_pending and target_pending[2]:
-                        req_words = [w for w in re.sub(r"[^\w\sא-ת]", " ", target_pending[2]).split() if len(w) >= 3 and w not in COMMON_NON_NAMES]
-                        keywords = ", ".join(req_words[:3]) if req_words else "תמיכה טכנית"
+                        req_words = [w for w in re.sub(r"[^\w\sא-ת0-9a-zA-Z]", " ", target_pending[2]).split() if len(w) >= 3 and w not in COMMON_NON_NAMES]
+                        keywords = ", ".join(req_words[:3]) if req_words else ""
                     else:
-                        keywords = "תמיכה טכנית"
+                        keywords = ""
 
                 if keywords and len(keywords) >= 3:
                     conn.execute(
                         "INSERT OR IGNORE INTO learned_kb (keywords, answer, created_at) VALUES (?, ?, ?)",
-                        (keywords, admin_answer, datetime.now().isoformat())
+                        (keywords, adapted_admin_ans, datetime.now().isoformat())
                     )
                     sync_learned_kb_to_json()
 
@@ -2286,16 +2393,22 @@ async def unified_whatsapp_webhook(req: Request):
                         conn.close()
                         return {"ok": True, "admin_action": "alternative_day_requested", "customer": target_cust_phone}
                 else:
-                    conn.execute(
-                        "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
-                        ("נענה על ידי מנהל ונלמד במאגר", target_pending[0])
-                    )
                     cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count)
+                    if is_admin_ans_in_prog or is_in_progress_or_question(cust_reply_msg):
+                        conn.execute(
+                            "UPDATE customer_requests SET status='awaiting_customer_reply', action_taken=? WHERE id=?",
+                            (adapted_admin_ans, target_pending[0])
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
+                            ("נענה על ידי מנהל", target_pending[0])
+                        )
                     send_whatsapp_message(target_cust_phone, cust_reply_msg)
                     save_chat_message(target_cust_phone, "agent", cust_reply_msg)
                 
                 # Start 35s timer for satisfaction closing check ONLY if not an in-progress question/step
-                if "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in cust_reply_msg and not is_in_progress_or_question(cust_reply_msg):
+                if ("האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in cust_reply_msg or "האם אוכל לעזור לך במשהו נוסף" in cust_reply_msg) and not is_in_progress_or_question(cust_reply_msg):
                     ts = std_time.time()
                     PENDING_SATISFACTION_CHECKS[target_cust_phone] = ts
                     asyncio.create_task(inactivity_closing_timer(target_cust_phone, ts, "", target_cust_name))
@@ -2303,9 +2416,12 @@ async def unified_whatsapp_webhook(req: Request):
                 customer_dest = f"{target_cust_phone} (#{target_pending[0]})"
             conn.commit()
             conn.close()
-            confirm_msg = f"✅ התשובה נשמרה במאגר הידע של הסוכן ונשלחה ללקוח ({customer_dest})!"
+            if is_admin_ans_in_prog:
+                confirm_msg = f"✅ ההודעה נוסחה בשפה ישירה ונשלחה ללקוח ({customer_dest}). השיחה נשארה פתוחה להמתנה לתשובת הלקוח!"
+            else:
+                confirm_msg = f"✅ התשובה נשלחה ללקוח ({customer_dest})!"
             send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
-            return {"ok": True, "admin_action": "knowledge_saved", "customer": customer_dest}
+            return {"ok": True, "admin_action": "admin_reply_sent", "customer": customer_dest, "in_progress": is_admin_ans_in_prog}
         except Exception as exc:
             print(f"[Admin Learning Error]: {exc}")
             send_whatsapp_message(sender_phone, f"⚠️ שגיאה בשמירת התשובה: {exc}", raw_chat_id)
@@ -2464,6 +2580,166 @@ async def unified_whatsapp_webhook(req: Request):
                 )
             return {"ok": True, "reply": reply_cb, "type": "callback_phone_confirmed", "callback_phone": cb_detected}
 
+    # 0.6 CHECK IF CUSTOMER HAS AN ACTIVE OPEN DIALOGUE / ORDER OFFER (status == 'awaiting_customer_reply')
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        active_open_row = conn.execute(
+            "SELECT id, request_text, action_taken FROM customer_requests WHERE (phone = ? OR phone LIKE ?) AND status = 'awaiting_customer_reply' ORDER BY id DESC LIMIT 1",
+            (sender_phone, f"%{sender_phone[-9:]}%")
+        ).fetchone()
+        conn.close()
+    except Exception:
+        active_open_row = None
+
+    if active_open_row and not is_scheduling_request(message_text):
+        open_req_id, open_req_text, open_action_taken = active_open_row
+        cust_clean = message_text.strip().lower()
+        cust_phone_fmt = format_phone_display(sender_phone)
+        is_order_context = any(w in (open_action_taken or "") for w in ["להזמין", "נזמין", "הזמנה"])
+        cust_has_neg = bool(re.search(r"\b(?:לא|אין\s+צורך|לא\s+צריך|לא\s+רוצה|לא\s+כרגע|מוותר|אסתדר)\b", cust_clean))
+        is_followup_q = (
+            "?" in message_text
+            or "؟" in message_text
+            or any(q in cust_clean for q in ["כמה עולה", "מה המחיר", "כמה זה", "תוך כמה זמן", "מתי יגיע", "מתי זה מגיע", "איזה", "האם"])
+        )
+
+        # (A) Customer asks a follow-up question before deciding (e.g. "כמה זה עולה ותוך כמה זמן מגיע?")
+        if is_followup_q:
+            updated_req = f"{open_req_text} | שאלת המשך: {message_text}"
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("UPDATE customer_requests SET status='pending', request_text=?, action_taken=? WHERE id=?", (updated_req, "ממתין לתשובת מנהל על שאלת המשך", open_req_id))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            reply_fq = "תודה! אני בודק כעת את הפרטים מול ערן וכבר חוזר אליך עם תשובה מדויקת. 😃"
+            send_whatsapp_message(sender_phone, reply_fq, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", reply_fq)
+            target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+            for adm in target_admins:
+                send_whatsapp_message(
+                    adm,
+                    f"❓ *שאלת המשך מלקוח בשיחה פתוחה* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                    f"📌 *פנייה מקורית:* {open_req_text}\n"
+                    f"💬 *הודעת הלקוח כעת:* \"{message_text}\"\n\n"
+                    f"💬 *למענה מהיר: פשוט כתוב כאן את התשובה ללקוח (אין צורך לכתוב 'תשובה:')*"
+                )
+            return {"ok": True, "reply": reply_fq, "type": "open_dialogue_followup_question", "escalated": True}
+
+        # (B) Open dialogue was an Order Offer (e.g. "כרגע אין במלאי, אך אפשר להזמין אם אתה רוצה. האם תרצה שנזמין עבורך?")
+        if is_order_context:
+            wants_to_order = not cust_has_neg and (
+                is_satisfaction_yes(message_text)
+                or any(w in cust_clean for w in ["כן", "רוצה", "תזמין", "תזמינו", "בטח", "ודאי", "אשמח", "מעוניין", "סבבה", "בסדר", "מעולה", "בבקשה", "להזמין"])
+            )
+            if wants_to_order:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"הלקוח ביקש להזמין: {message_text}", open_req_id))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                reply_ord = (
+                    "מעולה! העברתי כעת לערן את הבקשה להזמין עבורך, ונעדכן אותך ברגע שיגיע למלאי. 🛠️\n\n"
+                    "האם אוכל לעזור לך במשהו נוסף? 😃"
+                )
+                send_whatsapp_message(sender_phone, reply_ord, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_ord)
+
+                ts = std_time.time()
+                PENDING_SATISFACTION_CHECKS[sender_phone] = ts
+                asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
+
+                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                for adm in target_admins:
+                    send_whatsapp_message(
+                        adm,
+                        f"📦 *אישור הזמנה מלקוח* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                        f"הלקוח ביקש להזמין! (בהמשך לפנייה: \"{open_req_text}\")\n"
+                        f"💬 *תשובת הלקוח:* \"{message_text}\"\n"
+                        f"📞 *טלפון הלקוח:* {cust_phone_fmt}"
+                    )
+                return {"ok": True, "reply": reply_ord, "type": "customer_confirmed_order"}
+            else:
+                # Customer declined the order or finished their remarks ("לא תודה", "לא כרגע", "אסתדר")
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"הלקוח ויתר על הזמנה: {message_text}", open_req_id))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                reply_decline = (
+                    "בסדר גמור, בשמחה!\n\n"
+                    "האם אוכל לעזור לך במשהו נוסף? 😃"
+                )
+                send_whatsapp_message(sender_phone, reply_decline, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_decline)
+
+                ts = std_time.time()
+                PENDING_SATISFACTION_CHECKS[sender_phone] = ts
+                asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
+
+                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                for adm in target_admins:
+                    send_whatsapp_message(
+                        adm,
+                        f"ℹ️ *עדכון מלקוח* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}): הלקוח עדכן שאינו מעוניין להזמין כרגע (\"{message_text}\")."
+                    )
+                return {"ok": True, "reply": reply_decline, "type": "customer_declined_order"}
+
+        # (C) Open dialogue was a diagnostic question or troubleshooting step
+        is_solved = not cust_has_neg and any(w in cust_clean for w in ["הסתדר", "עובד", "הצליח", "נפתר", "תודה רבה עזרת"])
+        if is_solved:
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"נפתר מרחוק: {message_text}", open_req_id))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            reply_solved = (
+                "שמח מאוד לשמוע שהסתדר! 🙌\n\n"
+                "האם אוכל לעזור לך במשהו נוסף? 😃"
+            )
+            send_whatsapp_message(sender_phone, reply_solved, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", reply_solved)
+
+            ts = std_time.time()
+            PENDING_SATISFACTION_CHECKS[sender_phone] = ts
+            asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
+            return {"ok": True, "reply": reply_solved, "type": "open_dialogue_solved"}
+        else:
+            # Customer is providing the diagnostic answer (e.g. "כשר פליי") -> escalate back to Admin!
+            updated_req = f"{open_req_text} | תשובת הלקוח: {message_text}"
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("UPDATE customer_requests SET status='pending', request_text=?, action_taken=? WHERE id=?", (updated_req, "ממתין להנחיות המשך ממנהל", open_req_id))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            reply_cont = "תודה על העדכון! אני בודק זאת כעת מול ערן וכבר חוזר אליך עם המשך המענה. 😃"
+            send_whatsapp_message(sender_phone, reply_cont, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", reply_cont)
+            target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+            for adm in target_admins:
+                send_whatsapp_message(
+                    adm,
+                    f"❓ *תשובת המשך מלקוח בשיחה פתוחה* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                    f"📌 *פנייה מקורית:* {open_req_text}\n"
+                    f"💬 *תשובת הלקוח כעת:* \"{message_text}\"\n\n"
+                    f"💬 *למענה מהיר: פשוט כתוב כאן את התשובה ללקוח (אין צורך לכתוב 'תשובה:')*"
+                )
+            return {"ok": True, "reply": reply_cont, "type": "open_dialogue_diagnostic_reply", "escalated": True}
+
     # 1. FAST DETERMINISTIC PATH: Pure Greetings (Start of conversation: use name + greeting)
     if is_pure_greeting(message_text):
         if not customer_name:
@@ -2477,7 +2753,7 @@ async def unified_whatsapp_webhook(req: Request):
         return {"ok": True, "reply": greeting_reply, "type": "greeting_reply"}
 
     # 1.5 FAST DETERMINISTIC PATH: Satisfaction "YES" or Thank You -> Send Hasidic Blessing
-    if is_satisfaction_yes(message_text) or is_thank_you_or_closing(message_text):
+    if is_satisfaction_yes(message_text) or is_thank_you_or_closing(message_text, recent_history):
         closing_reply = get_closing_reply(customer_name, message_text)
         send_whatsapp_message(sender_phone, closing_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
