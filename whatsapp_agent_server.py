@@ -557,7 +557,12 @@ def extract_explicit_hour_minute(text: str) -> tuple:
             return h, m
         return None, None
 
-    # 1. First priority: Explicit positive proposal markers (e.g. "אפשר ב 16:00", "עדיף ב-16", "רק ב 16:00", "שיגיע ב 16:00", "תקבע ל-16:00")
+    # 0. Highest priority: [PROPOSED_TIME: בשעה HH:MM] tag saved when Admin proposed a new hour
+    m_prop = re.search(r"\[proposed_time:\s*בשעה\s*([0-2]?[0-9]):([0-5][0-9])\]", text.strip().lower(), flags=re.IGNORECASE)
+    if m_prop:
+        return int(m_prop.group(1)), int(m_prop.group(2))
+
+    # 1. First priority: Explicit positive proposal markers (e.g. "אפשר ב 16:00", "לי מתאים ב 16:00", "עדיף ב-16", "רק ב 16:00", "שיגיע ב 16:00", "תקבע ל-16:00")
     pos_patterns = [
         r"(?:אפשר|עדיף|רק|פנוי|שיגיע|שתגיע|נקבע|תקבע|בוא\s+נקבע|נוח|מתאים(?:\s+לי)?)\s*(?:ב|ל|בשעה|לשעה)?\s*-?\s*\b([0-2]?[0-9]):([0-5][0-9])\b",
         r"(?:אפשר|עדיף|רק|פנוי|שיגיע|שתגיע|נקבע|תקבע|בוא\s+נקבע|נוח|מתאים(?:\s+לי)?)\s*(?:ב|ל|בשעה|לשעה)\s*-?\s*\b([0-2]?[0-9])\b",
@@ -595,6 +600,13 @@ def extract_explicit_hour_minute(text: str) -> tuple:
 
     if non_negated:
         return non_negated[-1]
+
+    # 3. Bare hour reply (e.g. Admin replies simply "16" or "ב 16" or "בשעה 16")
+    m_bare = re.match(r"^\s*(?:ב-?|ל-?|בשעה\s+|לשעה\s+|שעה\s+)?([0-2]?[0-9])\s*$", clean)
+    if m_bare:
+        nh, nmn = _normalize_hr(int(m_bare.group(1)), 0, clean)
+        if nh is not None:
+            return nh, nmn
 
     return None, None
 
@@ -1846,6 +1858,38 @@ async def webhook_direct(req: Request):
         return {"ok": True, "service": "ShieldBot AI Webhook Endpoint Active"}
     return await unified_whatsapp_webhook(req)
 
+def is_customer_style_new_inquiry(text: str) -> bool:
+    """
+    Returns True if the incoming text clearly looks like a customer initiating a new inquiry
+    (e.g., asking store hours, asking who the owner is, asking device prices, reporting a broken device,
+    or asking to schedule a new appointment). Used so that when an Admin replies naturally without
+    writing 'תשובה:', the server distinguishes Admin replies from customer test inquiries.
+    """
+    clean = (text or "").strip().lower()
+    if not clean:
+        return False
+    # Explicit admin prefix or 3rd-person instruction to bot is NEVER a customer inquiry
+    if re.match(r"^(?:תשובה|שישאל|תשאל|תגיד\s+לו|תמסור\s+לו|תכתוב\s+לו|תעדכן\s+אותו|שיכנס|שילחץ|שיבצע)", clean):
+        return False
+    if is_pure_greeting(clean) or is_store_info_question(clean) or is_store_owner_question(clean):
+        return True
+    cust_sched_initiators = [
+        "אפשר לקבוע", "אפשר לתאם", "רוצה לקבוע", "רוצה לתאם", "אשמח לקבוע", "אשמח לתאם",
+        "מתי אפשר לקבוע", "מתי אפשר לתאם", "לקבוע תור", "לתאם תור", "לקבוע מחר",
+        "תור לתיקון", "חור לתיקון", "תור למעבדה", "תור לרכוש", "תור לקנות", "תור לרכישת",
+        "שלא יצטרך להמתין", "שלא אצטרך להמתין"
+    ]
+    if any(k in clean for k in cust_sched_initiators):
+        return True
+    cust_inquiry_phrases = [
+        "כמה עולה", "מה המחיר", "יש לכם", "יש לי בעיה", "נשבר לי", "המכשיר שלי",
+        "הטלפון שלי", "הפלאפון שלי", "אני צריך", "אני רוצה לרכוש", "אני רוצה לקנות",
+        "האם אתם מתקנים", "אתם מתקנים", "מה ההבדל בין"
+    ]
+    if any(k in clean for k in cust_inquiry_phrases):
+        return True
+    return False
+
 async def unified_whatsapp_webhook(req: Request):
     print(f"[HTTP Incoming] Received {req.method} to {req.url.path}")
     try:
@@ -1966,14 +2010,41 @@ async def unified_whatsapp_webhook(req: Request):
         )
     )
 
-    # 0. ADMIN LEARNING & SCHEDULING INTERCEPTOR: When Admin replies directly in WhatsApp
-    if sender_phone in admin_numbers_set and ("תשובה:" in message_text or "תשובה " in message_text or is_admin_swipe_reply):
+    # Check if Admin is replying naturally without writing "תשובה:" (when a customer request is awaiting Admin)
+    has_explicit_admin_prefix = (
+        "תשובה:" in message_text
+        or message_text.startswith("תשובה ")
+        or is_admin_swipe_reply
+        or bool(re.search(r"\[?#REQ-\d+\]?", message_text, re.IGNORECASE))
+    )
+    has_other_phone_pending_for_admin = False
+    if sender_phone in admin_numbers_set and not has_explicit_admin_prefix:
+        try:
+            _conn_chk = sqlite3.connect(DB_PATH)
+            _row_chk = _conn_chk.execute(
+                "SELECT id, phone, request_text FROM customer_requests WHERE status = 'pending' AND phone != ? ORDER BY id DESC LIMIT 1",
+                (sender_phone,)
+            ).fetchone()
+            _conn_chk.close()
+            if _row_chk and not is_customer_style_new_inquiry(message_text):
+                has_other_phone_pending_for_admin = True
+        except Exception:
+            pass
+
+    # 0. ADMIN LEARNING & SCHEDULING INTERCEPTOR: Works with OR without "תשובה:"!
+    if sender_phone in admin_numbers_set and (has_explicit_admin_prefix or has_other_phone_pending_for_admin):
         cleaned_msg_for_parts = re.sub(r"^תשובה\s*(?:\[#?REQ-?\d+\]|#\d+)?\s*:?\s*", "", message_text.strip(), flags=re.IGNORECASE)
         parts = cleaned_msg_for_parts.split("|")
         admin_answer = parts[0].strip()
 
         try:
             conn = sqlite3.connect(DB_PATH)
+            # Also clean up any stale pending/awaiting rows that belonged to sender_phone itself so Admin phone is never confused as a waiting customer
+            if has_other_phone_pending_for_admin:
+                conn.execute(
+                    "UPDATE customer_requests SET status='handled' WHERE phone = ? AND status IN ('pending', 'awaiting_customer_time')",
+                    (sender_phone,)
+                )
             
             # 1. Match by explicit Request ID (#REQ-123 or #123) in admin reply or quoted notification
             target_pending = None
@@ -2010,9 +2081,13 @@ async def unified_whatsapp_webhook(req: Request):
                         (q_phone, f"%{q_phone[-9:]}%")
                     ).fetchone()
 
-            # 4. If neither specified nor quoted, match pending requests intelligently by semantic context
+            # 4. If neither specified nor quoted, match pending requests from OTHER phones (phone != sender_phone) first!
             if not target_pending:
-                all_pending = conn.execute(
+                all_pending_other = conn.execute(
+                    "SELECT id, phone, request_text FROM customer_requests WHERE status = 'pending' AND phone != ? ORDER BY id DESC",
+                    (sender_phone,)
+                ).fetchall()
+                all_pending = all_pending_other or conn.execute(
                     "SELECT id, phone, request_text FROM customer_requests WHERE status IN ('pending', 'awaiting_customer_time') ORDER BY id DESC"
                 ).fetchall()
                 if all_pending:
@@ -2020,7 +2095,7 @@ async def unified_whatsapp_webhook(req: Request):
                     matched_req = None
                     # If admin answer contains a time or scheduling words, prioritize pending scheduling requests
                     adm_hr_test, _ = extract_explicit_hour_minute(admin_answer)
-                    if adm_hr_test is not None or any(w in ans_lower for w in ["מתאים", "פנוי", "תקבע", "אפשר ב", "תור"]):
+                    if adm_hr_test is not None or any(w in ans_lower for w in ["מתאים", "פנוי", "תקבע", "אפשר ב", "תור", "כן", "לא"]):
                         for r in all_pending:
                             if is_scheduling_request(r[2] or ""):
                                 matched_req = r
@@ -2117,30 +2192,15 @@ async def unified_whatsapp_webhook(req: Request):
                             (updated_req_text, f"הוצע ללקוח מועד: {disp_time}", target_pending[0])
                         )
 
-                        cal_details = (
-                            f"לקוח: {target_cust_name or 'לקוח'}\n"
-                            f"טלפון לחזרה: {callback_phone}\n"
-                            f"מועד: {disp_time}\n"
-                            f"שירות: {appt_meta['type_label']}\n"
-                            f"⏰ תזכורת מוגדרת: רבע שעה (15 דקות) לפני הפגישה"
-                        )
-                        gcal_url = generate_google_calendar_link(
-                            title=f"{appt_meta['cal_title_prefix']} - {target_cust_name or callback_phone} ({callback_phone}) (נעם שיח)",
-                            start_iso=s_iso,
-                            end_iso=e_iso,
-                            details=cal_details,
-                            location=appt_meta["location"]
-                        )
                         confirm_msg = (
                             f"✅ עדכנתי את הלקוח ({target_cust_name or callback_phone}) שהשעה {proposed_hm} פנויה ({disp_time}) וביקשתי את אישורו!\n"
-                            f"📞 טלפון לחזרה: {callback_phone}\n\n"
-                            f"⏰ תזכורת: רבע שעה (15 דקות) לפני הפגישה.\n"
-                            f"📅 קישור להוספת התזכורת ליומן גוגל עבור *{disp_time}*:\n{gcal_url}"
+                            f"📞 טלפון לחזרה: {callback_phone}\n"
+                            f"📅 אשלח לך את הקישור להוספה ליומן גוגל ברגע שהלקוח יאשר שהשעה מתאימה לו."
                         )
                         send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
                         conn.commit()
                         conn.close()
-                        return {"ok": True, "admin_action": "alternative_time_proposed", "customer": target_cust_phone, "proposed_time": disp_time, "gcal_url": gcal_url}
+                        return {"ok": True, "admin_action": "alternative_time_proposed", "customer": target_cust_phone, "proposed_time": disp_time}
 
                     # CASE 2: Admin approves the requested hour (and an explicit hour exists)
                     elif not has_negation and is_admin_affirmative and (req_hr is not None or adm_hr is not None):
@@ -2566,8 +2626,7 @@ async def unified_whatsapp_webhook(req: Request):
             f"❓ *פנייה מלקוח שדורשת את תשובתך* {f'[#REQ-{saved_req_id}]' if saved_req_id else ''} ({customer_name or cust_phone_fmt}):\n"
             f"📌 *מהות הפנייה:* {admin_summary_line}\n\n"
             f"💬 *הודעת הלקוח:* \"{message_text}\"\n\n"
-            f"🆔 *למענה ישיר, השב (Swipe / Reply) להודעה זו או שלח:*\n"
-            f"תשובה {f'[#REQ-{saved_req_id}]' if saved_req_id else ''}: [התשובה ללקוח]"
+            f"💬 *למענה מהיר: פשוט כתוב כאן את תשובתך (למשל: 'כן' או '16:00' או 'לי מתאים ב 16:00' — אין צורך לכתוב 'תשובה:')*"
         )
         for adm in target_admins:
             send_whatsapp_message(adm, admin_notification)
@@ -2925,8 +2984,7 @@ async def unified_whatsapp_webhook(req: Request):
                 f"📌 *מהות הפנייה והתקלה:* {summary_issue}\n\n"
                 f"💬 *הודעת הלקוח:* \"{message_text}\""
                 f"{history_block}\n\n"
-                f"🆔 *למענה ישיר, השב (Swipe / Reply) להודעה זו או שלח:*\n"
-                f"תשובה {req_tag}: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
+                f"💬 *למענה מהיר: פשוט כתוב כאן את התשובה ללקוח (אין חובה לכתוב 'תשובה:') או השב ב-Swipe להודעה זו.*"
             )
             
             # Small pause before admin send so Green-API never drops consecutive messages to the same chat
