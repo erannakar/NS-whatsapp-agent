@@ -290,7 +290,8 @@ async def inactivity_closing_timer(phone: str, prompt_timestamp: float, raw_chat
     PENDING_SATISFACTION_CHECKS[phone] = None
     
     name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
-    closing_msg = f"מקווה שעזרתי לך היום{name_str}, אני כאן לכל שאלה נוספת. בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
+    shabbat_suffix = " שבת שלום ומבורכת," if is_shabbat_time_or_greeting() else ""
+    closing_msg = f"מקווה שעזרתי לך היום{name_str}, אני כאן לכל שאלה נוספת.{shabbat_suffix} בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
     send_whatsapp_message(phone, closing_msg, raw_chat_id)
     save_chat_message(phone, "agent", closing_msg)
     print(f"[Inactivity Closing Sent] To {phone} after 35s timeout.")
@@ -326,9 +327,162 @@ def is_satisfaction_yes(text: str) -> bool:
     ]
     return any(clean == sig or clean.startswith(sig) or f" {sig} " in f" {clean} " for sig in yes_signals)
 
-def get_closing_reply(customer_name: str = "") -> str:
+def is_shabbat_time_or_greeting(incoming_text: str = "") -> bool:
+    """
+    Checks if the customer greeted with Shabbat Shalom, or if it is currently Erev Shabbat
+    (Friday, or Thursday evening after 18:00) in Israel time.
+    """
+    clean = (incoming_text or "").lower()
+    if any(s in clean for s in ["שבת שלום", "שבת", "לשבת", "סופש", "סופ\"ש", "שבת שלום ומבורך"]):
+        return True
+    try:
+        dt = datetime.now(ZoneInfo("Asia/Jerusalem"))
+        # 4 is Friday, 3 is Thursday (evening), 5 is Saturday (day)
+        if dt.weekday() == 4:
+            return True
+        if dt.weekday() == 3 and dt.hour >= 18:
+            return True
+        if dt.weekday() == 5 and dt.hour < 18:
+            return True
+    except Exception:
+        pass
+    return False
+
+def get_closing_reply(customer_name: str = "", incoming_text: str = "") -> str:
     name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
+    clean = (incoming_text or "").lower()
+    if is_shabbat_time_or_greeting(incoming_text):
+        if "שבת שלום" in clean:
+            return f"שמחתי לעזור{name_str}! תמיד כאן לשירותך. שבת שלום ומבורך, בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
+        return f"שמחתי לעזור{name_str}! תמיד כאן לשירותך. שבת שלום ומבורכת, בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
     return f"שמחתי לעזור{name_str}! תמיד כאן לשירותך. בשורות טובות, שפע ברכה והצלחה וכל טוב! 🌟"
+
+def is_scheduling_request(text: str) -> bool:
+    """
+    Detects if the customer is requesting, suggesting, or coordinating an appointment or installation time.
+    """
+    clean = re.sub(r"[^\w\sא-ת0-9:-]", " ", text or "").strip().lower()
+    scheduling_keywords = [
+        "לקבוע", "לתאם", "קביעת", "תיאום", "לתאם התקנה", "לקבוע התקנה",
+        "מתי אפשר לקבוע", "מתי אפשר לתאם", "לקבוע שעה", "לתאם שעה", "לקבוע יום",
+        "מתאים לי ב", "אפשר לקבוע", "אפשר לתאם", "בוא נקבע", "תקבע לי", "תתאם לי",
+        "מתי אתם פנויים", "מתי פנוי", "האם אפשר ביום", "אפשר ביום", "מתאים ביום"
+    ]
+    if any(k in clean for k in scheduling_keywords):
+        return True
+        
+    has_day = any(d in clean for d in ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "מחר", "היום"])
+    has_time_term = any(t in clean for t in ["בשעה", "ב שעה", "שעה", "בבוקר", "בצהריים", "בערב"]) or bool(re.search(r"\b[1-2]?[0-9]:[0-5][0-9]\b", clean)) or bool(re.search(r"\b(?:ב-?|בשעה\s+)[0-9]{1,2}\b", clean))
+    
+    return bool(has_day and has_time_term)
+
+def parse_scheduling_datetime(text: str):
+    """
+    Parses day of week and hour from customer text, returning (display_text, start_iso, end_iso).
+    """
+    try:
+        now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+    except Exception:
+        now = datetime.now()
+    clean = text.lower()
+    days = {
+        "ראשון": 6,
+        "שני": 0,
+        "שלישי": 1,
+        "רביעי": 2,
+        "חמישי": 3,
+        "שישי": 4,
+        "שבת": 5
+    }
+    target_day = None
+    target_day_name = ""
+    for d_name, d_val in days.items():
+        if f"יום {d_name}" in clean or f"ב{d_name}" in clean or f" ל{d_name}" in clean:
+            target_day = d_val
+            target_day_name = f"יום {d_name}"
+            break
+            
+    from datetime import timedelta
+    if target_day is None:
+        if "מחר" in clean:
+            target_dt = now + timedelta(days=1)
+            target_day_name = "מחר"
+        elif "היום" in clean:
+            target_dt = now
+            target_day_name = "היום"
+        else:
+            target_dt = now + timedelta(days=2)
+            target_day_name = "המועד המבוקש"
+    else:
+        days_ahead = (target_day - now.weekday()) % 7
+        if days_ahead == 0 and now.hour >= 18:
+            days_ahead = 7
+        target_dt = now + timedelta(days=days_ahead)
+        
+    m_hour = re.search(r"\b([0-2]?[0-9]):([0-5][0-9])\b", clean)
+    if m_hour:
+        hr = int(m_hour.group(1))
+        mn = int(m_hour.group(2))
+    else:
+        m_h_single = re.search(r"(?:בשעה|ב-?)\s*([0-2]?[0-9])\b", clean)
+        if m_h_single:
+            hr = int(m_h_single.group(1))
+            mn = 0
+        else:
+            hr = 14
+            mn = 0
+            
+    start = target_dt.replace(hour=hr, minute=mn, second=0, microsecond=0)
+    end = start + timedelta(hours=1)
+    
+    display = f"{target_day_name} ({start.strftime('%d/%m')}) בשעה {start.strftime('%H:%M')}"
+    start_iso = start.strftime("%Y%m%dT%H%M%S")
+    end_iso = end.strftime("%Y%m%dT%H%M%S")
+    return display, start_iso, end_iso
+
+def format_phone_display(phone: str) -> str:
+    digits = re.sub(r"[^0-9]", "", str(phone or ""))
+    if digits.startswith("9720"):
+        digits = "0" + digits[4:]
+    elif digits.startswith("972"):
+        digits = "0" + digits[3:]
+    elif digits.startswith("5") and len(digits) == 9:
+        digits = "0" + digits
+    if len(digits) == 10 and digits.startswith("0"):
+        return f"{digits[:3]}-{digits[3:]}"
+    return str(phone or "")
+
+def detect_callback_phone_in_text(text: str, current_phone: str = "") -> str:
+    clean = (text or "").strip()
+    m = re.search(r"\b(05[0-9]-?[0-9]{7}|0[23489]-?[0-9]{7}|9725[0-9]{8})\b", clean)
+    if m:
+        return format_phone_display(m.group(1))
+    clean_lower = re.sub(r"[^\w\sא-ת]", " ", clean).strip().lower()
+    confirms = [
+        "כן המספר הזה", "במספר הזה", "המספר הזה נוח", "המספר הזה",
+        "כן זה המספר", "כן זה נוח", "נוח לי במספר הזה", "אותו מספר",
+        "כן אותו מספר", "במספר הזה מעולה", "זה המספר שלי", "זה המספר",
+        "המספר נוח", "כן המספר נוח", "כן אפשר במספר הזה", "כן זה בסדר",
+        "כן"
+    ]
+    if clean_lower in confirms or any(c in clean_lower for c in confirms if len(c) > 3):
+        return format_phone_display(current_phone)
+    return ""
+
+def generate_google_calendar_link(title: str, start_iso: str, end_iso: str, details: str = "", location: str = "מרחוק (AnyDesk / שליטה מרחוק)") -> str:
+    import urllib.parse
+    base = "https://calendar.google.com/calendar/render?action=TEMPLATE"
+    s_clean = re.sub(r"[^0-9T]", "", start_iso)
+    e_clean = re.sub(r"[^0-9T]", "", end_iso)
+    if "תזכורת" not in details:
+        details = details.rstrip() + "\n\n⏰ תזכורת מוגדרת: רבע שעה (15 דקות) לפני הפגישה"
+    params = {
+        "text": title,
+        "dates": f"{s_clean}/{e_clean}",
+        "details": details,
+        "location": location
+    }
+    return f"{base}&{urllib.parse.urlencode(params)}"
 
 def is_in_progress_or_question(text: str) -> bool:
     """
@@ -733,6 +887,10 @@ def find_matching_learned_knowledge(message_text: str) -> str:
     Direct deterministic lookup for learned rules and known product prices.
     Uses whole-word and phrase matching, preventing spurious matches on stopwords or single words.
     """
+    # Never answer scheduling requests with canned learned rules!
+    if is_scheduling_request(message_text):
+        return ""
+
     clean = (message_text or "").lower().strip()
     clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
 
@@ -808,6 +966,22 @@ def init_db():
                 )
             """)
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_learned_kb_kw_ans ON learned_kb(keywords, answer)")
+        except Exception:
+            pass
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS installations_schedule (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone TEXT,
+                customer_name TEXT,
+                callback_phone TEXT,
+                details TEXT,
+                scheduled_time TEXT,
+                status TEXT,
+                created_at TEXT
+            )
+        """)
+        try:
+            c.execute("ALTER TABLE installations_schedule ADD COLUMN callback_phone TEXT")
         except Exception:
             pass
         c.execute("""
@@ -1636,9 +1810,85 @@ async def unified_whatsapp_webhook(req: Request):
                 req_text = target_pending[2] if len(target_pending) > 2 else ""
                 target_cust_name = get_contact_name(target_cust_phone)
                 target_msg_count = get_conversation_message_count(target_cust_phone)
-                cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count)
-                send_whatsapp_message(target_cust_phone, cust_reply_msg)
-                save_chat_message(target_cust_phone, "agent", cust_reply_msg)
+
+                # Special Scheduling Handling: If pending request was for installation scheduling
+                is_sched_req = is_scheduling_request(req_text)
+                is_admin_affirmative = any(sig in admin_answer.strip().lower() for sig in ["כן", "מאשר", "מתאים", "סבבה", "תקבע", "קבענו", "בסדר", "מעולה"])
+
+                if is_sched_req and is_admin_affirmative:
+                    disp_time, s_iso, e_iso = parse_scheduling_datetime(req_text)
+                    
+                    # Extract callback phone if customer specified one in conversation
+                    found_cb = ""
+                    recent_cust_text = get_recent_chat_history(target_cust_phone, limit=8)
+                    for line in recent_cust_text.split("\n"):
+                        if "[לקוח]:" in line:
+                            maybe_cb = detect_callback_phone_in_text(line.replace("[לקוח]:", "").strip(), target_cust_phone)
+                            if maybe_cb:
+                                found_cb = maybe_cb
+                    callback_phone = found_cb or format_phone_display(target_cust_phone)
+
+                    name_str = f" {target_cust_name}" if (target_cust_name and target_cust_name not in COMMON_NON_NAMES) else ""
+                    cust_reply_msg = (
+                        f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\n"
+                        f"מועד ההתקנה אושר בהצלחה! קבענו ל{disp_time}.\n"
+                        f"ניצור איתך קשר במספר {callback_phone} להתחברות והתקנה מרחוק במחשב. 😃"
+                    )
+                    send_whatsapp_message(target_cust_phone, cust_reply_msg)
+                    save_chat_message(target_cust_phone, "agent", cust_reply_msg)
+
+                    # Save to installations_schedule table
+                    try:
+                        conn.execute(
+                            "INSERT INTO installations_schedule (phone, customer_name, callback_phone, details, scheduled_time, status, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (target_cust_phone, target_cust_name, callback_phone, req_text, disp_time, "confirmed", datetime.now().isoformat())
+                        )
+                    except Exception:
+                        try:
+                            conn.execute(
+                                "INSERT INTO installations_schedule (phone, customer_name, details, scheduled_time, status, created_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?)",
+                                (target_cust_phone, target_cust_name, f"טלפון לחזרה: {callback_phone} | {req_text}", disp_time, "confirmed", datetime.now().isoformat())
+                            )
+                        except Exception:
+                            pass
+
+                    # Generate Google Calendar 1-click Link for Eran with customer name, callback phone, and 15-minute reminder
+                    cal_details = (
+                        f"לקוח: {target_cust_name or 'לקוח'}\n"
+                        f"טלפון לחזרה ולהתחברות: {callback_phone}\n"
+                        f"מועד: {disp_time}\n"
+                        f"מהות: התקנת סינון והגנה מרחוק במחשב נייח (AnyDesk / שליטה מרחוק)\n"
+                        f"⏰ תזכורת מוגדרת: רבע שעה (15 דקות) לפני הפגישה"
+                    )
+                    gcal_url = generate_google_calendar_link(
+                        title=f"התקנת הגנה במחשב - {target_cust_name or callback_phone} ({callback_phone}) (נעם שיח)",
+                        start_iso=s_iso,
+                        end_iso=e_iso,
+                        details=cal_details,
+                        location="מרחוק (AnyDesk / שליטה מרחוק)"
+                    )
+                    confirm_msg = (
+                        f"✅ מועד ההתקנה אושר מול הלקוח ({target_cust_name or callback_phone}) ל{disp_time}!\n"
+                        f"📞 טלפון לחזרה ולהתחברות: {callback_phone}\n\n"
+                        f"⏰ תזכורת: רבע שעה (15 דקות) לפני הפגישה.\n"
+                        f"📅 לחץ כאן להוספת תזכורת ביומן גוגל בלחיצה אחת:\n{gcal_url}"
+                    )
+                    send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
+                    conn.commit()
+                    conn.close()
+                    return {"ok": True, "admin_action": "appointment_confirmed", "customer": target_cust_phone, "callback_phone": callback_phone, "gcal_url": gcal_url}
+                elif is_sched_req and not is_admin_affirmative:
+                    # Admin provided an alternative time
+                    name_str = f" {target_cust_name}" if (target_cust_name and target_cust_name not in COMMON_NON_NAMES) else ""
+                    cust_reply_msg = f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\nהמועד שביקשת תפוס כרגע. {admin_answer}. האם מועד זה מתאים לך? 😃"
+                    send_whatsapp_message(target_cust_phone, cust_reply_msg)
+                    save_chat_message(target_cust_phone, "agent", cust_reply_msg)
+                else:
+                    cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count)
+                    send_whatsapp_message(target_cust_phone, cust_reply_msg)
+                    save_chat_message(target_cust_phone, "agent", cust_reply_msg)
                 
                 # Start 35s timer for satisfaction closing check ONLY if not an in-progress question/step
                 if "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in cust_reply_msg and not is_in_progress_or_question(cust_reply_msg):
@@ -1677,6 +1927,37 @@ async def unified_whatsapp_webhook(req: Request):
     if sender_phone in PENDING_SATISFACTION_CHECKS:
         PENDING_SATISFACTION_CHECKS[sender_phone] = None
 
+    # Check if customer is replying with confirmation or alternative callback phone
+    cb_detected = detect_callback_phone_in_text(message_text, sender_phone)
+    if cb_detected and not is_scheduling_request(message_text):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            pending_sched = conn.execute(
+                "SELECT id, request_text FROM customer_requests WHERE (phone = ? OR phone LIKE ?) AND status = 'pending' ORDER BY id DESC LIMIT 1",
+                (sender_phone, f"%{sender_phone[-9:]}%")
+            ).fetchone()
+            conn.close()
+            if pending_sched and is_scheduling_request(pending_sched[1]):
+                reply_cb = (
+                    f"מצוין, רשמתי לפניי! 📞\n"
+                    f"נחזור אליך למספר {cb_detected} להתחברות והתקנה מרחוק במועד שייקבע לאחר אישור של ערן. 😃"
+                )
+                send_whatsapp_message(sender_phone, reply_cb, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_cb)
+
+                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                for adm in target_admins:
+                    send_whatsapp_message(
+                        adm,
+                        f"📞 *עדכון טלפון לחזרה עבור התקנה* [#{pending_sched[0]}]:\n"
+                        f"הלקוח ({customer_name or sender_phone}) אישר מספר נוח לחזרה: *{cb_detected}*"
+                    )
+
+                return {"ok": True, "reply": reply_cb, "type": "callback_phone_confirmed", "callback_phone": cb_detected}
+        except Exception as e_cb:
+            print(f"[Callback Phone Check Notice]: {e_cb}")
+
     # 1. FAST DETERMINISTIC PATH: Pure Greetings (Start of conversation: use name + greeting)
     if is_pure_greeting(message_text):
         if not customer_name:
@@ -1691,7 +1972,7 @@ async def unified_whatsapp_webhook(req: Request):
 
     # 1.5 FAST DETERMINISTIC PATH: Satisfaction "YES" or Thank You -> Send Hasidic Blessing
     if is_satisfaction_yes(message_text) or is_thank_you_or_closing(message_text):
-        closing_reply = get_closing_reply(customer_name)
+        closing_reply = get_closing_reply(customer_name, message_text)
         send_whatsapp_message(sender_phone, closing_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", closing_reply)
@@ -1782,6 +2063,55 @@ async def unified_whatsapp_webhook(req: Request):
             pass
             
         return {"ok": True, "reply": warranty_reply, "type": "warranty_full_explanation", "escalated": False}
+
+    # 3.4 FAST DETERMINISTIC PATH: Scheduling / Installation Requests (Never let AI unilaterally book)
+    if is_scheduling_request(message_text):
+        sched_display, sched_s_iso, sched_e_iso = parse_scheduling_datetime(message_text)
+        cust_phone_fmt = format_phone_display(sender_phone)
+        name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
+        reply_sched = (
+            f"תודה על העדכון{name_str}! אני בודק כעת את היומן והזמינות של ערן עבור {sched_display} וכבר חוזר אליך עם אישור סופי. 😃\n\n"
+            f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך להתחברות, או שאתה מעדיף מספר אחר?"
+        )
+        send_whatsapp_message(sender_phone, reply_sched, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", reply_sched)
+
+        saved_req_id = None
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sender_phone,
+                    "נעם שיח - תיאום התקנות",
+                    message_text,
+                    f"תיאום ל{sched_display} - ממתין לאישור מנהל",
+                    "",
+                    "pending",
+                    datetime.now().isoformat()
+                )
+            )
+            saved_req_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+        except Exception as e_s:
+            print(f"[Save Sched Request Notice]: {e_s}")
+
+        target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+        admin_notification = (
+            f"❓ *פנייה מלקוח שדורשת את תשובתך* {f'[#REQ-{saved_req_id}]' if saved_req_id else ''} ({customer_name or cust_phone_fmt}):\n"
+            f"📌 *מהות הפנייה:* תיאום התקנה מרחוק ל{sched_display} עבור {customer_name or cust_phone_fmt} (טלפון לחזרה: {cust_phone_fmt}) - האם המועד מתאים לך? (השב 'כן' לאישור ביומן, או ציין שעה חלופית)\n\n"
+            f"💬 *הודעת הלקוח:* \"{message_text}\"\n\n"
+            f"🆔 *למענה ישיר, השב (Swipe / Reply) להודעה זו או שלח:*\n"
+            f"תשובה {f'[#REQ-{saved_req_id}]' if saved_req_id else ''}: [התשובה ללקוח] | מילות מפתח: [מילות זיהוי]"
+        )
+        for adm in target_admins:
+            send_whatsapp_message(adm, admin_notification)
+
+        return {"ok": True, "reply": reply_sched, "type": "scheduling_request", "escalated": True}
 
     # 3.5 FAST DETERMINISTIC PATH: Learned Knowledge & Known Device Prices (Zero delay, Never escalate)
     kb_answer = find_matching_learned_knowledge(message_text)
@@ -1884,7 +2214,24 @@ async def unified_whatsapp_webhook(req: Request):
      "האם תרצה פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות? 😃"
    • אם הדגם או המחיר ידועים לך מהרשימה לעיל — ענה מיד במדויק! לעולם אל תגיד שאתה בודק או שתחזור אליו על מכשירים שמחירם ידוע!
 
-4. תקלות במכשירים, מכשיר פרוץ, ותיקונים — עזרה אסרטיבית מרחוק תחילה (Remote-First Troubleshooting):
+4. תיאום מועדי התקנות מרחוק ופגישות — חובת אישור מנהל (ערן), בירור מספר טלפון נוח לחזרה, ותזכורת 15 דקות לפני הפגישה:
+   • חל איסור מוחלט על הסוכן לקבוע, לסגור או לאשר מועד התקנה מרחוק, טכנאי או פגישה ישירות מול לקוח על דעת עצמו!
+   • אינך יודע את היומן והלו"ז הפרטי של ערן, ולכן לעולם אל תאמר ללקוח "קבענו ליום ראשון ב-14:00" או "נקבע לך" ללא אישור מראש של ערן!
+   • כיצד לפעול כאשר לקוח מבקש לקבוע מועד (למשל: "אפשר לקבוע ליום ראשון ב-14:00?" או "תתאם לי למחר בבוקר"):
+     1. ענה ללקוח שאתה בודק כעת את היומן והזמינות של ערן עבור המועד המבוקש וכבר חוזר אליו עם אישור.
+     2. חובה לשאול תמיד את הלקוח: "בנוסף, האם המספר שממנו אנחנו מתכתבים כעת הוא המספר הנוח לחזרה אליך להתחברות, או שאתה מעדיף מספר אחר?"
+     3. חובה להסלים למנהל מיד עם תגית ייעודית מפורטת:
+        [ESCALATE: תיאום התקנה מרחוק - לקוח [שם/טלפון] מבקש לקבוע ל[יום ושעה] - האם מתאים לך? (השב 'כן' לאישור וקביעה ביומן, או ציין מועד חלופי)]
+   • כאשר הלקוח עונה לגבי מספר הטלפון לחזרה (למשל: "כן", "זה המספר", "מעדיף שתחזרו ל-05XXXXXXXX"):
+     רשום לפניך את המספר לחזרה, והודע לו: "מצוין, רשמתי לפניי! ניצור איתך קשר במספר זה במועד שייקבע לאחר אישור של ערן."
+   • כאשר המנהל (ערן) מאשר ("כן", "מאשר", "מתאים", "תקבע"):
+     - הודע ללקוח שהמועד אושר בהצלחה וקבעתם ביומן, תוך ציון מספר הטלפון לחזרה.
+     - תעד במסד הנתונים את ההתקנה עם שם הלקוח והטלפון לחזרה.
+     - שלח לערן הודעת אישור בווצאפ הכוללת קישור ישיר ליומן גוגל בלחיצה אחת, שבו:
+       * בכותרת האירוע מופיעים שם הלקוח ומספר הטלפון לחזרה.
+       * בפרטי האירוע מופיעים שם הלקוח, טלפון לחזרה, פירוט ההתקנה, ותזכורת של רבע שעה (15 דקות) לפני המועד!
+
+5. תקלות במכשירים, מכשיר פרוץ, ותיקונים — עזרה אסרטיבית מרחוק תחילה (Remote-First Troubleshooting):
    • עיקרון מנחה קריטי:
      רוב מוחלט של בעיות המכשיר, הסינון וההגנה (ובפרט: "מכשיר פרוץ", "נפרץ לי המכשיר", "הסינון נעלם/קרס", "כשר פליי תקול/נחסם", "נטספרק לא מסנן", אפליקציות שלא נפתחות, או שיבושי הגדרות) — ניתנות לפתרון מלא ופשוט על ידי הלקוח עצמו בעזרת הנחיות מרחוק!
    • איסור מוחלט על שליחת לקוח למעבדה בתקלות תוכנה, סינון ומכשיר פרוץ:
@@ -1926,7 +2273,7 @@ async def unified_whatsapp_webhook(req: Request):
    • כתובת: רחוב ישעיהו 10, חדרה בלבד.
    • כאשר לקוח שואל: "איך קוראים לבעל החנות?", "מי הבעלים?", "מי מנהל את המקום?", "איך קוראים לך?" או "מי זה נעם שיח?" — ענה תמיד בגאווה, אדיבות וחום: לבעל החנות והמעבדה קוראים ערן נקר!
 
-6. שעות פעילות (זמן אמת):
+7. שעות פעילות (זמן אמת):
    • שעות פעילות קבועות: ימים א'-ה' 12:00-20:00 | ימי ו' וערבי חג: שעון קיץ 12:00-15:30, שעון חורף 10:30-13:30 | מוצאי שבת וחג: בתיאום מראש בלבד.
    • זמן נוכחי בישראל: {store_status['current_time_str']}
    • מצב החנות עכשיו: {store_status['status_msg']}
@@ -1936,7 +2283,7 @@ async def unified_whatsapp_webhook(req: Request):
      - אם החנות כעת סגורה ({'סגורה' if not store_status['is_open'] else 'פתוחה'}): לעולם אל תגיד ללקוח "בוא עכשיו" או "אנחנו מחכים לך עכשיו"! ציין תמיד שהחנות סגורה כעת, והמלץ לו להגיע בשעות הפעילות הקרובות כפי שמפורט לעיל.
      - אם החנות כעת פתוחה: הוא מוזמן להגיע עכשיו עד שעת הסגירה.
 
-7. מסלולי סינון והגנה (כשר פליי ונטספרק):
+8. מסלולי סינון והגנה (כשר פליי ונטספרק):
    • כשר פליי (KosherPlay):
      - בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, כ-200 אפליקציות כשרות חיוניות: בנקים, קופות חולים, Waze, וואטסאפ). הרישיון פעיל על המכשיר בלבד (בהחלפת מכשיר יש לרכוש רישיון חדש).
      - מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות כשרות ומוגנות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר. הרישיון נייד ועובר בחינם למכשיר חדש (משלמים רק 180 ₪ התקנה)!
@@ -1944,13 +2291,13 @@ async def unified_whatsapp_webhook(req: Request):
      - 350 ₪ לשנה (רישיון שנתי).
      - שינוי רמות סינון מיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית).
 
-8. מצב מנוי הלקוח הנוכחי:
+9. מצב מנוי הלקוח הנוכחי:
    {subscriber_context}
 
-9. כללים שנלמדו:
+10. כללים שנלמדו:
    {learned_rules}
 
-10. כלל סיום מענה ואיחולים חסידיים (חשוב ביותר!):
+11. כלל סיום מענה ואיחולים חסידיים (חשוב ביותר!):
    • חל איסור מוחלט להוסיף איחולים חסידיים ("בשורות טובות", "כל טוב", "ברכה והצלחה") בכל הודעה או בתשובות שוטפות! זה יוצר תחושה שאתה מנסה להתפטר מהלקוח.
    • כאשר אתה נותן ללקוח מענה מלא לשאלתו, סיים תמיד את הודעתך בשאלה:
      "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
@@ -1984,9 +2331,23 @@ async def unified_whatsapp_webhook(req: Request):
         reply_text = "אני בודק כעת את הזמינות והמחיר העדכני, ומיד חוזר אליך עם תשובה מדויקת. 😃"
 
     # Comprehensive Escalation Detection:
-    # 1. Explicit tag from AI
-    is_escalated = False
-    escalation_question = message_text
+    # 0. Scheduling Requests Enforcement (NEVER let AI unilaterally book without Eran!)
+    is_scheduling = is_scheduling_request(message_text)
+    if is_scheduling:
+        sched_display, sched_s_iso, sched_e_iso = parse_scheduling_datetime(message_text)
+        cust_phone_fmt = format_phone_display(sender_phone)
+        name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
+        reply_text = (
+            f"תודה על העדכון{name_str}! אני בודק כעת את היומן והזמינות של ערן עבור {sched_display} וכבר חוזר אליך עם אישור סופי. 😃\n\n"
+            f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך להתחברות, או שאתה מעדיף מספר אחר?"
+        )
+        escalation_question = (
+            f"תיאום התקנה מרחוק ל{sched_display} עבור {customer_name or cust_phone_fmt} (טלפון לחזרה: {cust_phone_fmt}) - האם המועד מתאים לך? (השב 'כן' לאישור ביומן, או ציין שעה חלופית)"
+        )
+        is_escalated = True
+    else:
+        is_escalated = False
+        escalation_question = message_text
     if "[ESCALATE:" in reply_text:
         match = re.search(r"\[ESCALATE:\s*([^\]]+)\]", reply_text)
         if match:
