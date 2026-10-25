@@ -73,10 +73,42 @@ ADMIN_WHATSAPP_PHONE = DEFAULT_ADMIN_PHONE if (not _raw_admin or _raw_admin == "
 BIT_PAYMENT_PHONE = os.getenv("BIT_PAYMENT_PHONE", "052-4043644").strip().strip('"').strip("'")
 BIT_PAYMENT_PHONE_DIGITS = "0524043644"
 
-# Live POS / Cash Register Integration (PC Software Push Sync or Direct Cloud API Pull)
-POS_API_URL = os.getenv("POS_API_URL", "").strip().strip('"').strip("'")
-POS_API_KEY = os.getenv("POS_API_KEY", "").strip().strip('"').strip("'")
-POS_SYNC_SECRET = os.getenv("POS_SYNC_SECRET", "").strip().strip('"').strip("'") 
+# Live POS / NewOrder Cellular & BackOffice Integration (https://cellular.neworder.co.il/heb/login.aspx)
+DEFAULT_NEWORDER_URL = "https://cellular.neworder.co.il/heb/login.aspx"
+_raw_pos_url = (
+    os.getenv("NEWORDER_URL", "")
+    or os.getenv("NEWORDER_API_URL", "")
+    or os.getenv("POS_API_URL", "")
+    or DEFAULT_NEWORDER_URL
+).strip().strip('"').strip("'")
+# Strip Google Analytics (_gl / _ga) query params from login.aspx URL if present
+POS_API_URL = re.sub(r"\?_gl=.*$", "", _raw_pos_url).strip()
+NEWORDER_BASE_URL = "https://cellular.neworder.co.il/heb"
+if POS_API_URL.startswith("http"):
+    m_base = re.match(r"^(https?://[^/]+(?:/heb)?)", POS_API_URL, re.IGNORECASE)
+    if m_base:
+        NEWORDER_BASE_URL = m_base.group(1).rstrip("/")
+
+POS_API_KEY = (os.getenv("NEWORDER_API_KEY", "") or os.getenv("POS_API_KEY", "")).strip().strip('"').strip("'")
+NEWORDER_COMPANY = (
+    os.getenv("NEWORDER_COMPANY", "")
+    or os.getenv("NEWORDER_COMPANY_NAME", "")
+    or os.getenv("POS_COMPANY", "")
+).strip().strip('"').strip("'")
+NEWORDER_USERNAME = (os.getenv("NEWORDER_USERNAME", "") or os.getenv("POS_USERNAME", "")).strip().strip('"').strip("'")
+NEWORDER_PASSWORD = (os.getenv("NEWORDER_PASSWORD", "") or os.getenv("POS_PASSWORD", "")).strip().strip('"').strip("'")
+NEWORDER_BRANCH_ID = os.getenv("NEWORDER_BRANCH_ID", "1").strip().strip('"').strip("'")
+POS_SYNC_SECRET = os.getenv("POS_SYNC_SECRET", "").strip().strip('"').strip("'")
+
+# Cached NewOrder ASP.NET / BackOffice session state (cookies, token, discovered pages)
+NEWORDER_SESSION_CACHE = {
+    "token": "",
+    "cookies": {},
+    "authenticated_at": 0.0,
+    "landing_url": "",
+    "discovered_pages": [],
+    "detected_form_fields": [],
+} 
 
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().strip('"').strip("'")
 PORT = os.getenv("PORT", "8000")
@@ -2675,6 +2707,10 @@ BACKUP_POS_JSON_PATH = os.path.join(
     os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
     "pos_inventory_cache.json"
 )
+BACKUP_REPAIRS_JSON_PATH = os.path.join(
+    os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
+    "cellular_repairs_cache.json"
+)
 BACKUP_ITEM_PRICES_JSON_PATH = os.path.join(
     os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
     "learned_item_prices_cache.json"
@@ -2913,10 +2949,325 @@ def format_pos_item_answer(item: dict) -> str:
         return f"כן, *{name}* זמין אצלנו במלאי במחיר *{price_val} ₪*. 📱{color_line}\n🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך כעת כדי שלא תיתקע בלי? 😃"
     return ""
 
+def _parse_aspnet_form_inputs(html_text: str) -> dict:
+    """
+    Parses an ASP.NET WebForms HTML page (such as https://cellular.neworder.co.il/heb/login.aspx)
+    to extract all <input> fields, including:
+    - hidden fields (__VIEWSTATE, __VIEWSTATEGENERATOR, __EVENTVALIDATION)
+    - 3 login fields: company input(s) (שם חברה), username input(s) (שם משתמש), password input(s) (סיסמה)
+    - submit button name and value
+    """
+    hidden_fields = {}
+    company_inputs = []
+    user_inputs = []
+    other_text_inputs = []
+    password_inputs = []
+    submit_inputs = []
+
+    company_keywords = ["comp", "firm", "business", "client", "account", "branch", "store", "org", "חברה", "עסק", "סניף", "לקוח", "קוד"]
+    user_keywords = ["user", "login", "uname", "emp", "worker", "agent", "משתמש", "עובד"]
+
+    for m_inp in re.finditer(r"<input\b([^>]+)>", html_text or "", flags=re.IGNORECASE):
+        attrs_raw = m_inp.group(1)
+        m_name = re.search(r"\bname\s*=\s*[\x22\x27]([^\x22\x27]+)[\x22\x27]", attrs_raw, re.IGNORECASE)
+        if not m_name:
+            continue
+        inp_name = m_name.group(1).strip()
+        m_id = re.search(r"\bid\s*=\s*[\x22\x27]([^\x22\x27]+)[\x22\x27]", attrs_raw, re.IGNORECASE)
+        inp_id = m_id.group(1).strip() if m_id else ""
+        m_ph = re.search(r"\b(?:placeholder|title|aria-label)\s*=\s*[\x22\x27]([^\x22\x27]+)[\x22\x27]", attrs_raw, re.IGNORECASE)
+        inp_ph = m_ph.group(1).strip() if m_ph else ""
+        m_type = re.search(r"\btype\s*=\s*[\x22\x27]([^\x22\x27]+)[\x22\x27]", attrs_raw, re.IGNORECASE)
+        inp_type = (m_type.group(1).strip().lower() if m_type else "text")
+        m_val = re.search(r"\bvalue\s*=\s*[\x22\x27]([^\x22\x27]*)[\x22\x27]", attrs_raw, re.IGNORECASE)
+        inp_val = m_val.group(1) if m_val else ""
+
+        combined_meta = f"{inp_name} {inp_id} {inp_ph}".lower()
+
+        if inp_type == "hidden" or inp_name.startswith("__"):
+            hidden_fields[inp_name] = inp_val
+        elif inp_type == "password" or any(k in combined_meta for k in ["pass", "pwd", "סיסמ"]):
+            password_inputs.append(inp_name)
+        elif inp_type in ("submit", "image", "button") or any(k in inp_name.lower() for k in ["btn", "submit", "cmdlogin", "loginbutton"]):
+            submit_inputs.append((inp_name, inp_val))
+        elif inp_type in ("text", "email", "tel", "number"):
+            if any(k in combined_meta for k in company_keywords):
+                company_inputs.append(inp_name)
+            elif any(k in combined_meta for k in user_keywords):
+                user_inputs.append(inp_name)
+            else:
+                other_text_inputs.append(inp_name)
+
+    # Smart positional resolution for NewOrder's 3-field login form (שם חברה + שם משתמש + סיסמה)
+    if other_text_inputs:
+        if not company_inputs and not user_inputs:
+            if len(other_text_inputs) >= 2:
+                company_inputs.append(other_text_inputs[0])
+                user_inputs.extend(other_text_inputs[1:])
+            else:
+                user_inputs.extend(other_text_inputs)
+        elif company_inputs and not user_inputs:
+            user_inputs.extend(other_text_inputs)
+        elif user_inputs and not company_inputs:
+            company_inputs.extend(other_text_inputs)
+
+    all_text_inputs = company_inputs + [u for u in user_inputs if u not in company_inputs]
+    return {
+        "hidden_fields": hidden_fields,
+        "company_inputs": company_inputs,
+        "user_inputs": user_inputs,
+        "text_inputs": all_text_inputs,
+        "password_inputs": password_inputs,
+        "submit_inputs": submit_inputs,
+    }
+
+
+def authenticate_neworder_backoffice(
+    force_refresh: bool = False,
+    override_company: str = "",
+    override_username: str = "",
+    override_password: str = "",
+) -> dict:
+    """
+    Authenticates directly against NewOrder Cellular & BackOffice portal
+    (https://cellular.neworder.co.il/heb/login.aspx) using all 3 login fields:
+    1. Company Name (שם חברה - NEWORDER_COMPANY)
+    2. Username (שם משתמש - NEWORDER_USERNAME)
+    3. Password (סיסמה - NEWORDER_PASSWORD)
+    Supports ASP.NET WebForms 2-step login, AJAX WebMethod fallback, or NEWORDER_API_KEY.
+    Caches the authenticated session cookies (.ASPXAUTH, ASP.NET_SessionId) for fast live queries!
+    """
+    now_ts = std_time.time()
+    has_overrides = bool(override_company or override_username or override_password)
+    if not force_refresh and not has_overrides and NEWORDER_SESSION_CACHE.get("authenticated_at", 0) > 0 and (now_ts - NEWORDER_SESSION_CACHE["authenticated_at"] < 1500):
+        if NEWORDER_SESSION_CACHE.get("cookies") or NEWORDER_SESSION_CACHE.get("token"):
+            return {
+                "ok": True,
+                "cached": True,
+                "mode": "cached_session",
+                "landing_url": NEWORDER_SESSION_CACHE.get("landing_url", ""),
+                "discovered_pages": NEWORDER_SESSION_CACHE.get("discovered_pages", []),
+                "cookies": NEWORDER_SESSION_CACHE["cookies"],
+                "token": NEWORDER_SESSION_CACHE["token"],
+            }
+
+    if POS_API_KEY and not has_overrides:
+        tok = f"Bearer {POS_API_KEY}" if not POS_API_KEY.lower().startswith("bearer ") else POS_API_KEY
+        NEWORDER_SESSION_CACHE["token"] = tok
+        NEWORDER_SESSION_CACHE["authenticated_at"] = now_ts
+        return {"ok": True, "mode": "api_key", "token": tok, "cookies": {}}
+
+    eff_company = (override_company or NEWORDER_COMPANY).strip()
+    eff_username = (override_username or NEWORDER_USERNAME).strip()
+    eff_password = (override_password or NEWORDER_PASSWORD).strip()
+
+    if not eff_username or not eff_password:
+        return {
+            "ok": False,
+            "reason": "חסרים פרטי התחברות ב-Render (יש להגדיר NEWORDER_COMPANY, NEWORDER_USERNAME ו-NEWORDER_PASSWORD ב-Environment Variables)",
+        }
+
+    login_url = POS_API_URL or DEFAULT_NEWORDER_URL
+    ua_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8",
+        "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+
+    # Step 1: ASP.NET WebForms Login Flow (for login.aspx with 3 fields: Company, Username, Password)
+    try:
+        with httpx.Client(timeout=8.0, follow_redirects=True, headers=ua_headers) as sess:
+            get_resp = sess.get(login_url)
+            html_body = get_resp.text or ""
+            parsed_form = _parse_aspnet_form_inputs(html_body)
+
+            form_data = dict(parsed_form["hidden_fields"])
+            detected_fields = (
+                list(parsed_form["hidden_fields"].keys())
+                + parsed_form["text_inputs"]
+                + parsed_form["password_inputs"]
+                + [s[0] for s in parsed_form["submit_inputs"]]
+            )
+            NEWORDER_SESSION_CACHE["detected_form_fields"] = detected_fields
+
+            # 1A. Populate discovered Company Name field(s) (שם חברה)
+            if parsed_form["company_inputs"]:
+                for c_field in parsed_form["company_inputs"]:
+                    form_data[c_field] = eff_company
+            elif eff_company:
+                for fallback_c in [
+                    "txtCompany", "txtCompanyName", "txtComp", "txtClient", "txtAccount", "txtBranch",
+                    "Company", "CompanyName", "company",
+                    "ctl00$ContentPlaceHolder1$txtCompany", "ctl00$ContentPlaceHolder1$txtCompanyName",
+                    "ctl00$MainContent$txtCompany", "ctl00$MainContent$txtCompanyName",
+                ]:
+                    form_data[fallback_c] = eff_company
+
+            # 1B. Populate discovered Username field(s) (שם משתמש)
+            if parsed_form["user_inputs"]:
+                for u_field in parsed_form["user_inputs"]:
+                    form_data[u_field] = eff_username
+            else:
+                for fallback_u in [
+                    "txtUserName", "txtUser", "UserName", "username",
+                    "ctl00$ContentPlaceHolder1$txtUserName", "ctl00$ContentPlaceHolder1$txtUser",
+                    "ctl00$MainContent$txtUserName", "ctl00$MainContent$txtUser",
+                ]:
+                    form_data[fallback_u] = eff_username
+
+            # 1C. Populate discovered Password field(s) (סיסמה)
+            if parsed_form["password_inputs"]:
+                for p_field in parsed_form["password_inputs"]:
+                    form_data[p_field] = eff_password
+            else:
+                for fallback_p in [
+                    "txtPassword", "txtPass", "Password", "password",
+                    "ctl00$ContentPlaceHolder1$txtPassword", "ctl00$ContentPlaceHolder1$txtPass",
+                    "ctl00$MainContent$txtPassword", "ctl00$MainContent$txtPass",
+                ]:
+                    form_data[fallback_p] = eff_password
+
+            # 1D. Populate submit button if present
+            if parsed_form["submit_inputs"]:
+                btn_name, btn_val = parsed_form["submit_inputs"][0]
+                form_data[btn_name] = btn_val or "כניסה"
+            else:
+                form_data.setdefault("__EVENTTARGET", "")
+                form_data.setdefault("__EVENTARGUMENT", "")
+
+            mapped_summary = {
+                "company_fields": parsed_form["company_inputs"],
+                "user_fields": parsed_form["user_inputs"],
+                "password_fields": parsed_form["password_inputs"],
+                "submit_fields": [s[0] for s in parsed_form["submit_inputs"]],
+            }
+
+            post_headers = dict(ua_headers)
+            post_headers["Referer"] = str(get_resp.url)
+            post_headers["Content-Type"] = "application/x-www-form-urlencoded"
+
+            post_resp = sess.post(str(get_resp.url), data=form_data, headers=post_headers)
+            all_cookies = {k: v for k, v in sess.cookies.items()}
+            final_url = str(post_resp.url)
+            post_html = post_resp.text or ""
+
+            # Discover internal .aspx pages linked after login
+            discovered_links = sorted(list(set(
+                m.group(1) for m in re.finditer(r"href\s*=\s*[\x22\x27]([^\x22\x27]*\.aspx[^\x22\x27]*)[\x22\x27]", post_html, re.IGNORECASE)
+                if "login.aspx" not in m.group(1).lower()
+            )))[:25]
+
+            # Check if login succeeded: redirected away from login.aspx OR received auth cookie OR found internal dashboard links
+            redirected_away = "login.aspx" not in final_url.lower()
+            has_auth_cookie = any("auth" in k.lower() or "user" in k.lower() or "neworder" in k.lower() for k in all_cookies.keys())
+            has_logout_or_menu = any(w in post_html.lower() for w in ["logout", "יציאה", "התנתק", "קריאות שירות", "תיקונים", "מלאי", "לקוחות"]) or len(discovered_links) >= 2
+
+            if redirected_away or has_auth_cookie or has_logout_or_menu:
+                NEWORDER_SESSION_CACHE["cookies"] = all_cookies
+                NEWORDER_SESSION_CACHE["authenticated_at"] = now_ts
+                NEWORDER_SESSION_CACHE["landing_url"] = final_url
+                NEWORDER_SESSION_CACHE["discovered_pages"] = discovered_links
+                return {
+                    "ok": True,
+                    "mode": "aspnet_webforms",
+                    "login_url": login_url,
+                    "landing_url": final_url,
+                    "discovered_pages": discovered_links,
+                    "detected_form_fields": detected_fields,
+                    "mapped_fields": mapped_summary,
+                    "cookies": all_cookies,
+                    "token": "",
+                }
+
+            # Step 2 fallback: Try ASP.NET AJAX WebMethod (e.g. login.aspx/Login or login.aspx/CheckLogin) with all 3 fields
+            for wm in ["Login", "CheckLogin", "UserLogin", "Authenticate"]:
+                try:
+                    wm_url = f"{login_url.split('?')[0]}/{wm}"
+                    wm_resp = sess.post(
+                        wm_url,
+                        json={
+                            "company": eff_company,
+                            "companyName": eff_company,
+                            "Company": eff_company,
+                            "userName": eff_username,
+                            "username": eff_username,
+                            "password": eff_password,
+                        },
+                        headers={"Content-Type": "application/json; charset=utf-8", "Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+                    )
+                    if wm_resp.status_code == 200 and ("d" in wm_resp.text or "token" in wm_resp.text.lower() or len(sess.cookies) > len(get_resp.cookies)):
+                        all_cookies = {k: v for k, v in sess.cookies.items()}
+                        NEWORDER_SESSION_CACHE["cookies"] = all_cookies
+                        NEWORDER_SESSION_CACHE["authenticated_at"] = now_ts
+                        NEWORDER_SESSION_CACHE["landing_url"] = wm_url
+                        return {
+                            "ok": True,
+                            "mode": "aspnet_webmethod",
+                            "login_url": wm_url,
+                            "discovered_pages": discovered_links,
+                            "detected_form_fields": detected_fields,
+                            "mapped_fields": mapped_summary,
+                            "cookies": all_cookies,
+                            "token": "",
+                        }
+                except Exception:
+                    continue
+
+            return {
+                "ok": False,
+                "reason": "השרת הגיע לדף login.aspx אך ההתחברות לא עברה לדף הבית (בדוק ששם החברה, שם המשתמש והסיסמה ב-Render מדויקים)",
+                "login_url": login_url,
+                "final_url": final_url,
+                "detected_form_fields": detected_fields,
+                "mapped_fields": mapped_summary,
+                "cookies_count": len(all_cookies),
+            }
+    except Exception as e_auth:
+        return {"ok": False, "reason": f"שגיאת תקשורת מול שרת NewOrder: {e_auth}", "login_url": login_url}
+
+
+def build_neworder_auth_headers_and_cookies() -> tuple[dict, dict]:
+    """Returns (headers, cookies) authenticated via ASP.NET login.aspx session or API Key."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/html, */*",
+    }
+    cookies = {}
+    if POS_API_KEY:
+        headers["Authorization"] = f"Bearer {POS_API_KEY}" if not POS_API_KEY.lower().startswith("bearer ") else POS_API_KEY
+        headers["X-API-Key"] = POS_API_KEY
+        headers["apiKey"] = POS_API_KEY
+    elif NEWORDER_USERNAME and NEWORDER_PASSWORD:
+        auth_res = authenticate_neworder_backoffice()
+        if auth_res.get("ok"):
+            if auth_res.get("token"):
+                headers["Authorization"] = auth_res["token"]
+            if auth_res.get("cookies"):
+                cookies = auth_res["cookies"]
+    return headers, cookies
+
+
+def _extract_html_table_rows(html_text: str) -> list[list[str]]:
+    """Extracts clean text cells from HTML <tr><td>...</td></tr> tables in NewOrder .aspx pages."""
+    rows_out = []
+    for m_tr in re.finditer(r"<tr\b[^>]*>(.*?)</tr>", html_text or "", flags=re.IGNORECASE | re.DOTALL):
+        tr_inner = m_tr.group(1)
+        cells = []
+        for m_td in re.finditer(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", tr_inner, flags=re.IGNORECASE | re.DOTALL):
+            cell_txt = re.sub(r"<[^>]+>", " ", m_td.group(1))
+            cell_txt = re.sub(r"&nbsp;|&#160;", " ", cell_txt)
+            cell_txt = re.sub(r"\s+", " ", cell_txt).strip()
+            cells.append(cell_txt)
+        if cells and any(cells):
+            rows_out.append(cells)
+    return rows_out
+
+
 def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> dict:
     """
-    Checks live POS / Cash Register inventory (first via synced SQLite pos_inventory table,
-    and optionally via live HTTP pull if POS_API_URL is configured).
+    Checks live POS / Cash Register inventory:
+    1. First via synced SQLite pos_inventory table
+    2. Second via live authenticated pull from NewOrder (https://cellular.neworder.co.il/heb/ or Cloud API)
     Returns {"matched": bool, "answer": str, "item": dict}
     """
     clean = (message_text or "").lower().strip()
@@ -2927,7 +3278,7 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
     is_asking_color = any(w in clean for w in ["צבע", "צבעים", "באיזה צבע"])
     is_asking_repair = any(w in clean for w in ["מסך", "סוללה", "שקע"])
 
-    # 1. Check local SQLite pos_inventory (synced live from PC Cash Register software)
+    # 1. Check local SQLite pos_inventory (synced live from NewOrder)
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
@@ -2960,6 +3311,243 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                         return {"matched": True, "answer": ans, "item": item_dict}
     except Exception:
         pass
+
+    # 2. Live HTTP Pull from NewOrder (if credentials or API Key are configured)
+    if (NEWORDER_USERNAME and NEWORDER_PASSWORD) or POS_API_KEY:
+        try:
+            headers, cookies = build_neworder_auth_headers_and_cookies()
+            if cookies or "Authorization" in headers:
+                candidate_urls = [
+                    f"{NEWORDER_BASE_URL}/api/Inventory",
+                    f"{NEWORDER_BASE_URL}/items.aspx",
+                    f"{NEWORDER_BASE_URL}/inventory.aspx",
+                    f"{NEWORDER_BASE_URL}/products.aspx",
+                ]
+                for disc_p in NEWORDER_SESSION_CACHE.get("discovered_pages", []):
+                    if any(k in disc_p.lower() for k in ["item", "inv", "prod", "פריט", "מלאי"]):
+                        full_disc = disc_p if disc_p.startswith("http") else f"{NEWORDER_BASE_URL}/{disc_p.lstrip('/')}"
+                        if full_disc not in candidate_urls:
+                            candidate_urls.insert(0, full_disc)
+
+                for ep in candidate_urls[:3]:
+                    try:
+                        resp = http_session.get(
+                            ep,
+                            params={"branchId": NEWORDER_BRANCH_ID, "search": clean_no_punct[:40]},
+                            headers=headers,
+                            cookies=cookies,
+                            timeout=4.0,
+                        )
+                        if resp.status_code != 200:
+                            continue
+                        ctype = (resp.headers.get("content-type") or "").lower()
+                        if "json" in ctype or resp.text.strip().startswith(("{", "[")):
+                            payload = resp.json()
+                            raw_items = payload.get("items") or payload.get("data") or (payload if isinstance(payload, list) else [])
+                            for item in raw_items:
+                                if not isinstance(item, dict):
+                                    continue
+                                p_name = str(item.get("product_name") or item.get("itemName") or item.get("name") or item.get("description") or "").strip()
+                                if not p_name:
+                                    continue
+                                p_price = item.get("price") or item.get("salePrice") or item.get("single_price")
+                                item_dict = {
+                                    "sku": str(item.get("sku") or item.get("barcode") or p_name),
+                                    "product_name": p_name,
+                                    "keywords": p_name,
+                                    "category": str(item.get("category") or ""),
+                                    "price_galut": item.get("price_galut") or p_price,
+                                    "price_yemot": item.get("price_yemot"),
+                                    "single_price": p_price,
+                                    "stock_qty": item.get("stock_qty", item.get("quantity", 5)),
+                                    "colors": str(item.get("colors") or ""),
+                                }
+                                if any(w in p_name.lower() for w in clean_no_punct.split() if len(w) >= 2):
+                                    ans = format_pos_item_answer(item_dict)
+                                    if ans:
+                                        return {"matched": True, "answer": ans, "item": item_dict}
+                        else:
+                            for cells in _extract_html_table_rows(resp.text):
+                                row_joined = " | ".join(cells)
+                                if any(w in row_joined.lower() for w in clean_no_punct.split() if len(w) >= 3):
+                                    row_price = extract_price_nis(row_joined)
+                                    if row_price:
+                                        item_dict = {
+                                            "sku": cells[0] if cells else "ITEM",
+                                            "product_name": cells[1] if len(cells) > 1 else cells[0],
+                                            "keywords": row_joined,
+                                            "category": "",
+                                            "price_galut": None,
+                                            "price_yemot": None,
+                                            "single_price": row_price,
+                                            "stock_qty": 5,
+                                            "colors": "",
+                                        }
+                                        ans = format_pos_item_answer(item_dict)
+                                        if ans:
+                                            return {"matched": True, "answer": ans, "item": item_dict}
+                    except Exception:
+                        continue
+        except Exception as e_pos:
+            print(f"[NewOrder Live Inventory Pull Notice]: {e_pos}")
+
+    return {"matched": False}
+
+
+def sync_cellular_repairs_to_json():
+    """Exports lab_repairs (NewOrder Cellular lab tickets) to local JSON cache."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT ticket_id, phone, customer_name, device_model, fault_desc, status_label, price_nis, notes, updated_at FROM lab_repairs ORDER BY updated_at DESC"
+        ).fetchall()
+        conn.close()
+        data = [
+            {
+                "ticket_id": r[0], "phone": r[1], "customer_name": r[2], "device_model": r[3],
+                "fault_desc": r[4], "status_label": r[5], "price_nis": r[6], "notes": r[7], "updated_at": r[8]
+            }
+            for r in rows
+        ]
+        with open(BACKUP_REPAIRS_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def is_repair_status_inquiry(text: str) -> bool:
+    """
+    Detects when a customer is asking for the status of a device they already left in the lab for repair
+    (e.g. 'מה עם המכשיר שלי בתיקון?', 'האם הטלפון שלי מוכן?', 'מה מצב התיקון?', 'קריאת שירות 2841').
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip().lower())
+    if not clean:
+        return False
+    status_phrases = [
+        "מה מצב התיקון", "מצב התיקון", "סטטוס תיקון", "סטטוס התיקון", "מה עם התיקון",
+        "מה עם המכשיר שלי", "מה קורה עם המכשיר", "האם המכשיר מוכן", "המכשיר שלי מוכן",
+        "הטלפון שלי מוכן", "הפלאפון שלי מוכן", "התיקון מוכן", "סיימתם לתקן", "מוכן לאיסוף",
+        "מתי המכשיר יהיה מוכן", "מתי התיקון יהיה מוכן", "קריאת שירות", "כרטיס תיקון", "טופס תיקון"
+    ]
+    return any(p in clean for p in status_phrases)
+
+
+def lookup_cellular_repair_status(phone: str, message_text: str = "") -> dict:
+    """
+    Looks up a customer's repair ticket in NewOrder Cellular (https://cellular.neworder.co.il/heb/):
+    1. First checks local lab_repairs table in SQLite.
+    2. Second performs a live authenticated query against cellular.neworder.co.il if NEWORDER_USERNAME & NEWORDER_PASSWORD are set.
+    Returns {"matched": bool, "reply": str, "ticket": dict}
+    """
+    norm_p = normalize_phone(phone)
+    local_p = format_phone_display(phone).replace("-", "")
+    clean_msg = (message_text or "").strip()
+    m_ticket = re.search(r"(?:קריאת\s+שירות|כרטיס\s+תיקון|טופס\s+תיקון|תיקון\s+מספר|#)\s*(\d{3,7})\b", clean_msg)
+    ticket_id_query = m_ticket.group(1) if m_ticket else ""
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = None
+        if ticket_id_query:
+            row = conn.execute(
+                "SELECT ticket_id, phone, customer_name, device_model, fault_desc, status_label, price_nis, notes, updated_at FROM lab_repairs WHERE ticket_id = ? LIMIT 1",
+                (ticket_id_query,)
+            ).fetchone()
+        if not row and norm_p:
+            row = conn.execute(
+                "SELECT ticket_id, phone, customer_name, device_model, fault_desc, status_label, price_nis, notes, updated_at FROM lab_repairs WHERE phone = ? OR phone LIKE ? ORDER BY updated_at DESC LIMIT 1",
+                (norm_p, f"%{norm_p[-9:]}%" if len(norm_p) >= 9 else f"%{norm_p}%")
+            ).fetchone()
+        conn.close()
+        if row:
+            t_id, t_ph, c_name, dev_mod, fault, st_label, pr_nis, notes, upd = row
+            dev_str = f" (*{dev_mod}*)" if dev_mod else ""
+            price_line = f"\n💰 *עלות התיקון:* {pr_nis} ₪" if pr_nis else ""
+            notes_line = f"\n📝 *עדכון מהמעבדה:* {notes}" if notes else ""
+            is_ready = any(w in (st_label or "") for w in ["מוכן", "הושלם", "סיום", "לאיסוף"])
+            closing_line = (
+                f"\n\n🎉 המכשיר מוכן לאיסוף מהחנות שלנו ברחוב ישעיהו 10, חדרה! {get_store_status_now()['arrival_advice']} 😃"
+                if is_ready
+                else "\n\nאנו נעדכן אותך כאן בווצאפ מיד כשהמכשיר יהיה מוכן לאיסוף! 🛠️😃"
+            )
+            reply = (
+                f"🔍 *סטטוס תיקון במעבדת נעם שיח (קריאה #{t_id}):*{dev_str}\n"
+                f"📌 *מצב נוכחי:* *{st_label or 'בטיפול במעבדה'}*"
+                f"{price_line}{notes_line}{closing_line}"
+            )
+            return {
+                "matched": True,
+                "reply": reply,
+                "ticket": {"ticket_id": t_id, "device_model": dev_mod, "status_label": st_label, "price_nis": pr_nis},
+            }
+    except Exception as e_rep:
+        print(f"[Lookup Repair Local Notice]: {e_rep}")
+
+    # 2. Live pull from NewOrder Cellular portal (https://cellular.neworder.co.il/heb/)
+    if (NEWORDER_USERNAME and NEWORDER_PASSWORD) or POS_API_KEY:
+        try:
+            headers, cookies = build_neworder_auth_headers_and_cookies()
+            if cookies or "Authorization" in headers:
+                repair_urls = []
+                if NEWORDER_SESSION_CACHE.get("landing_url") and "login.aspx" not in NEWORDER_SESSION_CACHE["landing_url"].lower():
+                    repair_urls.append(NEWORDER_SESSION_CACHE["landing_url"])
+                for disc_p in NEWORDER_SESSION_CACHE.get("discovered_pages", []):
+                    full_disc = disc_p if disc_p.startswith("http") else f"{NEWORDER_BASE_URL}/{disc_p.lstrip('/')}"
+                    if full_disc not in repair_urls:
+                        repair_urls.append(full_disc)
+                for std_ep in [
+                    f"{NEWORDER_BASE_URL}/default.aspx",
+                    f"{NEWORDER_BASE_URL}/main.aspx",
+                    f"{NEWORDER_BASE_URL}/repairs.aspx",
+                    f"{NEWORDER_BASE_URL}/tickets.aspx",
+                    f"{NEWORDER_BASE_URL}/servicecalls.aspx",
+                ]:
+                    if std_ep not in repair_urls:
+                        repair_urls.append(std_ep)
+
+                search_keys = [k for k in [ticket_id_query, local_p, norm_p[-9:] if len(norm_p) >= 9 else ""] if k]
+                for rep_url in repair_urls[:4]:
+                    try:
+                        resp = http_session.get(
+                            rep_url,
+                            params={"phone": local_p, "search": ticket_id_query or local_p},
+                            headers=headers,
+                            cookies=cookies,
+                            timeout=4.5,
+                        )
+                        if resp.status_code != 200:
+                            continue
+                        for cells in _extract_html_table_rows(resp.text):
+                            row_str = " | ".join(cells)
+                            if any(sk in row_str for sk in search_keys):
+                                t_id = ticket_id_query or (cells[0] if cells else "מעבדה")
+                                st_label = "בטיפול במעבדה"
+                                for st_cand in ["מוכן לאיסוף", "מוכן", "בבדיקה", "בתיקון", "ממתין לחלק", "ממתין לאישור", "הושלם", "בטיפול"]:
+                                    if st_cand in row_str:
+                                        st_label = st_cand
+                                        break
+                                pr_nis = extract_price_nis(row_str)
+                                is_ready = any(w in st_label for w in ["מוכן", "הושלם", "סיום", "לאיסוף"])
+                                closing_line = (
+                                    f"\n\n🎉 המכשיר מוכן לאיסוף מהחנות שלנו ברחוב ישעיהו 10, חדרה! {get_store_status_now()['arrival_advice']} 😃"
+                                    if is_ready
+                                    else "\n\nאנו נעדכן אותך כאן בווצאפ מיד כשהמכשיר יהיה מוכן לאיסוף! 🛠️😃"
+                                )
+                                reply = (
+                                    f"🔍 *סטטוס תיקון במעבדת נעם שיח (קריאה #{t_id}):*\n"
+                                    f"📌 *מצב נוכחי:* *{st_label}*"
+                                    + (f"\n💰 *עלות התיקון:* {pr_nis} ₪" if pr_nis else "")
+                                    + closing_line
+                                )
+                                return {
+                                    "matched": True,
+                                    "reply": reply,
+                                    "ticket": {"ticket_id": t_id, "status_label": st_label, "price_nis": pr_nis},
+                                }
+                    except Exception:
+                        continue
+        except Exception as e_cloud:
+            print(f"[NewOrder Cellular Live Repair Notice]: {e_cloud}")
 
     return {"matched": False}
 
@@ -3195,6 +3783,44 @@ def init_db():
                 created_at TEXT
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS lab_repairs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id TEXT UNIQUE,
+                phone TEXT,
+                customer_name TEXT,
+                device_model TEXT,
+                fault_desc TEXT,
+                status_label TEXT,
+                price_nis TEXT DEFAULT '',
+                notes TEXT DEFAULT '',
+                updated_at TEXT
+            )
+        """)
+        if os.path.exists(BACKUP_REPAIRS_JSON_PATH):
+            try:
+                with open(BACKUP_REPAIRS_JSON_PATH, "r", encoding="utf-8") as f:
+                    rep_cached = json.load(f)
+                if isinstance(rep_cached, list):
+                    for rc in rep_cached:
+                        if isinstance(rc, dict) and rc.get("ticket_id"):
+                            c.execute("""
+                                INSERT OR REPLACE INTO lab_repairs
+                                (ticket_id, phone, customer_name, device_model, fault_desc, status_label, price_nis, notes, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                str(rc.get("ticket_id")),
+                                normalize_phone(rc.get("phone", "")),
+                                rc.get("customer_name", ""),
+                                rc.get("device_model", ""),
+                                rc.get("fault_desc", ""),
+                                rc.get("status_label", "בטיפול במעבדה"),
+                                str(rc.get("price_nis", "")),
+                                rc.get("notes", ""),
+                                rc.get("updated_at") or datetime.now().isoformat()
+                            ))
+            except Exception:
+                pass
         c.execute("""
             CREATE TABLE IF NOT EXISTS pos_inventory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3747,6 +4373,108 @@ async def add_contact_api(req: Request):
             return {"ok": False, "error": "phone and name are required"}
         save_contact_name(phone, name)
         return {"ok": True, "phone": phone, "name": name}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/api/pos/test_login")
+def test_neworder_backoffice_login(company: str = "", username: str = "", password: str = ""):
+    """
+    Tests live authentication against https://cellular.neworder.co.il/heb/login.aspx
+    using the 3 login fields: NEWORDER_COMPANY (שם חברה), NEWORDER_USERNAME (שם משתמש), and NEWORDER_PASSWORD (סיסמה).
+    """
+    res = authenticate_neworder_backoffice(
+        force_refresh=True,
+        override_company=company,
+        override_username=username,
+        override_password=password,
+    )
+    return {
+        "ok": res.get("ok", False),
+        "portal_url": POS_API_URL,
+        "company_configured": bool(company or NEWORDER_COMPANY),
+        "username_configured": bool(username or NEWORDER_USERNAME),
+        "password_configured": bool(password or NEWORDER_PASSWORD),
+        "mode": res.get("mode", ""),
+        "landing_url": res.get("landing_url", ""),
+        "discovered_pages": res.get("discovered_pages", []),
+        "detected_form_fields": res.get("detected_form_fields", NEWORDER_SESSION_CACHE.get("detected_form_fields", [])),
+        "mapped_fields": res.get("mapped_fields", {}),
+        "reason": res.get("reason", ""),
+    }
+
+@app.get("/api/pos/repairs")
+def get_cellular_repairs():
+    """Returns all lab repair tickets synced from NewOrder Cellular."""
+    repairs = []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT ticket_id, phone, customer_name, device_model, fault_desc, status_label, price_nis, notes, updated_at FROM lab_repairs ORDER BY updated_at DESC"
+        ).fetchall()
+        conn.close()
+        repairs = [
+            {
+                "ticket_id": r[0], "phone": r[1], "customer_name": r[2], "device_model": r[3],
+                "fault_desc": r[4], "status_label": r[5], "price_nis": r[6], "notes": r[7], "updated_at": r[8]
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "total": len(repairs), "repairs": repairs}
+
+@app.post("/api/pos/repairs/sync")
+async def sync_cellular_repairs_api(req: Request):
+    """
+    Live NewOrder Cellular Lab Repair Status webhook & sync endpoint.
+    Accepts single repair ticket or list of tickets (JSON) so customers can check repair status on WhatsApp!
+    """
+    try:
+        body = await req.json()
+        if POS_SYNC_SECRET:
+            req_secret = req.headers.get("X-POS-Secret", "") or body.get("secret", "")
+            if req_secret != POS_SYNC_SECRET:
+                return JSONResponse(status_code=401, content={"ok": False, "error": "Unauthorized POS secret"})
+
+        tickets = body.get("repairs", body.get("items", [body])) if isinstance(body, dict) else (body if isinstance(body, list) else [])
+        conn = sqlite3.connect(DB_PATH)
+        synced_count = 0
+        for t in tickets:
+            if not isinstance(t, dict):
+                continue
+            ticket_id = str(t.get("ticket_id") or t.get("serviceCallId") or t.get("id") or "").strip()
+            phone = normalize_phone(str(t.get("phone") or t.get("customerPhone") or ""))
+            if not ticket_id and not phone:
+                continue
+            if not ticket_id:
+                ticket_id = f"T-{phone[-4:]}"
+            cust_name = str(t.get("customer_name") or t.get("customerName") or "").strip()
+            dev_model = str(t.get("device_model") or t.get("deviceModel") or t.get("device") or "").strip()
+            fault_desc = str(t.get("fault_desc") or t.get("fault") or t.get("description") or "").strip()
+            status_label = str(t.get("status_label") or t.get("status") or "בטיפול במעבדה").strip()
+            price_nis = str(t.get("price_nis") or t.get("price") or t.get("total") or "").strip()
+            notes = str(t.get("notes") or t.get("technicianNotes") or "").strip()
+
+            conn.execute("""
+                INSERT INTO lab_repairs (ticket_id, phone, customer_name, device_model, fault_desc, status_label, price_nis, notes, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ticket_id) DO UPDATE SET
+                    phone=excluded.phone,
+                    customer_name=excluded.customer_name,
+                    device_model=excluded.device_model,
+                    fault_desc=excluded.fault_desc,
+                    status_label=excluded.status_label,
+                    price_nis=excluded.price_nis,
+                    notes=excluded.notes,
+                    updated_at=excluded.updated_at
+            """, (
+                ticket_id, phone, cust_name, dev_model, fault_desc, status_label, price_nis, notes, datetime.now().isoformat()
+            ))
+            synced_count += 1
+        conn.commit()
+        conn.close()
+        sync_cellular_repairs_to_json()
+        return {"ok": True, "synced_repairs": synced_count, "timestamp": datetime.now().isoformat()}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -5945,6 +6673,16 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", owner_reply)
         return {"ok": True, "reply": owner_reply, "type": "store_owner_info"}
+
+    # 2.6 FAST DETERMINISTIC PATH: NewOrder Cellular Repair Status Lookup ("מה מצב התיקון שלי?", "האם המכשיר מוכן?")
+    if is_repair_status_inquiry(message_text):
+        rep_lookup = lookup_cellular_repair_status(sender_phone, message_text)
+        if rep_lookup.get("matched") and rep_lookup.get("reply"):
+            rep_reply = rep_lookup["reply"]
+            send_whatsapp_message(sender_phone, rep_reply, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", rep_reply)
+            return {"ok": True, "reply": rep_reply, "type": "cellular_repair_status_found", "ticket": rep_lookup.get("ticket")}
 
     # 3. FAST DETERMINISTIC PATH: Warranty Confirmation / Inquiry (ONLY for Kosher & Half-Touch devices, NEVER for lab repairs or smartphones!)
     if is_warranty_followup_confirmation(message_text, recent_history) and not is_repair_or_smartphone_context(message_text) and not last_agent_asked_price_check:
