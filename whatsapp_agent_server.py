@@ -929,6 +929,357 @@ def is_admin_meta_or_error_correction(text: str) -> bool:
     return any(sig in clean for sig in meta_signals)
 
 
+# ----------------- Admin Typo & Autocorrect Guard + Multi-Option & Style Learning Engine -----------------
+PENDING_ADMIN_TYPO_CONFIRMATIONS = {}
+
+def auto_fix_common_hebrew_typos(text: str) -> str:
+    """
+    Silently and automatically fixes clear Hebrew fast-typing and mobile autocorrect typos
+    so they never leak to customers or corrupt learned_kb / option matching.
+    """
+    if not text:
+        return ""
+    cleaned = text
+    typo_replacements = [
+        (r"\bהסליקון\b", "הסיליקון"),
+        (r"\bבסליקון\b", "בסיליקון"),
+        (r"\bלסליקון\b", "לסיליקון"),
+        (r"\bוסליקון\b", "וסיליקון"),
+        (r"\bסליקון\b", "סיליקון"),
+        (r"\bסיליקן\b", "סיליקון"),
+        (r"\bוישיש\b", "ויש"),
+        (r"\bושיש\b", "ויש"),
+        (r"\bישיש\b", "יש"),
+        (r"\bהזחרתי\b", "החזרתי"),
+        (r"\bהסכון\b", "הסוכן"),
+        (r"\bביוצן\b", "ביומן"),
+        (r"\bלזמין\b", "להזמין"),
+        (r"\bמסף\b", "מסך"),
+        (r"\bלמסף\b", "למסך"),
+        (r"\bמגיניי\b", "מגיני"),
+        (r"\bמגניי\b", "מגיני"),
+        (r"\bגלקסיי\b", "גלקסי"),
+        # Mobile autocorrect 'אלה' instead of 'אלא' before contrast/instruction words
+        (r"\bאלה(?=\s+(?:אם|רק|תכתוב|יכתוב|תרשום|ירשום|תשאל|ישאל|תגיד|יגיד|במקום|פשוט|גם|ש-|לרשום|לכתוב|לשאול))", "אלא"),
+    ]
+    for pat, repl in typo_replacements:
+        cleaned = re.sub(pat, repl, cleaned, flags=re.IGNORECASE)
+    # Collapse accidental consecutive duplicate short Hebrew words (e.g. "יש יש" -> "יש", "את את" -> "את")
+    cleaned = re.sub(r"\b(יש|את|של|על|עם|או|גם|זה)\s+\1\b", r"\1", cleaned)
+    return cleaned
+
+
+def detect_uncertain_admin_typos(text: str) -> dict:
+    """
+    Detects ambiguous / uncertain mobile autocorrect substitutions or garbled words in Admin's reply
+    where the bot is not 100% certain whether Admin meant the literal word or the corrected word.
+    When matched, triggers a confirmation question to Admin: 'האם אתה בטוח שזה הנוסח הנכון?'
+    Returns {"uncertain": bool, "bad_word": str, "suggested_word": str, "suggested_text": str}
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {"uncertain": False}
+
+    # First apply high-confidence silent fixes
+    fixed = auto_fix_common_hebrew_typos(raw)
+
+    # 1. Ambiguous mobile autocorrect traps in a phone store / lab context
+    ambiguous_autocorrect_pairs = [
+        (r"\bמזגן\s+מסך\b", "מזגן מסך", "מגן מסך"),
+        (r"\bמזגן\s+סיליקון\b", "מזגן סיליקון", "מגן סיליקון"),
+        (r"\bמזגן\s+זכוכית\b", "מזגן זכוכית", "מגן זכוכית"),
+        (r"\bאת\s+החלוק\b", "החלוק", "החלק"),
+        (r"\bהחלוק\b", "החלוק", "החלק"),
+        (r"\bהחלפת\s+סוליה\b", "סוליה", "סוללה"),
+        (r"\bסוליה\b", "סוליה", "סוללה"),
+        (r"\bשקע\s+טינה\b", "שקע טינה", "שקע טעינה"),
+        (r"\bמסלול\s+אחיות\b", "מסלול אחיות", "מסלול אחריות"),
+        (r"\bאחיות\s+יבואן\b", "אחיות יבואן", "אחריות יבואן"),
+        (r"\bמכשיר\s+כושר\b", "מכשיר כושר", "מכשיר כשר"),
+        (r"\bטלפון\s+כושר\b", "טלפון כושר", "טלפון כשר"),
+        (r"\bפגיעה\s+במעבדה\b", "פגיעה במעבדה", "פגישה במעבדה"),
+    ]
+    for pat, bad_w, good_w in ambiguous_autocorrect_pairs:
+        if re.search(pat, fixed, flags=re.IGNORECASE):
+            suggested_txt = re.sub(pat, good_w, fixed, flags=re.IGNORECASE)
+            return {
+                "uncertain": True,
+                "bad_word": bad_w,
+                "suggested_word": good_w,
+                "suggested_text": suggested_txt,
+            }
+
+    # 2. Words with 3+ identical consecutive Hebrew letters (e.g. "מממגן", "שששלום", "זכוווכית")
+    m_triple = re.search(r"\b([א-ת]*([א-ת])\2\2+[א-ת]*)\b", fixed)
+    if m_triple:
+        bad_w = m_triple.group(1)
+        good_w = re.sub(r"([א-ת])\1\1+", r"\1", bad_w)
+        suggested_txt = fixed.replace(bad_w, good_w, 1)
+        return {
+            "uncertain": True,
+            "bad_word": bad_w,
+            "suggested_word": good_w,
+            "suggested_text": suggested_txt,
+        }
+
+    # 3. Mixed Hebrew + accidental English letter inside a Hebrew word (e.g. "מגfן", "סיליkון")
+    m_mixed = re.search(r"\b([א-ת]+[a-zA-Z]+[א-ת]+)\b", fixed)
+    if m_mixed:
+        bad_w = m_mixed.group(1)
+        good_w = re.sub(r"[a-zA-Z]+", "", bad_w)
+        suggested_txt = fixed.replace(bad_w, good_w, 1)
+        return {
+            "uncertain": True,
+            "bad_word": bad_w,
+            "suggested_word": good_w,
+            "suggested_text": suggested_txt,
+        }
+
+    return {"uncertain": False}
+
+
+def is_screen_protector_or_accessory_context(text: str) -> bool:
+    """
+    Returns True if the text is about screen protectors ('מגן מסך', 'מגיני מסך', 'מגן סיליקון', 'מגן זכוכית')
+    or store accessories, rather than a physical screen replacement lab repair ('החלפת מסך').
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").lower())
+    protector_terms = [
+        "מגן מסך", "מגיני מסך", "מגני מסך", "מגן למסך", "מדבקת מסך", "מדבקה למסך",
+        "מגן זכוכית", "מגן סיליקון", "מגן ג'ל", "מגן הידרוג'ל", "מגן מאט", "מגן פרטיות",
+        "איזה מגן", "מגינים", "מגנים"
+    ]
+    return any(t in clean for t in protector_terms)
+
+
+def extract_options_and_prices_from_text(text: str) -> list:
+    """
+    Extracts multiple product/accessory options and their prices from Admin replies, KB answers,
+    or conversation history.
+    Examples handled:
+    - 'יש מגן זכוכית ב 40 שח, מגן סיליקון ב 60 שח ומגן פרטיות ב 80 שח'
+    - 'מגן זכוכית - 40 ₪\nמגן סיליקון - 60 ₪\nמגן מאט - 70 ₪'
+    - 'פשוט 30, סיליקון 60, זכוכית 50'
+    Returns list of dicts: [{"name": str, "price": str, "keywords": list[str]}]
+    """
+    if not text:
+        return []
+    cleaned = auto_fix_common_hebrew_typos(text)
+    # Remove metadata tags before parsing
+    cleaned = re.sub(r"\[(?:OPTIONS_JSON|PRICE|GALUT_PRICE|YEMOT_PRICE|PROPOSED_TIME|COLOR):[^\]]*\]", " ", cleaned)
+    # Never treat Bit phone number as a price
+    cleaned = cleaned.replace("052-4043644", " ").replace("0524043644", " ").replace("055-3164770", " ")
+
+    # First check if [OPTIONS_JSON:...] is explicitly embedded in text
+    m_json = re.search(r"\[OPTIONS_JSON:(\[.*?\])\]", text)
+    if m_json:
+        try:
+            parsed = json.loads(m_json.group(1))
+            if isinstance(parsed, list) and parsed:
+                return parsed
+        except Exception:
+            pass
+
+    known_option_Catalog = [
+        ("מגן סיליקון", ["סיליקון", "הסיליקון", "מגן סיליקון", "סיליקון גמיש"]),
+        ("מגן זכוכית", ["זכוכית", "הזכוכית", "מגן זכוכית", "זכוכית מחוסמת"]),
+        ("מגן פרטיות", ["פרטיות", "הפרטיות", "מגן פרטיות", "אנטי מציצנות"]),
+        ("מגן מאט", ["מאט", "מט", "המאט", "מגן מאט", "נגד השתקפות"]),
+        ("מגן הידרוג'ל", ["הידרוג'ל", "הידרוגל", "ג'ל", "מגן ג'ל", "מגן הידרוג'ל"]),
+        ("מגן ננו", ["ננו", "הננו", "מגן ננו", "ננו גמיש"]),
+        ("מגן פשוט", ["פשוט", "רגיל", "הפשוט", "מגן פשוט", "מגן רגיל"]),
+        ("מגן אחורי", ["מגן אחורי", "כיסוי אחורי", "קייס"]),
+    ]
+
+    options = []
+    seen_names = set()
+
+    # Split into segments by newline, comma, semicolon, bullet, or ' ו-' / ' ויש '
+    raw_segments = re.split(r"[\n,;•●]|\s+ו(?=(?:מגן|יש|זכוכית|סיליקון|פרטיות|מאט|הידרוג|ננו|פשוט))", cleaned)
+    for seg in raw_segments:
+        seg_s = seg.strip()
+        if not seg_s:
+            continue
+        # Skip Kosher warranty tracks (handled by kosher track logic)
+        if any(w in seg_s for w in ["מסלול גלות", "ימות המשיח", "מסלול גאולה"]):
+            continue
+
+        # Find price in segment (20 to 2500 NIS)
+        m_pr = (
+            re.search(r"\b(\d{2,4})\s*(?:₪|ש\"ח|ש''ח|שח|שקלים|שקל)\b", seg_s)
+            or re.search(r"(?:ב-|ב\s*|מחיר\s*|עולה\s*|עלות\s*|[-:])\s*(\d{2,4})\b", seg_s)
+            or re.search(r"\b(\d{2,3})\b", seg_s)
+        )
+        price_val = ""
+        if m_pr:
+            cand_p = int(m_pr.group(1))
+            if 15 <= cand_p <= 3500 and cand_p not in (100,) or (cand_p == 100 and "100" in seg_s and "תוספת" not in seg_s):
+                price_val = str(cand_p)
+
+        matched_canon = None
+        matched_kws = []
+        for canon_name, kws in known_option_Catalog:
+            if any(re.search(rf"(?:^|\s|[ובלמה,.-]){re.escape(k)}(?:$|\s|[,.!?:])", seg_s.lower()) for k in kws):
+                matched_canon = canon_name
+                matched_kws = kws
+                break
+
+        if matched_canon and matched_canon not in seen_names:
+            seen_names.add(matched_canon)
+            options.append({
+                "name": matched_canon,
+                "price": price_val,
+                "keywords": matched_kws,
+            })
+        elif price_val:
+            # Generic option line with a price (e.g. "סוג א 50 שח", "מקורי 120 שח", "חלופי 80 שח")
+            label_clean = re.sub(r"\b\d{2,4}\s*(?:₪|ש\"ח|ש''ח|שח|שקלים|שקל)?\b", "", seg_s)
+            label_clean = re.sub(r"^(?:יש\s+לנו|יש|ויש|או|חזרתי\s+אליך\s+בנוגע\s+לפנייתך:?|ב-|ב|עולה|מחיר)\s*", "", label_clean.strip(" -•:.,")).strip(" -•:.,")
+            if 2 <= len(label_clean) <= 32 and not any(q in label_clean for q in ["מה תרצה", "האם תרצה", "נשארו יחידות"]):
+                if label_clean not in seen_names:
+                    seen_names.add(label_clean)
+                    kws = [w for w in label_clean.split() if len(w) >= 2]
+                    options.append({
+                        "name": label_clean,
+                        "price": price_val,
+                        "keywords": [label_clean] + kws,
+                    })
+
+    return options
+
+
+def find_selected_option_and_price(customer_msg: str, open_action_taken: str = "", recent_history: str = "", open_req_text: str = "") -> dict:
+    """
+    Checks if the customer is naming/selecting a specific option (e.g. 'אני רוצה להזמין את הסיליקון',
+    'תזמין לי סיליקון', 'את הזכוכית', 'הסיליקון') and looks up its price across:
+    1. open_action_taken ([OPTIONS_JSON:...] or text)
+    2. recent_history (all messages in the conversation!)
+    3. learned_kb
+    Returns {"matched": bool, "name": str, "price": str, "all_options": list}
+    """
+    clean_msg = auto_fix_common_hebrew_typos((customer_msg or "").strip().lower())
+    if not clean_msg:
+        return {"matched": False, "all_options": []}
+
+    # Never treat a recommendation question ("על איזה מגן אתה ממליץ?", "מה ההבדל?") as an order selection!
+    if "?" in clean_msg or "؟" in clean_msg or any(q in clean_msg for q in [
+        "ממליץ", "מומלץ", "עדיף", "הבדל", "מה זה", "איזה מגן כדאי", "איזה סוגים יש", "אילו סוגים"
+    ]):
+        return {"matched": False, "all_options": []}
+
+    # Gather all options mentioned anywhere in open_action_taken, recent_history, open_req_text, or learned_kb
+    combined_sources = [open_action_taken or "", recent_history or "", open_req_text or ""]
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        kb_rows = conn.execute("SELECT answer FROM learned_kb ORDER BY id DESC LIMIT 20").fetchall()
+        conn.close()
+        for r in kb_rows:
+            if r and r[0] and any(w in r[0] for w in ["מגן", "סיליקון", "זכוכית", "פרטיות", "מאט"]):
+                combined_sources.append(r[0])
+    except Exception:
+        pass
+
+    merged_options = {}
+    for src in combined_sources:
+        for opt in extract_options_and_prices_from_text(src):
+            nm = opt["name"]
+            if nm not in merged_options:
+                merged_options[nm] = opt
+            elif not merged_options[nm].get("price") and opt.get("price"):
+                merged_options[nm]["price"] = opt["price"]
+
+    all_opts = list(merged_options.values())
+
+    # Also check direct regex scan in history if a known option name was mentioned with a price on the same line/clause
+    known_Direct = [
+        ("מגן סיליקון", ["סיליקון", "הסיליקון"]),
+        ("מגן זכוכית", ["זכוכית", "הזכוכית"]),
+        ("מגן פרטיות", ["פרטיות", "הפרטיות"]),
+        ("מגן מאט", ["מאט", "המאט"]),
+        ("מגן הידרוג'ל", ["הידרוג'ל", "הידרוגל", "ג'ל"]),
+        ("מגן ננו", ["ננו", "הננו"]),
+        ("מגן פשוט", ["פשוט", "הפשוט", "רגיל"]),
+    ]
+    full_hist_clean = auto_fix_common_hebrew_typos(f"{open_action_taken or ''}\n{recent_history or ''}")
+
+    for canon_name, stems in known_Direct:
+        if any(re.search(rf"(?:^|\s|[ובלמה,.-]){re.escape(s)}(?:$|\s|[,.!?:])", clean_msg) for s in stems):
+            # Customer explicitly named this option! Find its price from merged_options or regex scan in history
+            price_found = ""
+            if canon_name in merged_options and merged_options[canon_name].get("price"):
+                price_found = merged_options[canon_name]["price"]
+            if not price_found:
+                for st in stems:
+                    m_hist_p = (
+                        re.search(rf"{re.escape(st)}[^\n0-9,;]{{0,30}}(\d{{2,4}})", full_hist_clean)
+                        or re.search(rf"(\d{{2,4}})\s*(?:₪|ש\"ח|שח|שקל)?[^\n0-9,;]{{0,20}}{re.escape(st)}", full_hist_clean)
+                    )
+                    if m_hist_p:
+                        p_int = int(m_hist_p.group(1))
+                        if 15 <= p_int <= 2500:
+                            price_found = str(p_int)
+                            break
+            return {
+                "matched": True,
+                "name": canon_name,
+                "price": price_found,
+                "all_options": all_opts,
+            }
+
+    # Check against any custom options extracted into all_opts
+    for opt in all_opts:
+        for kw in opt.get("keywords", []):
+            if len(kw) >= 2 and re.search(rf"(?:^|\s|[ובלמה,.-]){re.escape(kw.lower())}(?:$|\s|[,.!?:])", clean_msg):
+                return {
+                    "matched": True,
+                    "name": opt["name"],
+                    "price": opt.get("price", ""),
+                    "all_options": all_opts,
+                }
+
+    return {"matched": False, "all_options": all_opts}
+
+
+def is_admin_bit_payment_directive(text: str) -> bool:
+    """
+    Detects when Admin (Eran) hints or instructs the bot to send a Bit payment request to the customer
+    (e.g. 'אתה צריך לשלוח ללקוח בקשה לשלוח ביט', 'תשלח ללקוח בקשה לשלוח ביט', 'שלח לו ביט', 'תבקש ממנו להעביר בביט').
+    Never forwards these operational instructions raw to the customer!
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip().lower())
+    if not clean or ("ביט" not in clean and "bit" not in clean):
+        return False
+    directive_patterns = [
+        r"(?:צריך|אמור|עליך)\s+(?:לשלוח|לבקש|לכתוב|לרשום|להגיד)",
+        r"(?:תשלח|שלח|תבקש|בקש|תכתוב|תרשום|תגיד|תמסור)\s+(?:ללקוח|לו|לה|ממנו|מהלקוח)",
+        r"בקשה\s+(?:לשלוח|להעביר|לתשלום)\s+(?:ב?ביט|bit)",
+        r"(?:לשלוח|להעביר)\s+(?:ללקוח|לו)\s+(?:בקשת\s+תשלום|פרטי\s+ביט|בקשה\s+לביט|ביט)",
+    ]
+    return any(re.search(p, clean) for p in directive_patterns)
+
+
+def is_admin_style_or_tikun_command(text: str) -> bool:
+    """
+    Detects when Admin writes 'תיקון:' or instructs the bot to permanently change its phrasing/style
+    (e.g., 'תיקון: ...', 'מעכשיו אל תשאל את הלקוח אם הוא רוצה להזמין את החלק אלא תכתוב לו מה תרצה להזמין?',
+    'במקום לכתוב X תכתוב Y').
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip())
+    if not clean:
+        return False
+    if re.match(r"^(?:תיקון|כלל\s+חדש|כלל\s+קבוע|שינוי\s+נוסח|נוסח\s+קבוע)\s*[:\-]", clean, flags=re.IGNORECASE):
+        return True
+    style_patterns = [
+        r"מעכשיו\s+(?:אל|לא)\s+(?:תשאל|ישאל|תכתוב|יכתוב|תרשום|ירשום|תגיד|יגיד)",
+        r"מעכשיו\s+(?:תכתוב|יכתוב|תרשום|ירשום|תשאל|ישאל)\s+(?:ללקוח|לו)?",
+        r"במקום\s+(?:לשאול|לכתוב|לרשום|להגיד)\s+.+\s+(?:תכתוב|תרשום|תשאל|תגיד|יכתוב|ירשום)",
+        r"(?:אל|לא)\s+(?:תשאל|ישאל)\s+(?:את\s+הלקוח\s+|אותו\s+)?אם\s+(?:הוא\s+)?רוצה\s+להזמין.+אלא",
+        r"תשנה\s+את\s+הנוסח\s+באופן\s+קבוע",
+        r"מתקן\s+את\s+הנוסח\s+באופן\s+קבוע",
+    ]
+    return any(re.search(p, clean, flags=re.IGNORECASE) for p in style_patterns)
+
+
 def strip_admin_meta_coaching(text: str) -> str:
     """
     Separates and strips ALL Admin-to-Bot meta-scolding, memory/learning remarks, and meta-directives
@@ -971,10 +1322,8 @@ def strip_admin_meta_coaching(text: str) -> str:
     cleaned = re.sub(r"^(?:וש-|ש-|ו-|אז\s+|כי\s+|ש(?=(?:יש|אין|המכשיר|אפשר|ניתן|זה|הוא))|וש(?=(?:יש|אין|המכשיר|אפשר|ניתן|זה|הוא)))\s*", "", cleaned).strip()
     cleaned = re.sub(r"^ו(?=(?:יש|אין)\b)", "", cleaned).strip()
 
-    # 4. Fix common Hebrew typing glitches in Admin replies (e.g. "וישיש" -> "ויש", "ושיש" -> "ויש", "שיש " at start -> "יש ")
-    cleaned = re.sub(r"\bוישיש\b", "ויש", cleaned)
-    cleaned = re.sub(r"\bושיש\b", "ויש", cleaned)
-    cleaned = re.sub(r"\bישיש\b", "יש", cleaned)
+    # 4. Fix common Hebrew typing glitches in Admin replies (e.g. "וישיש" -> "ויש", "סליקון" -> "סיליקון", "אלה" -> "אלא")
+    cleaned = auto_fix_common_hebrew_typos(cleaned)
     cleaned = re.sub(r"^שיש\s+", "יש ", cleaned)
 
     return cleaned.strip(" ,.:;-")
@@ -1028,6 +1377,11 @@ def sanitize_admin_leakage(text: str) -> str:
     cleaned = re.sub(r"\bשל\s+הלקוח\b", "שלך", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bאת\s+הלקוח\b", "אותך", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bללקוח\b", "לך", cleaned, flags=re.IGNORECASE)
+    cleaned = auto_fix_common_hebrew_typos(cleaned)
+    try:
+        cleaned = apply_learned_style_rules(cleaned)
+    except Exception:
+        pass
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
     return cleaned
 
@@ -1171,6 +1525,9 @@ def is_part_or_repair_price_inquiry(text: str, allow_with_scheduling: bool = Fal
     # Skip if it's already a known fixed-price item in PERMANENT_LEARNED_KB (e.g. F21 screen or F21/F22/F25 purchase)
     if any(k in clean for k in ["f21", "f22", "f25"]):
         return {"matched": False}
+    # Screen protectors ("מגן מסך", "מגיני מסך") are accessories with multiple types, NOT a lab screen replacement!
+    if is_screen_protector_or_accessory_context(clean):
+        return {"matched": False}
 
     is_screen = any(w in clean for w in ["מסך", "למסך", "המסך"])
     is_battery = any(w in clean for w in ["סוללה", "בטריה", "הסוללה", "הבטריה"])
@@ -1263,7 +1620,8 @@ def is_in_progress_or_question(text: str) -> bool:
         "אפשר להזמין", "ניתן להזמין", "צריך להזמין", "תרצה שנזמין", "רוצה שנזמין",
         "נזמין לך", "נזמין עבורך", "להזמין לך", "להזמין עבורך", "תרצה שנשמור",
         "נשארו יחידות אחרונות", "תרצה שנשריין", "תרצה לשריין", "באיזה מסלול אחריות",
-        "באיזה צבע", "איזה צבע", "איזה מסלול", "מה אתה מעדיף", "מה דעתך"
+        "באיזה צבע", "איזה צבע", "איזה מסלול", "מה אתה מעדיף", "מה דעתך",
+        "מה תרצה להזמין", "איזה מהם תרצה להזמין", "איזה מגן תרצה"
     ]
     if any(stem in clean for stem in question_and_open_offer_stems):
         return True
@@ -1579,16 +1937,20 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "", recent_history: 
     is_order_offer = any(w in adapted for w in ["אפשר להזמין", "ניתן להזמין", "להזמין לך", "להזמין עבורך", "נזמין לך", "נוכל להזמין"])
     is_conditional_choice = any(w in adapted for w in ["אם אתה רוצה", "אם תרצה", "אם אתה מעוניין", "אם זה מתאים לך", "אם נוח לך"])
 
+    extracted_opts = extract_options_and_prices_from_text(adapted)
+    is_multi_option_or_accessory = len(extracted_opts) >= 2 or is_screen_protector_or_accessory_context(combined_ctx + " " + adapted)
+
     is_price_approval_for_part = bool(
-        detected_price and (
-            req_part_info.get("matched")
+        (detected_price or is_multi_option_or_accessory) and (
+            is_multi_option_or_accessory
+            or req_part_info.get("matched")
             or is_repair_or_smartphone_context(combined_ctx)
-            or any(w in (request_text or "") for w in ["מסך", "סוללה", "שקע", "חלק", "להזמין", "מחיר מדויק", "בדיקת מחיר"])
+            or any(w in (request_text or "") for w in ["מסך", "סוללה", "שקע", "חלק", "להזמין", "מחיר מדויק", "בדיקת מחיר", "מגן", "מגיני"])
         )
     )
-    is_device_price_quote = bool(detected_price and not is_price_approval_for_part and not is_scheduling_request(request_text))
+    is_device_price_quote = bool(detected_price and not is_price_approval_for_part and not is_multi_option_or_accessory and not is_scheduling_request(request_text))
     kosher_context_check = extract_kosher_device_track_prices(f"{adapted} {request_text}", recent_history)
-    is_in_active_device_sale = bool(kosher_context_check.get("matched") and not is_repair_or_smartphone_context(request_text))
+    is_in_active_device_sale = bool(kosher_context_check.get("matched") and not is_repair_or_smartphone_context(request_text) and not is_multi_option_or_accessory)
 
     if is_device_price_quote and "?" not in adapted:
         if is_in_active_device_sale or any(w in combined_ctx.lower() for w in ["כשר", "f21", "f22", "f25", "qin", "גלות", "ימות המשיח"]):
@@ -1603,12 +1965,12 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "", recent_history: 
                 + ".\n🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? 😃"
             )
         is_order_offer = True
-    elif is_price_approval_for_part and not is_order_offer and "?" not in adapted:
-        adapted = adapted.rstrip(".!, ") + ". האם תרצה שנזמין עבורך את החלק? 😃"
+    elif (is_multi_option_or_accessory or is_price_approval_for_part) and not is_order_offer and "?" not in adapted:
+        adapted = adapted.rstrip(".!, ") + ".\nמה תרצה להזמין? 😃"
         is_order_offer = True
     elif (is_order_offer or is_conditional_choice) and "?" not in adapted:
         if is_order_offer:
-            adapted = adapted.rstrip(".!, ") + ". האם תרצה שנזמין עבורך? 😃"
+            adapted = adapted.rstrip(".!, ") + ".\nמה תרצה להזמין? 😃"
         else:
             adapted = adapted.rstrip(".!, ") + " — האם זה מתאים לך? 😃"
     elif is_in_active_device_sale and "?" not in adapted and not is_scheduling_request(request_text):
@@ -1622,7 +1984,11 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "", recent_history: 
             )
         is_order_offer = True
 
-    is_q = is_in_progress_or_question(adapted) or is_order_offer or is_conditional_choice or is_price_approval_for_part or is_device_price_quote or is_in_active_device_sale
+    try:
+        adapted = apply_learned_style_rules(adapted)
+    except Exception:
+        pass
+    is_q = is_in_progress_or_question(adapted) or is_order_offer or is_conditional_choice or is_price_approval_for_part or is_device_price_quote or is_in_active_device_sale or is_multi_option_or_accessory
     return adapted, is_q
 
 
@@ -2015,6 +2381,103 @@ BACKUP_POS_JSON_PATH = os.path.join(
     os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
     "pos_inventory_cache.json"
 )
+BACKUP_STYLE_JSON_PATH = os.path.join(
+    os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
+    "learned_style_rules_cache.json"
+)
+
+DEFAULT_STYLE_RULES = [
+    ("האם תרצה שנזמין עבורך את החלק?", "מה תרצה להזמין?", "במקום לשאול אם הלקוח רוצה להזמין את החלק, כתוב: מה תרצה להזמין?"),
+    ("האם תרצה שאזמין עבורך את החלק?", "מה תרצה להזמין?", "במקום לשאול אם הלקוח רוצה להזמין את החלק, כתוב: מה תרצה להזמין?"),
+    ("האם תרצה שאזמין את החלק?", "מה תרצה להזמין?", "במקום לשאול אם הלקוח רוצה להזמין את החלק, כתוב: מה תרצה להזמין?"),
+    ("האם תרצה להזמין את החלק?", "מה תרצה להזמין?", "במקום לשאול אם הלקוח רוצה להזמין את החלק, כתוב: מה תרצה להזמין?"),
+    ("האם תרצה שנזמין את החלק?", "מה תרצה להזמין?", "במקום לשאול אם הלקוח רוצה להזמין את החלק, כתוב: מה תרצה להזמין?"),
+]
+
+def sync_style_rules_to_json():
+    """Exports learned_style_rules to local JSON cache for durability across restarts."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT pattern_from, replacement_to, rule_instruction, created_at FROM learned_style_rules ORDER BY id ASC"
+        ).fetchall()
+        conn.close()
+        data = [
+            {"pattern_from": r[0], "replacement_to": r[1], "rule_instruction": r[2], "created_at": r[3]}
+            for r in rows
+        ]
+        with open(BACKUP_STYLE_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def apply_learned_style_rules(text: str) -> str:
+    """
+    Applies all permanent phrasing & style replacements taught by Eran (via 'תיקון:' or style instructions)
+    to any outgoing customer text or KB answer.
+    """
+    if not text:
+        return ""
+    out = text
+    # Always enforce core default phrasing replacement first
+    out = re.sub(
+        r"האם\s+תרצה\s+(?:שנזמין|שאזמין|להזמין)(?:\s+עבורך|\s+לך)?\s+את\s+החלק\s*\??",
+        "מה תרצה להזמין?",
+        out
+    )
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT pattern_from, replacement_to FROM learned_style_rules ORDER BY id ASC").fetchall()
+        conn.close()
+        for pat_from, repl_to in rows:
+            if pat_from and repl_to and pat_from in out:
+                out = out.replace(pat_from, repl_to)
+            elif pat_from and repl_to:
+                pat_no_q = pat_from.rstrip("?.! ").strip()
+                if len(pat_no_q) >= 4 and pat_no_q in out:
+                    out = re.sub(rf"{re.escape(pat_no_q)}\s*\??", repl_to, out)
+    except Exception:
+        pass
+    return out
+
+def get_learned_style_instructions() -> str:
+    """Returns formatted permanent style instructions for Gemini AI system prompt."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT DISTINCT rule_instruction FROM learned_style_rules WHERE rule_instruction != ''").fetchall()
+        conn.close()
+        if not rows:
+            return "- בסיום פירוט אפשרויות או מחיר לחלק/אביזר, שאל תמיד: 'מה תרצה להזמין? 😃' (לעולם אל תשאל 'האם תרצה שאזמין עבורך את החלק?')."
+        return "\n".join([f"- {r[0]}" for r in rows])
+    except Exception:
+        return "- בסיום פירוט אפשרויות או מחיר לחלק/אביזר, שאל תמיד: 'מה תרצה להזמין? 😃'."
+
+def save_permanent_style_rule(pattern_from: str, replacement_to: str, rule_instruction: str):
+    """Saves a permanent style rule to SQLite + JSON and rewrites all existing learned_kb answers."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT INTO learned_style_rules (pattern_from, replacement_to, rule_instruction, created_at) VALUES (?, ?, ?, ?)",
+            (pattern_from.strip(), replacement_to.strip(), rule_instruction.strip(), datetime.now().isoformat())
+        )
+        # Immediately rewrite any existing learned_kb entries that contain pattern_from!
+        if pattern_from.strip() and replacement_to.strip():
+            kb_rows = conn.execute("SELECT id, answer FROM learned_kb").fetchall()
+            for r_id, r_ans in kb_rows:
+                if not r_ans:
+                    continue
+                new_ans = apply_learned_style_rules(r_ans)
+                if pattern_from.strip() in new_ans:
+                    new_ans = new_ans.replace(pattern_from.strip(), replacement_to.strip())
+                if new_ans != r_ans:
+                    conn.execute("UPDATE learned_kb SET answer = ? WHERE id = ?", (new_ans, r_id))
+        conn.commit()
+        conn.close()
+        sync_style_rules_to_json()
+        sync_learned_kb_to_json()
+    except Exception as e:
+        print(f"[Save Style Rule Notice]: {e}")
+
 
 def sync_pos_inventory_to_json():
     """Exports live synced POS inventory to local JSON cache for durability."""
@@ -2186,13 +2649,13 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
                     continue
                 # Direct match in current message
                 if re.search(rf"(?:^|\s){re.escape(kw)}(?:$|\s)", clean) or re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct):
-                    return sanitize_admin_leakage(ans)
+                    return apply_learned_style_rules(sanitize_admin_leakage(ans))
                 # Contextual match for follow-up questions (e.g. keyword "צבעים f21" when message has "צבעים" and conversation has "f21")
                 kw_tokens = [t for t in kw_clean.split() if t not in STOP_KEYWORDS]
                 non_model_tokens = [t for t in kw_tokens if t not in MODEL_TOKENS]
                 if len(kw_tokens) >= 2 and non_model_tokens:
                     if all(t in clean_words for t in non_model_tokens) and all(t in ctx_words for t in kw_tokens):
-                        return sanitize_admin_leakage(ans)
+                        return apply_learned_style_rules(sanitize_admin_leakage(ans))
     except Exception:
         pass
 
@@ -2211,7 +2674,7 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
             if "צבע" not in kw and is_asking_color:
                 continue
             if re.search(rf"(?:^|\s){re.escape(kw)}(?:$|\s)", clean) or (re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct)):
-                return item["answer"]
+                return apply_learned_style_rules(item["answer"])
 
     return ""
 
@@ -2416,10 +2879,52 @@ def init_db():
             except Exception:
                 pass
 
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS learned_style_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern_from TEXT,
+                replacement_to TEXT,
+                rule_instruction TEXT,
+                created_at TEXT
+            )
+        """)
+        c.execute("SELECT COUNT(*) FROM learned_style_rules")
+        if c.fetchone()[0] == 0:
+            for p_from, r_to, r_inst in DEFAULT_STYLE_RULES:
+                c.execute(
+                    "INSERT INTO learned_style_rules (pattern_from, replacement_to, rule_instruction, created_at) VALUES (?, ?, ?, datetime('now'))",
+                    (p_from, r_to, r_inst)
+                )
+        if os.path.exists(BACKUP_STYLE_JSON_PATH):
+            try:
+                with open(BACKUP_STYLE_JSON_PATH, "r", encoding="utf-8") as f:
+                    st_cached = json.load(f)
+                if isinstance(st_cached, list):
+                    for st_item in st_cached:
+                        if isinstance(st_item, dict) and st_item.get("replacement_to"):
+                            c.execute(
+                                "INSERT OR IGNORE INTO learned_style_rules (pattern_from, replacement_to, rule_instruction, created_at) VALUES (?, ?, ?, ?)",
+                                (st_item.get("pattern_from", ""), st_item.get("replacement_to", ""), st_item.get("rule_instruction", ""), st_item.get("created_at") or datetime.now().isoformat())
+                            )
+            except Exception:
+                pass
+
         conn.commit()
         conn.close()
+        # Apply learned style rules across all existing learned_kb rows
+        try:
+            _c_st = sqlite3.connect(DB_PATH)
+            for _rid, _rans in _c_st.execute('SELECT id, answer FROM learned_kb').fetchall():
+                _new_a = apply_learned_style_rules(_rans or '')
+                if _new_a != (_rans or ''):
+                    _c_st.execute('UPDATE learned_kb SET answer = ? WHERE id = ?', (_new_a, _rid))
+            _c_st.commit()
+            _c_st.close()
+        except Exception:
+            pass
         sync_contacts_to_json()
         sync_learned_kb_to_json()
+        sync_style_rules_to_json()
     except Exception as e:
         print(f"[Init DB Notice]: {e}")
 
@@ -3045,8 +3550,10 @@ def is_customer_style_new_inquiry(text: str) -> bool:
     clean = (text or "").strip().lower()
     if not clean:
         return False
-    # Explicit admin prefix or 3rd-person instruction to bot is NEVER a customer inquiry
-    if re.match(r"^(?:תשובה|שישאל|תשאל|תגיד\s+לו|תמסור\s+לו|תכתוב\s+לו|תעדכן\s+אותו|שיכנס|שילחץ|שיבצע)", clean):
+    # Explicit admin prefix, style/tikun command, or 3rd-person instruction to bot is NEVER a customer inquiry
+    if is_admin_style_or_tikun_command(clean) or is_admin_bit_payment_directive(clean):
+        return False
+    if re.match(r"^(?:תשובה|תיקון|כלל|שישאל|תשאל|תגיד\s+לו|תמסור\s+לו|תכתוב\s+לו|תעדכן\s+אותו|שיכנס|שילחץ|שיבצע|צריך\s+לשלוח|תשלח\s+ללקוח)", clean):
         return False
     if is_pure_greeting(clean) or is_store_info_question(clean) or is_store_owner_question(clean):
         return True
@@ -3066,6 +3573,197 @@ def is_customer_style_new_inquiry(text: str) -> bool:
     if any(k in clean for k in cust_inquiry_phrases):
         return True
     return False
+
+def handle_admin_tikun_or_style_command(message_text: str, sender_phone: str, raw_chat_id: str) -> dict:
+    """
+    Permanently learns a phrasing or style correction when Admin writes 'תיקון: ...'
+    or instructs 'מעכשיו אל תשאל X אלא תכתוב Y' / 'במקום X תכתוב Y'.
+    Updates learned_style_rules + rewrites learned_kb + updates active customer request if applicable.
+    """
+    clean_msg = auto_fix_common_hebrew_typos((message_text or "").strip())
+    body = re.sub(r"^(?:תיקון|כלל\s+חדש|כלל\s+קבוע|שינוי\s+נוסח|נוסח\s+קבוע)\s*[:\-]\s*", "", clean_msg, flags=re.IGNORECASE).strip()
+
+    # Check if Admin is specifying a "Instead of X write Y" / "From now on don't ask X rather write Y" rule
+    m_instead = (
+        re.search(
+            r"(?:מעכשיו\s+)?(?:אל|לא)\s+(?:תשאל|ישאל|תכתוב|יכתוב|תרשום|ירשום|תגיד|יגיד)(?:\s+את\s+הלקוח|\s+לו)?\s+(.+?)\s+(?:אלא|אלה)\s+(?:תכתוב|יכתוב|תרשום|ירשום|תשאל|ישאל|תגיד|יגיד)?(?:\s+לו|\s+ללקוח)?\s*[:\x22\x27]?(.+?)[\x22\x27]?$",
+            body,
+            flags=re.IGNORECASE
+        )
+        or re.search(
+            r"במקום\s+(?:לשאול|לכתוב|לרשום|להגיד)(?:\s+ללקוח|\s+לו)?\s+(.+?)\s+(?:תכתוב|יכתוב|תרשום|ירשום|תשאל|ישאל|תגיד|יגיד)(?:\s+לו|\s+ללקוח)?\s*[:\x22\x27]?(.+?)[\x22\x27]?$",
+            body,
+            flags=re.IGNORECASE
+        )
+    )
+
+    if m_instead:
+        raw_from = m_instead.group(1).strip(" .,!\x22'")
+        raw_to = m_instead.group(2).strip(" .,!\x22'")
+        if not raw_to.endswith("?") and any(q in raw_to for q in ["מה ", "איזה ", "איזו ", "האם ", "מתי ", "איך "]):
+            raw_to += "?"
+
+        # Map 3rd-person description of old phrase (e.g. "אם הוא רוצה להזמין את החלק") to actual 2nd-person bot phrases
+        patterns_to_replace = [raw_from]
+        if "להזמין את החלק" in raw_from or "להזמין עבורך את החלק" in raw_from:
+            patterns_to_replace.extend([
+                "האם תרצה שנזמין עבורך את החלק?",
+                "האם תרצה שאזמין עבורך את החלק?",
+                "האם תרצה שאזמין את החלק?",
+                "האם תרצה להזמין את החלק?",
+                "האם תרצה שנזמין את החלק?",
+            ])
+        else:
+            adapted_from, _ = adapt_admin_answer(raw_from)
+            if adapted_from and adapted_from not in patterns_to_replace:
+                patterns_to_replace.append(adapted_from.rstrip(" 😃").strip())
+
+        instruction_summary = f"במקום '{raw_from}' חובה לכתוב תמיד: '{raw_to}'"
+        for pf in patterns_to_replace:
+            save_permanent_style_rule(pf, raw_to, instruction_summary)
+
+        confirm_reply = (
+            f"✅ *הכלל והנוסח עודכנו באופן קבוע במערכת ובמאגר הזיכרון!*\n"
+            f"🔄 *נוסח שהוחלף:* \x22{patterns_to_replace[-1]}\x22\n"
+            f"✨ *הנוסח הקבוע החדש:* \x22{raw_to}\x22\n"
+            f"(כל התשובות השמורות במאגר הידע עודכנו אוטומטית לנוסח החדש)."
+        )
+        send_whatsapp_message(sender_phone, confirm_reply, raw_chat_id)
+        return {"ok": True, "admin_action": "permanent_style_rule_saved", "from": patterns_to_replace, "to": raw_to}
+
+    # Otherwise, Admin wrote "תיקון: [הנוסח החדש]" directly
+    adapted_new, is_in_prog = adapt_admin_answer(body)
+    # Preserve Admin's exact wording if Admin wrote a direct 2nd-person sentence
+    final_new_phrasing = adapted_new if adapted_new else body
+    save_permanent_style_rule("", final_new_phrasing, f"הנחיית ניסוח קבועה מערן: {body}")
+
+    # Also update the most recent learned_kb entry (and active customer request if one is pending)
+    updated_kb_kw = ""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        last_kb = conn.execute("SELECT id, keywords FROM learned_kb ORDER BY id DESC LIMIT 1").fetchone()
+        if last_kb:
+            conn.execute("UPDATE learned_kb SET answer = ? WHERE id = ?", (final_new_phrasing, last_kb[0]))
+            updated_kb_kw = last_kb[1]
+        # Check if there is a pending customer request waiting for an answer right now
+        pend_req = conn.execute(
+            "SELECT id, phone, request_text FROM customer_requests WHERE status = 'pending' AND phone != ? ORDER BY id DESC LIMIT 1",
+            (sender_phone,)
+        ).fetchone()
+        if pend_req:
+            target_cust = pend_req[1]
+            send_whatsapp_message(target_cust, final_new_phrasing)
+            save_chat_message(target_cust, "agent", final_new_phrasing)
+            opts = extract_options_and_prices_from_text(final_new_phrasing)
+            act_str = final_new_phrasing
+            if opts:
+                act_str += f" [OPTIONS_JSON:{json.dumps(opts, ensure_ascii=False)}]"
+            conn.execute("UPDATE customer_requests SET status='awaiting_customer_reply', action_taken=? WHERE id=?", (act_str, pend_req[0]))
+        conn.commit()
+        conn.close()
+        sync_learned_kb_to_json()
+    except Exception as e:
+        print(f"[Tikun Update Notice]: {e}")
+
+    kb_note = f" (כולל עדכון התשובה הקבועה עבור '{updated_kb_kw}')" if updated_kb_kw else ""
+    confirm_reply = (
+        f"✅ *התיקון נשמר באופן קבוע במערכת{kb_note}!*\n"
+        f"✨ *הנוסח המעודכן:* \x22{final_new_phrasing}\x22"
+    )
+    send_whatsapp_message(sender_phone, confirm_reply, raw_chat_id)
+    return {"ok": True, "admin_action": "permanent_tikun_applied", "new_phrasing": final_new_phrasing}
+
+
+def handle_admin_bit_payment_directive(admin_answer: str, target_pending, sender_phone: str, raw_chat_id: str) -> dict:
+    """
+    Handles when Admin hints or instructs the bot to send a Bit payment request to the customer
+    (e.g. 'אתה צריך לשלוח ללקוח בקשה לשלוח ביט', 'תשלח לו בקשה להעביר ביט').
+    Extracts the item name (e.g. 'מגן סיליקון') and price X from the conversation history (or Admin's message)
+    and sends a formal Bit payment request to the customer without parroting Admin's words!
+    """
+    conn = sqlite3.connect(DB_PATH)
+    if not target_pending:
+        target_pending = conn.execute(
+            "SELECT id, phone, request_text FROM customer_requests WHERE phone != ? ORDER BY id DESC LIMIT 1",
+            (sender_phone,)
+        ).fetchone()
+
+    if not target_pending:
+        conn.close()
+        send_whatsapp_message(sender_phone, "⚠️ לא נמצאה פניית לקוח פתוחה לשליחת בקשת תשלום בביט.", raw_chat_id)
+        return {"ok": False, "error": "no_active_customer_for_bit"}
+
+    req_id, target_cust_phone, req_text = target_pending[0], target_pending[1], target_pending[2] or ""
+    prev_act_row = conn.execute("SELECT action_taken FROM customer_requests WHERE id=?", (req_id,)).fetchone()
+    prev_act_str = (prev_act_row[0] if prev_act_row else "") or ""
+    full_hist = get_recent_chat_history(target_cust_phone, limit=16)
+
+    # 1. Check if Admin explicitly mentioned a price in this directive (excluding the Bit phone number)
+    admin_clean_no_phone = admin_answer.replace("052-4043644", "").replace("0524043644", "")
+    explicit_adm_price = extract_price_nis(admin_clean_no_phone)
+
+    # 2. Look up the selected option & its price from the customer's request and conversation history
+    latest_cust_q = extract_latest_customer_question(req_text)
+    sel_info = find_selected_option_and_price(latest_cust_q or req_text, prev_act_str, full_hist, req_text)
+    if not sel_info.get("matched"):
+        # Also scan customer lines in full_hist from newest to oldest
+        cust_lines = [l.replace("[לקוח]:", "").strip() for l in full_hist.split("\n") if l.strip().startswith("[לקוח]:")]
+        for cl in reversed(cust_lines):
+            cand = find_selected_option_and_price(cl, prev_act_str, full_hist, req_text)
+            if cand.get("matched"):
+                sel_info = cand
+                break
+
+    item_name = sel_info.get("name") if sel_info.get("matched") else ""
+    item_price = explicit_adm_price or (sel_info.get("price") if sel_info.get("matched") else "")
+
+    if not item_price:
+        m_saved_p = re.search(r"\[PRICE:(\d{2,4})\]", prev_act_str + " " + req_text)
+        item_price = m_saved_p.group(1) if m_saved_p else (extract_price_nis(prev_act_str) or extract_price_nis(full_hist))
+
+    if not item_name:
+        if "סיליקון" in auto_fix_common_hebrew_typos(req_text + " " + full_hist):
+            item_name = "מגן סיליקון"
+        elif "זכוכית" in (req_text + " " + full_hist):
+            item_name = "מגן זכוכית"
+        else:
+            item_name = "הפריט המבוקש"
+
+    if item_price:
+        cust_bit_msg = (
+            f"לצורך הזמנת *{item_name}* שמחירו *{item_price} ₪*, אנא העבר כעת *{item_price} ₪* בביט (Bit) למספר:\n"
+            f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n\n"
+            f"לאחר ההעברה, שלח לנו כאן עדכון או צילום מסך ונדאג להזמין ולשמור עבורך מיד! 😃"
+        )
+        act_update = f"נשלחו פרטי תשלום בביט עבור {item_name} ({item_price} ₪ ל-{BIT_PAYMENT_PHONE}) [PRICE:{item_price}]"
+    else:
+        cust_bit_msg = (
+            f"לצורך הזמנת *{item_name}*, ניתן להעביר תשלום בביט (Bit) למספר:\n"
+            f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n\n"
+            f"לאחר ההעברה, שלח לנו כאן עדכון או צילום מסך ונדאג להזמין עבורך מיד! 😃"
+        )
+        act_update = f"נשלחו פרטי תשלום בביט עבור {item_name} (ל-{BIT_PAYMENT_PHONE})"
+
+    conn.execute("UPDATE customer_requests SET status='awaiting_bit_payment', action_taken=? WHERE id=?", (act_update, req_id))
+    conn.commit()
+    conn.close()
+
+    send_whatsapp_message(target_cust_phone, cust_bit_msg)
+    save_chat_message(target_cust_phone, "agent", cust_bit_msg)
+
+    price_str_adm = f" על סך *{item_price} ₪*" if item_price else ""
+    confirm_adm = (
+        f"✅ נשלחה ללקוח ({target_cust_phone}) בקשת תשלום מסודרת בביט{price_str_adm} עבור *{item_name}* למספר {BIT_PAYMENT_PHONE}!"
+    )
+    send_whatsapp_message(sender_phone, confirm_adm, raw_chat_id)
+    return {
+        "ok": True,
+        "admin_action": "bit_payment_request_sent_from_directive",
+        "customer": target_cust_phone,
+        "item": item_name,
+        "price": item_price,
+    }
+
 
 async def unified_whatsapp_webhook(req: Request):
     print(f"[HTTP Incoming] Received {req.method} to {req.url.path}")
@@ -3210,6 +3908,29 @@ async def unified_whatsapp_webhook(req: Request):
         or is_admin_swipe_reply
         or bool(re.search(r"\[?#REQ-\d+\]?", message_text, re.IGNORECASE))
     )
+    # 0.A Check if Admin is replying to an Uncertain Typo Confirmation prompt ("האם אתה בטוח שזה הנוסח הנכון?")
+    bypass_typo_check = False
+    if sender_phone in admin_numbers_set and sender_phone in PENDING_ADMIN_TYPO_CONFIRMATIONS:
+        pending_typo = PENDING_ADMIN_TYPO_CONFIRMATIONS.pop(sender_phone)
+        reply_low = message_text.strip().lower()
+        if reply_low in ["תקן", "כן תקן", "כן", "תשלח מתוקן", "מתוקן", "אשר תיקון"]:
+            message_text = pending_typo["suggested_full_msg"]
+            bypass_typo_check = True
+        elif reply_low in ["שלח ככה", "בטוח", "כן בטוח", "המקורי", "לא לתקן", "כמו שכתבתי"]:
+            message_text = pending_typo["original_full_msg"]
+            bypass_typo_check = True
+        else:
+            # Admin wrote a fresh phrasing
+            bypass_typo_check = True
+
+    # 0.B Permanent Style / Phrasing Rule Interceptor ('תיקון:', 'מעכשיו אל תשאל... אלא תכתוב...')
+    if sender_phone in admin_numbers_set and is_admin_style_or_tikun_command(message_text):
+        return handle_admin_tikun_or_style_command(message_text, sender_phone, raw_chat_id)
+
+    # 0.C Operational Bit Payment Directive Interceptor ('צריך לשלוח ללקוח בקשה לשלוח ביט')
+    if sender_phone in admin_numbers_set and is_admin_bit_payment_directive(message_text):
+        return handle_admin_bit_payment_directive(message_text, None, sender_phone, raw_chat_id)
+
     has_other_phone_pending_for_admin = False
     if sender_phone in admin_numbers_set and not has_explicit_admin_prefix:
         try:
@@ -3225,10 +3946,41 @@ async def unified_whatsapp_webhook(req: Request):
             pass
 
     # 0. ADMIN LEARNING & SCHEDULING INTERCEPTOR: Works with OR without "תשובה:"!
-    if sender_phone in admin_numbers_set and (has_explicit_admin_prefix or has_other_phone_pending_for_admin):
+    if sender_phone in admin_numbers_set and (has_explicit_admin_prefix or has_other_phone_pending_for_admin or bypass_typo_check):
         cleaned_msg_for_parts = re.sub(r"^תשובה\s*(?:\[#?REQ-?\d+\]|#\d+)?\s*:?\s*", "", message_text.strip(), flags=re.IGNORECASE)
         parts = cleaned_msg_for_parts.split("|")
-        admin_answer = parts[0].strip()
+        raw_admin_answer = parts[0].strip()
+
+        # Check for uncertain/ambiguous typos BEFORE sending to customer or saving to KB!
+        if not bypass_typo_check:
+            typo_info = detect_uncertain_admin_typos(raw_admin_answer)
+            if typo_info.get("uncertain"):
+                PENDING_ADMIN_TYPO_CONFIRMATIONS[sender_phone] = {
+                    "original_full_msg": message_text,
+                    "suggested_full_msg": message_text.replace(raw_admin_answer, typo_info["suggested_text"], 1),
+                    "bad_word": typo_info["bad_word"],
+                    "suggested_word": typo_info["suggested_word"],
+                }
+                typo_prompt = (
+                    f"🧐 *זיהיתי מילה שאולי שונתה בגלל תיקון אוטומטי / שגיאת הקלדה:*\n"
+                    f"כתבת: *\x22{typo_info['bad_word']}\x22* — האם התכוונת ל-*\x22{typo_info['suggested_word']}\x22*?\n\n"
+                    f"❓ *האם אתה בטוח שזה הנוסח הנכון?*\n"
+                    f"• השב *\x22תקן\x22* (או *\x22כן\x22*) כדי לשלוח ולשמור את הנוסח המתוקן: \x22{typo_info['suggested_text']}\x22\n"
+                    f"• השב *\x22שלח ככה\x22* (או *\x22בטוח\x22*) כדי לשלוח את הנוסח המקורי כפי שכתבת\n"
+                    f"• או פשוט כתוב כאן את הנוסח המעודכן."
+                )
+                send_whatsapp_message(sender_phone, typo_prompt, raw_chat_id)
+                return {
+                    "ok": True,
+                    "admin_action": "asked_admin_typo_confirmation",
+                    "bad_word": typo_info["bad_word"],
+                    "suggested_word": typo_info["suggested_word"],
+                }
+
+        # Apply high-confidence Hebrew typo & autocorrect fixes automatically
+        admin_answer = auto_fix_common_hebrew_typos(raw_admin_answer)
+        if is_admin_bit_payment_directive(admin_answer):
+            return handle_admin_bit_payment_directive(admin_answer, None, sender_phone, raw_chat_id)
 
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -3568,10 +4320,19 @@ async def unified_whatsapp_webhook(req: Request):
                     else:
                         cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count, recent_cust_text)
                         action_with_price = adapted_admin_ans
+                        extracted_adm_opts = extract_options_and_prices_from_text(adapted_admin_ans)
+                        prev_opts = extract_options_and_prices_from_text(prev_action_str + "\n" + recent_cust_text)
+                        merged_adm_opts = extracted_adm_opts if extracted_adm_opts else prev_opts
+                        if merged_adm_opts:
+                            action_with_price += f" [OPTIONS_JSON:{json.dumps(merged_adm_opts, ensure_ascii=False)}]"
                         if kosher_tracks_adm.get("matched"):
                             action_with_price += f" [GALUT_PRICE:{kosher_tracks_adm['galut_price']}] [YEMOT_PRICE:{kosher_tracks_adm['yemot_price']}]"
-                        elif adm_price:
+                        elif adm_price and len(extracted_adm_opts) < 2:
                             action_with_price += f" [PRICE:{adm_price}]"
+                        elif not adm_price and not merged_adm_opts:
+                            m_prev_p = re.search(r"\[PRICE:(\d{2,4})\]", prev_action_str)
+                            if m_prev_p:
+                                action_with_price += f" [PRICE:{m_prev_p.group(1)}]"
                         if is_admin_ans_in_prog or is_in_progress_or_question(cust_reply_msg):
                             conn.execute(
                                 "UPDATE customer_requests SET status='awaiting_customer_reply', action_taken=? WHERE id=?",
@@ -4189,17 +4950,71 @@ async def unified_whatsapp_webhook(req: Request):
                 asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
                 return {"ok": True, "reply": reply_decline_dev, "type": "customer_declined_device_reservation"}
 
-        is_order_context = any(w in (open_action_taken or "") for w in ["להזמין", "נזמין", "הזמנה", "לשריין", "שריון", "יחידות אחרונות", "באיזה צבע", "[PRICE:", "[GALUT_PRICE:"])
+        full_recent_history = get_recent_chat_history(sender_phone, limit=16)
+        selected_opt_info = find_selected_option_and_price(message_text, open_action_taken, full_recent_history, open_req_text)
+        all_conv_options = selected_opt_info.get("all_options", [])
+
+        is_order_context = (
+            bool(selected_opt_info.get("matched"))
+            or len(all_conv_options) >= 2
+            or any(w in (open_action_taken or "") for w in ["להזמין", "נזמין", "הזמנה", "לשריין", "שריון", "יחידות אחרונות", "באיזה צבע", "[PRICE:", "[GALUT_PRICE:", "[OPTIONS_JSON:"])
+        )
         is_followup_q = (
-            "?" in message_text
-            or "؟" in message_text
-            or any(q in cust_clean for q in ["כמה עולה", "מה המחיר", "כמה זה", "תוך כמה זמן", "מתי יגיע", "מתי זה מגיע", "איזה", "האם"])
+            not selected_opt_info.get("matched") and (
+                "?" in message_text
+                or "؟" in message_text
+                or any(q in cust_clean for q in ["כמה עולה", "מה המחיר", "כמה זה", "תוך כמה זמן", "מתי יגיע", "מתי זה מגיע", "איזה", "האם", "ממליץ", "מומלץ", "עדיף"])
+            )
         )
 
-        # (A) Customer asks a follow-up question before deciding (e.g. "איזה צבעים יש?" or "כמה זה עולה ותוך כמה זמן מגיע?")
+        # (0.6.4) Customer explicitly selected or asked to order a specific option from the conversation (e.g. "אני רוצה להזמין את הסיליקון", "תזמין לי סיליקון")
+        if selected_opt_info.get("matched") and not cust_has_neg:
+            chosen_item_name = selected_opt_info["name"]
+            chosen_item_price = selected_opt_info.get("price", "")
+            if chosen_item_price:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute(
+                        "UPDATE customer_requests SET status='awaiting_bit_payment', action_taken=? WHERE id=?",
+                        (f"הלקוח בחר להזמין {chosen_item_name} - נשלחו פרטי תשלום בביט על סך {chosen_item_price} ₪ ל-{BIT_PAYMENT_PHONE} [PRICE:{chosen_item_price}]", open_req_id)
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                reply_opt_ord = (
+                    f"מעולה! לצורך הזמנת *{chosen_item_name}* שמחירו *{chosen_item_price} ₪*, אנא העבר כעת *{chosen_item_price} ₪* בביט (Bit) למספר:\n"
+                    f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n\n"
+                    f"לאחר ההעברה, שלח לנו כאן עדכון או צילום מסך, ועדכנתי כבר עכשיו את ערן להזמין ולשמור עבורך את ה{chosen_item_name}! 😃"
+                )
+                send_whatsapp_message(sender_phone, reply_opt_ord, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_opt_ord)
+
+                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                for adm in target_admins:
+                    send_whatsapp_message(
+                        adm,
+                        f"📦 *הלקוח ביקש להזמין: {chosen_item_name}!* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                        f"🛍️ *פריט שנבחר:* {chosen_item_name}\n"
+                        f"💰 *סכום לתשלום בביט:* {chosen_item_price} ₪ (נשלחו ללקוח פרטי העברה בביט למספר {BIT_PAYMENT_PHONE})\n"
+                        f"💬 *הודעת הלקוח:* \"{message_text}\"\n"
+                        f"📞 *טלפון הלקוח:* {cust_phone_fmt}"
+                    )
+                return {
+                    "ok": True,
+                    "reply": reply_opt_ord,
+                    "type": "customer_selected_option_bit_sent",
+                    "item": chosen_item_name,
+                    "amount": chosen_item_price,
+                    "bit_phone": BIT_PAYMENT_PHONE,
+                    "escalated": False,
+                }
+
+        # (A) Customer asks a follow-up question before deciding (e.g. "על איזה מגן אתה ממליץ?", "איזה צבעים יש?")
         if is_followup_q:
             # First check if the answer to this follow-up question is ALREADY in learned_kb!
-            kb_followup_ans = find_matching_learned_knowledge(message_text, f"{recent_history}\n{open_req_text}")
+            kb_followup_ans = find_matching_learned_knowledge(message_text, f"{full_recent_history}\n{open_req_text}")
             if kb_followup_ans:
                 send_whatsapp_message(sender_phone, kb_followup_ans, raw_chat_id)
                 save_chat_message(sender_phone, "customer", message_text)
@@ -4207,9 +5022,10 @@ async def unified_whatsapp_webhook(req: Request):
                 return {"ok": True, "reply": kb_followup_ans, "type": "open_dialogue_followup_from_kb", "escalated": False}
 
             updated_req = f"{open_req_text} | שאלת המשך: {message_text}"
+            preserved_action = f"ממתין לתשובת מנהל על שאלת המשך | {open_action_taken or ''}".strip(" |")
             try:
                 conn = sqlite3.connect(DB_PATH)
-                conn.execute("UPDATE customer_requests SET status='pending', request_text=?, action_taken=? WHERE id=?", (updated_req, "ממתין לתשובת מנהל על שאלת המשך", open_req_id))
+                conn.execute("UPDATE customer_requests SET status='pending', request_text=?, action_taken=? WHERE id=?", (updated_req, preserved_action, open_req_id))
                 conn.commit()
                 conn.close()
             except Exception:
@@ -4229,16 +5045,44 @@ async def unified_whatsapp_webhook(req: Request):
                 )
             return {"ok": True, "reply": reply_fq, "type": "open_dialogue_followup_question", "escalated": True}
 
-        # (B) Open dialogue was an Order / Reservation Offer (e.g. after Eran approved the price or offered to order/reserve)
+        # (B) Open dialogue was an Order / Reservation Offer (e.g. after Eran listed options or approved the price)
         if is_order_context:
             wants_to_order = not cust_has_neg and (
                 is_satisfaction_yes(message_text)
                 or any(w in cust_clean for w in ["כן", "רוצה", "תזמין", "תזמינו", "תשריין", "לשריין", "שריין", "בטח", "ודאי", "אשמח", "מעוניין", "סבבה", "בסדר", "מעולה", "בבקשה", "להזמין"])
             )
             if wants_to_order:
-                # Extract approved price from open_action_taken or open_req_text
+                # CRITICAL MULTI-OPTION GUARD: If multiple options were presented (e.g. screen protectors) and the customer
+                # only said "כן" / "אני רוצה להזמין" without choosing which option, ask them which option they want instead of taking line 1!
+                if len(all_conv_options) >= 2 and not selected_opt_info.get("matched"):
+                    opts_display_list = [
+                        f"*{o['name']}* ({o['price']} ₪)" if o.get("price") else f"*{o['name']}*"
+                        for o in all_conv_options
+                    ]
+                    opts_str = ", ".join(opts_display_list[:-1]) + f" או {opts_display_list[-1]}" if len(opts_display_list) > 1 else opts_display_list[0]
+                    reply_ask_which_opt = f"בשמחה! איזה מהם תרצה להזמין ({opts_str})? 😃"
+                    send_whatsapp_message(sender_phone, reply_ask_which_opt, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reply_ask_which_opt)
+                    return {
+                        "ok": True,
+                        "reply": reply_ask_which_opt,
+                        "type": "asked_customer_to_choose_option",
+                        "options": all_conv_options,
+                        "escalated": False,
+                    }
+
+                # Extract approved price for single-item order from open_action_taken or open_req_text
                 m_saved_price = re.search(r"\[PRICE:(\d{2,4})\]", open_action_taken or "")
-                approved_price = m_saved_price.group(1) if m_saved_price else (extract_price_nis(open_action_taken or "") or extract_price_nis(open_req_text or ""))
+                approved_price = (
+                    selected_opt_info.get("price")
+                    if (selected_opt_info.get("matched") and selected_opt_info.get("price"))
+                    else (
+                        m_saved_price.group(1)
+                        if m_saved_price
+                        else (extract_price_nis(open_action_taken or "") or extract_price_nis(open_req_text or ""))
+                    )
+                )
 
                 if approved_price:
                     try:
@@ -4692,13 +5536,16 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "agent", reply_kb)
         
         kosher_kb_info = extract_kosher_device_track_prices(f"{message_text} {reply_kb}", recent_history)
+        kb_opts = extract_options_and_prices_from_text(reply_kb)
         kb_single_price = extract_price_nis(reply_kb)
-        is_open_kb_sale = kosher_kb_info.get("matched") or is_in_progress_or_question(reply_kb)
+        is_open_kb_sale = kosher_kb_info.get("matched") or len(kb_opts) >= 2 or is_in_progress_or_question(reply_kb)
         kb_status = "awaiting_customer_reply" if is_open_kb_sale else "handled"
-        kb_action = "מענה אוטונומי ממאגר ידע ומחירון"
+        kb_action = f"מענה אוטונומי ממאגר ידע ומחירון: {reply_kb}"
+        if kb_opts:
+            kb_action += f" [OPTIONS_JSON:{json.dumps(kb_opts, ensure_ascii=False)}]"
         if kosher_kb_info.get("matched"):
             kb_action += f" - הצעת מחיר ושריון {kosher_kb_info['device_label']} [GALUT_PRICE:{kosher_kb_info['galut_price']}] [YEMOT_PRICE:{kosher_kb_info['yemot_price']}]"
-        elif kb_single_price:
+        elif kb_single_price and len(kb_opts) < 2:
             kb_action += f" [PRICE:{kb_single_price}]"
 
         try:
@@ -4876,7 +5723,7 @@ async def unified_whatsapp_webhook(req: Request):
        כאשר מתקבלות ההנחיות מהמנהל, העבר אותן ללקוח ובקש ממנו לבצע ולעדכן אותך אם זה הסתדר.
    • בירור מחיר והזמנת חלקים / מסכים / תיקוני חומרה ותשלום בביט (Bit):
      1. כאשר לקוח שואל על מסך או חלק חילוף שאינו במחירון הקבוע: ציין תחילה את המחיר הממוצע והצע ללקוח לבדוק מול ערן את הזמינות במלאי ואת המחיר המדויק ("האם תרצה שאבדוק כעת מול ערן את הזמינות במלאי ואת המחיר המדויק עבורך?").
-     2. לאחר שערן מאשר את המחיר המדויק: הצע ללקוח להזמין את החלק בשפה ישירה בגוף שני ("האם תרצה שנזמין עבורך?").
+     2. לאחר שערן מאשר את המחיר או מפרט אפשרויות: שאל את הלקוח בשפה ישירה: "מה תרצה להזמין? 😃" (לעולם אל תשאל "האם תרצה שאזמין עבורך את החלק?").
      3. אם הלקוח מסכים להזמין: שלח ללקוח את מספר הטלפון להעברה בביט ({BIT_PAYMENT_PHONE}) ואת הסכום המדויק לתשלום, ועדכן את ערן להזמין את החלק.
    • נזקי מים / מכשיר שנפל למים / תקלות חומרה דחופות:
      - הנחיות מיידיות ומצילות מכשיר ללקוח: לכבות את המכשיר מיד, לא לחבר בשום אופן למטען, לא לנסות להדליק, ולהוציא סים ומגש כרטיס אם אפשר.
@@ -4913,8 +5760,9 @@ async def unified_whatsapp_webhook(req: Request):
 9. מצב מנוי הלקוח הנוכחי:
    {subscriber_context}
 
-10. כללים שנלמדו:
+10. כללים שנלמדו וכללי ניסוח קבועים של ערן:
    {learned_rules}
+   {get_learned_style_instructions()}
 
 11. כלל סיום מענה ואיחולים חסידיים (חשוב ביותר!):
    • חל איסור מוחלט להוסיף איחולים חסידיים ("בשורות טובות", "כל טוב", "ברכה והצלחה") בכל הודעה או בתשובות שוטפות! זה יוצר תחושה שאתה מנסה להתפטר מהלקוח.
