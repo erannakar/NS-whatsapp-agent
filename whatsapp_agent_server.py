@@ -3263,6 +3263,214 @@ def _extract_html_table_rows(html_text: str) -> list[list[str]]:
     return rows_out
 
 
+def _extract_html_menus_and_links(html_text: str, base_url: str = "") -> list[dict]:
+    """
+    Extracts all navigation menu items (<a href="...">Title</a>) and frames (<iframe/frame src="...">)
+    from NewOrder Cellular / BackOffice HTML pages, classifying each menu into its functional category.
+    """
+    menus = []
+    seen_urls = set()
+    eff_base = (base_url or NEWORDER_BASE_URL).rstrip("/")
+
+    def _classify_menu(title_s: str, href_s: str) -> str:
+        combined = f"{title_s} {href_s}".lower()
+        if any(k in combined for k in ["תיקון", "תיקונים", "מעבדה", "קריאות", "קריאת", "שירות", "כרטיס", "repair", "ticket", "service", "lab"]):
+            return "מעבדה וקריאות שירות"
+        if any(k in combined for k in ["מלאי", "פריט", "פריטים", "מוצר", "מוצרים", "מחירון", "קטלוג", "item", "inv", "prod", "stock", "price"]):
+            return "מלאי, פריטים ומחירים"
+        if any(k in combined for k in ["לקוח", "לקוחות", "איש קשר", "client", "cust", "contact"]):
+            return "לקוחות"
+        if any(k in combined for k in ["מכירה", "מכירות", "קופה", "חשבונית", "הזמנה", "הזמנות", "order", "sale", "pos", "invoice"]):
+            return "קופה והזמנות"
+        if any(k in combined for k in ["דוח", "דוחות", "סטטיסטיקה", "report", "stat"]):
+            return "דוחות"
+        return "תפריט כללי"
+
+    # 1. Extract <a href="...">Menu Title</a>
+    for m_a in re.finditer(r"<a\b([^>]+)>(.*?)</a>", html_text or "", flags=re.IGNORECASE | re.DOTALL):
+        attrs, inner_html = m_a.group(1), m_a.group(2)
+        m_href = re.search(r"\bhref\s*=\s*[\x22\x27]([^\x22\x27]+)[\x22\x27]", attrs, re.IGNORECASE)
+        if not m_href:
+            continue
+        raw_href = m_href.group(1).strip()
+        if not raw_href or raw_href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        if "login.aspx" in raw_href.lower() or "logout" in raw_href.lower():
+            continue
+        title_clean = re.sub(r"<[^>]+>", " ", inner_html)
+        title_clean = re.sub(r"&nbsp;|&#160;", " ", title_clean)
+        title_clean = re.sub(r"\s+", " ", title_clean).strip()
+        if not title_clean:
+            m_title_attr = re.search(r"\b(?:title|aria-label)\s*=\s*[\x22\x27]([^\x22\x27]+)[\x22\x27]", attrs, re.IGNORECASE)
+            title_clean = m_title_attr.group(1).strip() if m_title_attr else raw_href.split("/")[-1].split("?")[0]
+
+        full_url = raw_href if raw_href.startswith("http") else f"{eff_base}/{raw_href.lstrip('/')}"
+        if full_url not in seen_urls:
+            seen_urls.add(full_url)
+            menus.append({
+                "title": title_clean[:60],
+                "url": full_url,
+                "raw_href": raw_href,
+                "category": _classify_menu(title_clean, raw_href),
+            })
+
+    # 2. Extract <iframe src="..."> and <frame src="..."> (common in ASP.NET ERP portals)
+    for m_fr in re.finditer(r"<i?frame\b([^>]+)>", html_text or "", flags=re.IGNORECASE):
+        attrs = m_fr.group(1)
+        m_src = re.search(r"\bsrc\s*=\s*[\x22\x27]([^\x22\x27]+)[\x22\x27]", attrs, re.IGNORECASE)
+        if not m_src:
+            continue
+        raw_src = m_src.group(1).strip()
+        if not raw_src or raw_src.startswith(("javascript:", "about:")):
+            continue
+        full_url = raw_src if raw_src.startswith("http") else f"{eff_base}/{raw_src.lstrip('/')}"
+        if full_url not in seen_urls:
+            seen_urls.add(full_url)
+            menus.append({
+                "title": f"חלונית מערכת ({raw_src.split('/')[-1].split('?')[0]})",
+                "url": full_url,
+                "raw_href": raw_src,
+                "category": _classify_menu(raw_src, raw_src),
+            })
+
+    return menus
+
+
+def explore_neworder_menus_and_data(
+    search_query: str = "",
+    company: str = "",
+    username: str = "",
+    password: str = "",
+) -> dict:
+    """
+    Logs into NewOrder Cellular (https://cellular.neworder.co.il/heb/login.aspx),
+    maps out all menus and internal pages, crawls the top Lab/Repairs and Inventory/Items menus,
+    and extracts live sample data rows so Eran can verify 100% that the agent sees and pulls the data!
+    """
+    auth_res = authenticate_neworder_backoffice(
+        force_refresh=True,
+        override_company=company,
+        override_username=username,
+        override_password=password,
+    )
+    if not auth_res.get("ok"):
+        return {
+            "ok": False,
+            "reason": auth_res.get("reason", "ההתחברות לא הצליחה"),
+            "portal_url": POS_API_URL,
+            "company_configured": bool(company or NEWORDER_COMPANY),
+            "username_configured": bool(username or NEWORDER_USERNAME),
+            "password_configured": bool(password or NEWORDER_PASSWORD),
+            "detected_form_fields": auth_res.get("detected_form_fields", []),
+            "mapped_fields": auth_res.get("mapped_fields", {}),
+            "menus_found": [],
+            "pages_scanned": [],
+        }
+
+    headers, cookies = build_neworder_auth_headers_and_cookies()
+    if auth_res.get("cookies"):
+        cookies = auth_res["cookies"]
+
+    landing_url = auth_res.get("landing_url") or f"{NEWORDER_BASE_URL}/default.aspx"
+    menus_found = []
+    pages_scanned = []
+    search_matches = []
+    q_clean = (search_query or "").strip().lower()
+
+    try:
+        with httpx.Client(timeout=8.0, follow_redirects=True, headers=headers, cookies=cookies) as sess:
+            # 1. Fetch landing page after login
+            land_resp = sess.get(landing_url)
+            land_html = land_resp.text or ""
+            menus_found = _extract_html_menus_and_links(land_html, NEWORDER_BASE_URL)
+            land_rows = _extract_html_table_rows(land_html)
+            if land_rows:
+                pages_scanned.append({
+                    "menu_title": "דף הבית לאחר כניסה",
+                    "category": "ראשי",
+                    "url": str(land_resp.url),
+                    "total_rows": len(land_rows),
+                    "sample_rows": [" | ".join(r[:8]) for r in land_rows[:5]],
+                })
+                if q_clean:
+                    for r in land_rows:
+                        r_str = " | ".join(r)
+                        if q_clean in r_str.lower():
+                            search_matches.append({"source": "דף הבית", "row": r_str})
+
+            # Prioritize scanning menus related to Lab/Repairs and Inventory/Items first
+            priority_order = {
+                "מעבדה וקריאות שירות": 1,
+                "מלאי, פריטים ומחירים": 2,
+                "קופה והזמנות": 3,
+                "לקוחות": 4,
+                "דוחות": 5,
+                "תפריט כללי": 6,
+            }
+            sorted_menus = sorted(menus_found, key=lambda m: priority_order.get(m.get("category", "תפריט כללי"), 9))
+
+            # 2. Crawl up to 6 key menu pages to pull live tables & sub-menus
+            visited_urls = {str(land_resp.url)}
+            for m_item in sorted_menus[:6]:
+                m_url = m_item["url"]
+                if m_url in visited_urls:
+                    continue
+                visited_urls.add(m_url)
+                try:
+                    p_resp = sess.get(m_url, params={"search": search_query} if search_query else None)
+                    if p_resp.status_code != 200:
+                        continue
+                    p_html = p_resp.text or ""
+                    # Discover any sub-menus inside this page/frame
+                    sub_menus = _extract_html_menus_and_links(p_html, NEWORDER_BASE_URL)
+                    existing_urls = {x["url"] for x in menus_found}
+                    for sm in sub_menus:
+                        if sm["url"] not in existing_urls:
+                            menus_found.append(sm)
+                            existing_urls.add(sm["url"])
+
+                    p_rows = _extract_html_table_rows(p_html)
+                    pages_scanned.append({
+                        "menu_title": m_item["title"],
+                        "category": m_item["category"],
+                        "url": m_url,
+                        "total_rows": len(p_rows),
+                        "sample_rows": [" | ".join(r[:8]) for r in p_rows[:5]],
+                    })
+                    if q_clean:
+                        for r in p_rows:
+                            r_str = " | ".join(r)
+                            if q_clean in r_str.lower():
+                                search_matches.append({"source": m_item["title"], "row": r_str})
+                except Exception:
+                    continue
+
+            # Cache discovered menu URLs so live customer queries hit the exact right menu page immediately
+            NEWORDER_SESSION_CACHE["discovered_pages"] = [m["url"] for m in menus_found]
+    except Exception as e_exp:
+        return {
+            "ok": True,
+            "note": f"ההתחברות הצליחה אך סריקת התפריטים נתקלה בשגיאה: {e_exp}",
+            "landing_url": landing_url,
+            "menus_found": menus_found,
+            "pages_scanned": pages_scanned,
+        }
+
+    return {
+        "ok": True,
+        "portal_url": POS_API_URL,
+        "landing_url": landing_url,
+        "company_configured": bool(company or NEWORDER_COMPANY),
+        "username_configured": bool(username or NEWORDER_USERNAME),
+        "password_configured": bool(password or NEWORDER_PASSWORD),
+        "menus_count": len(menus_found),
+        "menus_found": menus_found,
+        "pages_scanned": pages_scanned,
+        "search_query": search_query,
+        "search_matches": search_matches[:15],
+    }
+
+
 def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> dict:
     """
     Checks live POS / Cash Register inventory:
@@ -4402,6 +4610,19 @@ def test_neworder_backoffice_login(company: str = "", username: str = "", passwo
         "reason": res.get("reason", ""),
     }
 
+@app.get("/api/pos/explore")
+def explore_neworder_portal_api(q: str = "", company: str = "", username: str = "", password: str = ""):
+    """
+    Logs into https://cellular.neworder.co.il/heb/login.aspx, maps all menus and links,
+    and returns live sample rows from each menu table (plus optional search query ?q=...).
+    """
+    return explore_neworder_menus_and_data(
+        search_query=q,
+        company=company,
+        username=username,
+        password=password,
+    )
+
 @app.get("/api/pos/repairs")
 def get_cellular_repairs():
     """Returns all lab repair tickets synced from NewOrder Cellular."""
@@ -5087,6 +5308,61 @@ async def unified_whatsapp_webhook(req: Request):
     # 0.C Operational Bit Payment Directive Interceptor ('צריך לשלוח ללקוח בקשה לשלוח ביט')
     if sender_phone in admin_numbers_set and is_admin_bit_payment_directive(message_text):
         return handle_admin_bit_payment_directive(message_text, None, sender_phone, raw_chat_id)
+
+    # 0.D Live NewOrder POS & Lab Menu Diagnostic Command via WhatsApp ('בדיקת קופה', 'תפריטי קופה', 'בדיקת קופה: f21')
+    if sender_phone in admin_numbers_set and re.match(
+        r"^(?:בדיקת\s+קופה|תפריטי\s+קופה|בדיקת\s+חיבור\s+לקופה|סנכרון\s+קופה|בדיקת\s+ניו\s+אורדר|בדיקת\s+neworder)(?:\s*[:\-]\s*(.*))?$",
+        message_text.strip(),
+        flags=re.IGNORECASE,
+    ):
+        m_pos_cmd = re.match(
+            r"^(?:בדיקת\s+קופה|תפריטי\s+קופה|בדיקת\s+חיבור\s+לקופה|סנכרון\s+קופה|בדיקת\s+ניו\s+אורדר|בדיקת\s+neworder)(?:\s*[:\-]\s*(.*))?$",
+            message_text.strip(),
+            flags=re.IGNORECASE,
+        )
+        pos_q = (m_pos_cmd.group(1) or "").strip() if m_pos_cmd else ""
+        exp_res = explore_neworder_menus_and_data(search_query=pos_q)
+        if not exp_res.get("ok"):
+            msg_fail = (
+                "⚠️ *בדיקת חיבור ל-NewOrder Cellular:*\n"
+                "• *סטטוס:* טרם מחובר ❌\n"
+                f"• *סיבה:* {exp_res.get('reason', 'חסרים פרטי התחברות')}\n\n"
+                "🔧 *סטטוס משתנים ב-Render:*\n"
+                f"• שם חברה (`NEWORDER_COMPANY`): {'✅ מוגדר' if exp_res.get('company_configured') else '❌ חסר'}\n"
+                f"• שם משתמש (`NEWORDER_USERNAME`): {'✅ מוגדר' if exp_res.get('username_configured') else '❌ חסר'}\n"
+                f"• סיסמה (`NEWORDER_PASSWORD`): {'✅ מוגדר' if exp_res.get('password_configured') else '❌ חסר'}"
+            )
+            send_whatsapp_message(sender_phone, msg_fail, raw_chat_id)
+            return {"ok": False, "admin_action": "pos_diagnostic_failed", "details": exp_res}
+
+        menus_list = exp_res.get("menus_found", [])
+        menus_lines = [f"• *{m['title']}* ({m['category']})" for m in menus_list[:12]]
+        menus_block = "\n".join(menus_lines) if menus_lines else "• לא זוהו תפריטים נוספים בדף הבית"
+
+        samples_lines = []
+        for p_scan in exp_res.get("pages_scanned", [])[:4]:
+            if p_scan.get("sample_rows"):
+                samples_lines.append(f"📂 *{p_scan['menu_title']}* ({p_scan['total_rows']} שורות):\n  {p_scan['sample_rows'][0][:100]}")
+        samples_block = "\n".join(samples_lines) if samples_lines else "• מחובר לדף הבית (לא נמצאו טבלאות בדף הראשי)"
+
+        search_block = ""
+        if pos_q:
+            matches = exp_res.get("search_matches", [])
+            if matches:
+                m_lines = [f"• [{m['source']}]: {m['row'][:100]}" for m in matches[:5]]
+                search_block = f"\n\n🔎 *תוצאות חיפוש עבור '{pos_q}':*\n" + "\n".join(m_lines)
+            else:
+                search_block = f"\n\n🔎 לא נמצאו שורות התואמות ל-'{pos_q}' בתפריטים שנסרקו."
+
+        msg_ok = (
+            "✅ *החיבור ל-NewOrder Cellular פעיל ומסונכרן!* 🖥️🔗\n"
+            f"📍 *דף נחיתה:* {exp_res.get('landing_url', POS_API_URL)}\n\n"
+            f"📋 *תפריטים שזוהו באתר ({len(menus_list)}):*\n{menus_block}\n\n"
+            f"📊 *דגימת נתונים חיה שנשלפה מהתפריטים:*\n{samples_block}"
+            f"{search_block}"
+        )
+        send_whatsapp_message(sender_phone, msg_ok, raw_chat_id)
+        return {"ok": True, "admin_action": "pos_diagnostic_success", "details": exp_res}
 
     has_other_phone_pending_for_admin = False
     if sender_phone in admin_numbers_set and not has_explicit_admin_prefix:
