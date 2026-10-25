@@ -378,6 +378,7 @@ def is_scheduling_request(text: str) -> bool:
         "תור לרכוש", "תור לקנות", "תור לרכישת", "תור לקניית", "תור למכשיר",
         "תור לחנות", "תור להתקנה", "תור להתקנת", "תור לסינון", "תור לסים",
         "לקבוע מחר", "לקבוע להיום", "לתאם למחר", "מתי אפשר לקבוע", "מתי אפשר לתאם",
+        "מתי אפשר להגיע", "מתי אפשר לבוא", "מתי ניתן להגיע", "מתי ניתן לבוא",
         "לקבוע שעה", "לתאם שעה", "לקבוע יום", "מתאים לי ב", "אפשר לקבוע", "אפשר לתאם",
         "בוא נקבע", "תקבע לי", "תתאם לי", "מתי אתם פנויים", "מתי פנוי",
         "האם אפשר ביום", "אפשר ביום", "מתאים ביום", "שלא יצטרך להמתין", "שלא אצטרך להמתין"
@@ -776,7 +777,42 @@ def extract_price_nis(text: str) -> str:
 
     return ""
 
-def is_part_or_repair_price_inquiry(text: str) -> dict:
+
+def extract_non_time_admin_details(admin_answer: str, request_text: str = "") -> tuple[str, str]:
+    """
+    When Admin answers a multi-part customer question (e.g., "מסך עולה 400₪ אוכל להזמין ותבוא לתקן בשעה 16:00"
+    or "יש ועולה 400₪ ואפשר לבוא ב 16:00"), extracts both:
+    1. The adapted customer-facing answer about stock, ordering, and price (excluding the raw hour if the scheduling block formats the hour).
+    2. The extracted price in NIS (e.g. "400").
+    Never drops any part of Admin's answer!
+    """
+    raw = (admin_answer or "").strip()
+    if not raw:
+        return "", ""
+    price_nis = extract_price_nis(raw)
+    adapted_full, _ = adapt_admin_answer(raw, request_text)
+
+    # Convert 1st-person Admin offers ("אוכל להזמין", "אני יכול להזמין") into clear store phrasing ("נוכל להזמין עבורך")
+    adapted_full = re.sub(r"\bאוכל\s+להזמין(?:\s+לך|\s+עבורך)?\b", "נוכל להזמין עבורך", adapted_full)
+    adapted_full = re.sub(r"\bאני\s+יכול\s+להזמין(?:\s+לך|\s+עבורך)?\b", "נוכל להזמין עבורך", adapted_full)
+
+    # Check if the admin answer contains non-time details (such as price, stock, screen, ordering, etc.)
+    non_time_signals = [
+        "₪", "שח", 'ש"ח', "שקל", "עולה", "מחיר", "עלות", "במלאי", "אין במלאי", "יש במלאי",
+        "להזמין", "נזמין", "מסך", "סוללה", "שקע", "חלק", "יש לנו", "קיים"
+    ]
+    has_extra_info = bool(price_nis) or any(s in raw.lower() for s in non_time_signals)
+    if not has_extra_info:
+        return "", ""
+
+    # Strip the trailing question automatically added by adapt_admin_answer if we are combining it with the scheduling question
+    cleaned_info = re.sub(r"\s*(?:האם\s+תרצה\s+שנזמין\s+עבורך(?:\s+את\s+החלק)?\s*\??\s*😃?|—\s*האם\s+זה\s+מתאים\s+לך\?\s*😃?)\s*$", "", adapted_full).strip()
+    # Also strip redundant trailing time phrase if scheduling block already presents the time clearly
+    cleaned_info = re.sub(r"[,.]?\s*(?:ו?(?:תבוא|תגיע|אפשר\s+לבוא|אפשר\s+להגיע|מוזמן\s+להגיע|מוזמן\s+לבוא)(?:\s+לתקן|\s+אלינו)?\s*(?:מחר\s*)?(?:בשעה|ב-|ב)\s*[0-2]?[0-9](?::[0-5][0-9])?)\s*[.!]?\s*$", "", cleaned_info).strip()
+    cleaned_info = cleaned_info.rstrip(",. ")
+    return cleaned_info, price_nis
+
+def is_part_or_repair_price_inquiry(text: str, allow_with_scheduling: bool = False) -> dict:
     """
     Detects when a customer is asking about the availability or price of a repair/part
     (e.g., screen, battery, charging port) that is NOT already a fixed item in PERMANENT_LEARNED_KB (like Qin F21 screen).
@@ -785,7 +821,9 @@ def is_part_or_repair_price_inquiry(text: str) -> dict:
     2. Offer to check the exact price and availability with Eran.
     """
     clean = (text or "").strip().lower()
-    if not clean or is_scheduling_request(clean):
+    if not clean:
+        return {"matched": False}
+    if not allow_with_scheduling and is_scheduling_request(clean):
         return {"matched": False}
 
     # Skip if it's already a known fixed-price item in PERMANENT_LEARNED_KB (e.g. F21 screen or F21/F22/F25 purchase)
@@ -1326,19 +1364,60 @@ def is_warranty_followup_confirmation(text: str, history_text: str = "") -> bool
     is_positive = any(clean == sig or clean.startswith(sig) or f" {sig} " in f" {clean} " for sig in positive_signals)
     return had_warranty_context and is_positive
 
-def ensure_warranty_question_in_device_quote(reply: str, customer_msg: str) -> str:
-    """Ensures any device price quote always ends with the mandatory warranty question."""
+def is_repair_or_smartphone_context(text: str) -> bool:
+    """
+    Returns True if the text is about a lab repair/part (screen, battery, charging port, repair)
+    OR about a smartphone (Galaxy/Samsung A14/A17/S24, iPhone, Redmi).
+    Warranty tracks (גלות / ימות המשיח / גאולה) are strictly ONLY for sales of Kosher & Half-Touch devices!
+    """
+    clean = (text or "").lower()
+    repair_and_part_terms = [
+        "מסך", "החלפת מסך", "סוללה", "בטריה", "שקע טעינה", "שקע", "תיקון", "לתקן",
+        "מעבדה", "נשבר", "שבור", "קורוזיה", "נפל למים", "חלק", "חלפים"
+    ]
+    smartphone_terms = [
+        "גלקסי", "galaxy", "סמסונג", "samsung", "אייפון", "iphone", "redmi", "רדמי", "poco", "פוקו"
+    ]
+    if any(t in clean for t in repair_and_part_terms):
+        return True
+    if any(t in clean for t in smartphone_terms) or bool(re.search(r"\b[aAsSmM]\d{1,2}\b", clean)):
+        return True
+    return False
+
+def ensure_warranty_question_in_device_quote(reply: str, customer_msg: str, recent_history: str = "") -> str:
+    """
+    Ensures Kosher & Half-Touch device purchase price quotes end with the warranty tracks question,
+    while STRICTLY stripping/blocking warranty tracks from any lab repair or smartphone messages,
+    and NEVER asking 2 questions in the same bubble!
+    """
     clean_reply = (reply or "").strip()
     clean_msg = (customer_msg or "").strip().lower()
+    combined_ctx = f"{clean_msg} {clean_reply.lower()} {(recent_history or '').lower()}"
 
-    has_device_price_context = any(w in clean_reply for w in ["גלות", "ימות המשיח", "אחריות יבואן"]) or (
-        ("₪" in clean_reply or "שח" in clean_reply or 'ש"ח' in clean_reply) and any(d in clean_msg for d in ["מכשיר", "טלפון", "מחיר", "עולה", "כמה", "f21", "f22", "qin", "שיאומי", "סמסונג"])
+    # Rule C: If this is a lab repair (screen, battery, port) or smartphone context, NEVER mention Kosher device warranty tracks!
+    if is_repair_or_smartphone_context(combined_ctx):
+        # Strip any accidental warranty question that the LLM might have generated
+        clean_reply = re.sub(
+            r"\s*האם\s+תרצה\s+פירוט\s+מורחב\s+של\s+ההבדלים(?:\s+המלאים)?\s+בין\s+מסלולי\s+האחריות\?\s*😃?\s*",
+            " ",
+            clean_reply
+        ).strip()
+        return clean_reply
+
+    # Rule: Never append a second question if the reply ALREADY asks a question!
+    if "?" in clean_reply or "؟" in clean_reply:
+        return clean_reply
+
+    kosher_device_indicators = ["גלות", "ימות המשיח", "f21", "f22", "f25", "qin", "מכשיר כשר", "טלפון כשר", "חצי טאץ", "מקשים"]
+    has_kosher_device_price = any(w in clean_reply.lower() for w in ["גלות", "ימות המשיח"]) or (
+        ("₪" in clean_reply or "שח" in clean_reply or 'ש"ח' in clean_reply)
+        and any(d in combined_ctx for d in kosher_device_indicators)
     )
     already_asks_warranty = any(q in clean_reply for q in [
         "הבדלים המלאים", "פירוט מורחב", "מסלולי האחריות", "הסבר על מסלולי", "הבדלים בין מסלולי", "מסלולי אחריות"
     ])
 
-    if has_device_price_context and not already_asks_warranty:
+    if has_kosher_device_price and not already_asks_warranty:
         closing = 'האם תרצה פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות? 😃'
         return clean_reply.rstrip() + "\n\n" + closing
     return clean_reply
@@ -2408,6 +2487,7 @@ async def unified_whatsapp_webhook(req: Request):
                     appt_meta = get_appointment_meta(req_text, recent_cust_text)
                     req_hr, req_mn = extract_explicit_hour_minute(req_text)
                     adm_hr, adm_mn = extract_explicit_hour_minute(admin_answer)
+                    extra_info_str, adm_price_nis = extract_non_time_admin_details(admin_answer, req_text)
                     admin_clean = admin_answer.strip().lower()
 
                     has_negation = bool(
@@ -2417,62 +2497,87 @@ async def unified_whatsapp_webhook(req: Request):
                     admin_without_neg = re.sub(r"\b(?:לא|איננו|אין|אי)\s+(?:מתאים|פנוי|יכול|אפשרי|טוב|בסדר|נוח|אפשר)\b", " ", admin_clean)
                     is_admin_affirmative = any(sig in admin_without_neg for sig in ["כן", "מאשר", "מתאים", "סבבה", "תקבע", "קבענו", "בסדר", "מעולה", "אפשר", "פנוי"])
 
-                    # CASE 1: Admin proposes a new/alternative hour (e.g. "14:00 לא מתאים ואפשר ב 16:00" or customer had no hour and Admin says "אפשר ב 16:00")
+                    # CASE 1: Admin proposes a new/alternative hour (e.g. "14:00 לא מתאים ואפשר ב 16:00" or customer had no hour and Admin says "מסך עולה 400₪ אוכל להזמין ותבוא לתקן בשעה 16:00")
                     is_proposing_new_hour = (adm_hr is not None) and (has_negation or req_hr is None or (adm_hr, adm_mn) != (req_hr, req_mn))
 
                     if is_proposing_new_hour:
                         disp_time, s_iso, e_iso = parse_scheduling_datetime(req_text, override_text=admin_answer)
                         proposed_hm = f"{adm_hr:02d}:{adm_mn or 0:02d}"
                         name_str = f" {target_cust_name}" if (target_cust_name and target_cust_name not in COMMON_NON_NAMES) else ""
+                        extra_line = f"{extra_info_str}.\n" if extra_info_str else ""
+                        has_order_offer_in_extra = any(w in (extra_info_str or "") for w in ["להזמין", "נזמין"])
 
                         if req_hr is not None and (req_hr, req_mn) != (adm_hr, adm_mn):
                             old_hm = f"{req_hr:02d}:{req_mn or 0:02d}"
+                            closing_ask = (
+                                f"האם תרצה שנזמין עבורך את החלק ונקבע לשעה {proposed_hm}? 😃"
+                                if has_order_offer_in_extra
+                                else f"האם השעה {proposed_hm} מתאימה לך? 😃"
+                            )
                             cust_reply_msg = (
                                 f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\n"
+                                f"{extra_line}"
                                 f"השעה {old_hm} אינה פנויה, אך אפשר לקבוע לך {appt_meta['short_label']} ל{disp_time}.\n"
-                                f"האם השעה {proposed_hm} מתאימה לך? 😃"
+                                f"{closing_ask}"
                             )
                         else:
+                            closing_ask = (
+                                f"האם תרצה שנזמין עבורך את החלק ונקבע לשעה {proposed_hm}? 😃"
+                                if has_order_offer_in_extra
+                                else f"האם השעה {proposed_hm} מתאימה לך? 😃"
+                            )
                             cust_reply_msg = (
                                 f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\n"
+                                f"{extra_line}"
                                 f"אפשר לקבוע לך {appt_meta['short_label']} ל{disp_time}.\n"
-                                f"האם השעה {proposed_hm} מתאימה לך? 😃"
+                                f"{closing_ask}"
                             )
 
                         send_whatsapp_message(target_cust_phone, cust_reply_msg)
                         save_chat_message(target_cust_phone, "agent", cust_reply_msg)
 
-                        # Keep request active awaiting customer confirmation of the proposed hour (16:00)
-                        updated_req_text = re.sub(r"\s*\[PROPOSED_TIME:[^\]]*\]", "", req_text).strip()
+                        # Keep request active awaiting customer confirmation of the proposed hour (16:00) AND store any quoted price!
+                        updated_req_text = re.sub(r"\s*\[(?:PROPOSED_TIME|PRICE):[^\]]*\]", "", req_text).strip()
                         updated_req_text = f"{updated_req_text} [PROPOSED_TIME: בשעה {proposed_hm}]"
+                        if adm_price_nis:
+                            updated_req_text = f"{updated_req_text} [PRICE:{adm_price_nis}]"
+                        action_summary = f"הוצע ללקוח מועד: {disp_time}"
+                        if extra_info_str:
+                            action_summary += f" | פרטים ומחיר: {extra_info_str}"
+                        if adm_price_nis:
+                            action_summary += f" [PRICE:{adm_price_nis}]"
                         conn.execute(
                             "UPDATE customer_requests SET status='awaiting_customer_time', request_text=?, action_taken=? WHERE id=?",
-                            (updated_req_text, f"הוצע ללקוח מועד: {disp_time}", target_pending[0])
+                            (updated_req_text, action_summary, target_pending[0])
                         )
 
+                        price_note = f" (כולל מחיר: {adm_price_nis} ₪)" if adm_price_nis else ""
                         confirm_msg = (
-                            f"✅ עדכנתי את הלקוח ({target_cust_name or callback_phone}) שהשעה {proposed_hm} פנויה ({disp_time}) וביקשתי את אישורו!\n"
+                            f"✅ עדכנתי את הלקוח ({target_cust_name or callback_phone}) לגבי כלל הפרטים{price_note} ושהשעה {proposed_hm} פנויה ({disp_time}), וביקשתי את אישורו!\n"
                             f"📞 טלפון לחזרה: {callback_phone}\n"
-                            f"📅 אשלח לך את הקישור להוספה ליומן גוגל ברגע שהלקוח יאשר שהשעה מתאימה לו."
+                            f"📅 אשלח לך את הקישור להוספה ליומן גוגל ברגע שהלקוח יאשר."
                         )
                         send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
                         conn.commit()
                         conn.close()
-                        return {"ok": True, "admin_action": "alternative_time_proposed", "customer": target_cust_phone, "proposed_time": disp_time}
+                        return {"ok": True, "admin_action": "alternative_time_proposed", "customer": target_cust_phone, "proposed_time": disp_time, "price": adm_price_nis}
 
                     # CASE 2: Admin approves the requested hour (and an explicit hour exists)
                     elif not has_negation and is_admin_affirmative and (req_hr is not None or adm_hr is not None):
                         disp_time, s_iso, e_iso = parse_scheduling_datetime(req_text, override_text=admin_answer)
                         name_str = f" {target_cust_name}" if (target_cust_name and target_cust_name not in COMMON_NON_NAMES) else ""
+                        extra_line = f"{extra_info_str}.\n" if extra_info_str else ""
                         if appt_meta["is_remote"]:
                             cust_reply_msg = (
                                 f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\n"
+                                f"{extra_line}"
                                 f"מועד ההתקנה אושר בהצלחה! קבענו ל{disp_time}.\n"
                                 f"ניצור איתך קשר במספר {callback_phone} להתחברות והתקנה מרחוק במחשב. 😃"
                             )
                         else:
                             cust_reply_msg = (
                                 f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\n"
+                                f"{extra_line}"
                                 f"התור שלך אושר בהצלחה! קבענו {appt_meta['short_label']} ל{disp_time} {appt_meta['venue_phrase']}.\n"
                                 f"מספר הטלפון לחזרה אליך: {callback_phone}. נשמח לראותך! 😃"
                             )
@@ -2623,7 +2728,7 @@ async def unified_whatsapp_webhook(req: Request):
     try:
         conn = sqlite3.connect(DB_PATH)
         active_sched_row = conn.execute(
-            "SELECT id, request_text, status FROM customer_requests WHERE (phone = ? OR phone LIKE ?) AND status IN ('awaiting_customer_time', 'pending') ORDER BY id DESC LIMIT 1",
+            "SELECT id, request_text, status, action_taken FROM customer_requests WHERE (phone = ? OR phone LIKE ?) AND status IN ('awaiting_customer_time', 'pending') ORDER BY id DESC LIMIT 1",
             (sender_phone, f"%{sender_phone[-9:]}%")
         ).fetchone()
         conn.close()
@@ -2631,35 +2736,62 @@ async def unified_whatsapp_webhook(req: Request):
         active_sched_row = None
 
     if active_sched_row and is_scheduling_request(active_sched_row[1] or ""):
-        sched_req_id, sched_req_text, sched_req_status = active_sched_row
+        sched_req_id, sched_req_text, sched_req_status, sched_action_taken = active_sched_row
         appt_meta = get_appointment_meta(sched_req_text, recent_history)
         cust_clean = message_text.strip().lower()
         cust_has_neg = bool(re.search(r"\b(?:לא|אי\s+אפשר|תפוס|עמוס)\b", cust_clean))
         cust_hr, cust_mn = extract_explicit_hour_minute(message_text)
         cb_detected = detect_callback_phone_in_text(message_text, sender_phone)
 
+        # Extract any saved price from sched_req_text or sched_action_taken
+        m_sched_pr = re.search(r"\[PRICE:(\d{2,4})\]", (sched_req_text or "") + " " + (sched_action_taken or ""))
+        saved_sched_price = m_sched_pr.group(1) if m_sched_pr else ""
+        has_order_in_sched = any(w in (sched_action_taken or "") for w in ["להזמין", "נזמין"])
+
         # (A) If status is 'awaiting_customer_time' (Admin proposed an hour like 16:00 and we asked customer if it suits them)
         if sched_req_status == "awaiting_customer_time":
             proposed_hr, proposed_mn = extract_explicit_hour_minute(sched_req_text)
+            is_asking_price_now = any(q in cust_clean for q in ["כמה זה עולה", "כמה עולה", "מה המחיר", "מה העלות", "כמה זה"])
+            if is_asking_price_now and saved_sched_price:
+                proposed_hm_str = f"{proposed_hr:02d}:{proposed_mn or 0:02d}" if proposed_hr is not None else "16:00"
+                reply_pr = (
+                    f"המחיר שערן עדכן עבורך הוא *{saved_sched_price} ₪*. 🛠️\n"
+                    f"האם תרצה שנקבע לך את התור לשעה {proposed_hm_str} ונזמין עבורך את החלק? 😃"
+                )
+                send_whatsapp_message(sender_phone, reply_pr, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_pr)
+                return {"ok": True, "reply": reply_pr, "type": "answered_saved_admin_price", "price": saved_sched_price}
+
             is_cust_confirming_time = (
-                not cust_has_neg and (
+                not cust_has_neg and not is_asking_price_now and (
                     is_satisfaction_yes(message_text)
-                    or any(w in cust_clean for w in ["כן", "מתאים", "סבבה", "מעולה", "בסדר", "אחלה", "מצוין", "בטח", "ודאי", "סגור", "קבענו", "נקבע"])
+                    or any(w in cust_clean for w in ["כן", "מתאים", "סבבה", "מעולה", "בסדר", "אחלה", "מצוין", "בטח", "ודאי", "סגור", "קבענו", "נקבע", "תזמין", "להזמין"])
                     or (cust_hr is not None and (cust_hr, cust_mn) == (proposed_hr, proposed_mn))
                 )
             )
             if is_cust_confirming_time:
                 disp_time, s_iso, e_iso = parse_scheduling_datetime(sched_req_text)
                 callback_phone = cb_detected or format_phone_display(sender_phone)
+                bit_block = ""
+                new_status_after_confirm = "handled"
+                if saved_sched_price and has_order_in_sched:
+                    bit_block = (
+                        f"\n\n💳 *תשלום להזמנת החלק:* אנא העבר כעת *{saved_sched_price} ₪* בביט (Bit) למספר *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח) ושלח לנו כאן עדכון לאחר ההעברה."
+                    )
+                    new_status_after_confirm = "awaiting_bit_payment"
+                elif saved_sched_price:
+                    bit_block = f"\n💰 עלות הטיפול שנקבעה: *{saved_sched_price} ₪*."
+
                 if appt_meta["is_remote"]:
                     reply_final = (
                         f"מעולה! מועד ההתקנה נקבע סופית ל{disp_time}.\n"
-                        f"ניצור איתך קשר במספר {callback_phone} להתחברות והתקנה מרחוק במחשב. 😃"
+                        f"ניצור איתך קשר במספר {callback_phone} להתחברות והתקנה מרחוק במחשב.{bit_block} 😃"
                     )
                 else:
                     reply_final = (
                         f"מעולה! קבענו סופית {appt_meta['short_label']} ל{disp_time} {appt_meta['venue_phrase']}.\n"
-                        f"מספר הטלפון לחזרה אליך: {callback_phone}. נשמח לראותך! 😃"
+                        f"מספר הטלפון לחזרה אליך: {callback_phone}.{bit_block} נשמח לראותך! 😃"
                     )
                 send_whatsapp_message(sender_phone, reply_final, raw_chat_id)
                 save_chat_message(sender_phone, "customer", message_text)
@@ -2667,7 +2799,8 @@ async def unified_whatsapp_webhook(req: Request):
 
                 try:
                     conn = sqlite3.connect(DB_PATH)
-                    conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"אושר סופית ע״י לקוח ל{disp_time}", sched_req_id))
+                    action_done_str = f"אושר סופית ע״י לקוח ל{disp_time}" + (f" ({saved_sched_price} ₪)" if saved_sched_price else "")
+                    conn.execute("UPDATE customer_requests SET status=?, action_taken=? WHERE id=?", (new_status_after_confirm, action_done_str, sched_req_id))
                     conn.execute(
                         "INSERT INTO installations_schedule (phone, customer_name, callback_phone, details, scheduled_time, status, created_at) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -2678,11 +2811,14 @@ async def unified_whatsapp_webhook(req: Request):
                 except Exception:
                     pass
 
+                clean_req_for_cal = re.sub(r"\s*\[(?:PROPOSED_TIME|PRICE):[^\]]*\]", "", sched_req_text).strip()
                 cal_details = (
                     f"לקוח: {customer_name or 'לקוח'}\n"
                     f"טלפון לחזרה: {callback_phone}\n"
                     f"מועד: {disp_time}\n"
                     f"שירות: {appt_meta['type_label']}\n"
+                    + (f"מחיר שסוכם: {saved_sched_price} ₪\n" if saved_sched_price else "")
+                    + f"פרטים: {clean_req_for_cal}\n"
                     f"⏰ תזכורת מוגדרת: רבע שעה (15 דקות) לפני הפגישה"
                 )
                 gcal_url = generate_google_calendar_link(
@@ -2692,11 +2828,13 @@ async def unified_whatsapp_webhook(req: Request):
                     details=cal_details,
                     location=appt_meta["location"]
                 )
+                order_alert_line = f"🛠️ *נא להזמין עבורו את החלק! (נשלחו ללקוח פרטי העברה בביט על סך {saved_sched_price} ₪ ל-{BIT_PAYMENT_PHONE})*\n" if (saved_sched_price and has_order_in_sched) else ""
                 target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
                 for adm in target_admins:
                     send_whatsapp_message(
                         adm,
                         f"✅ *הלקוח ({customer_name or callback_phone}) אישר סופית את המועד ל{disp_time}!*\n"
+                        f"{order_alert_line}"
                         f"📞 טלפון לחזרה: {callback_phone}\n\n"
                         f"⏰ תזכורת: רבע שעה (15 דקות) לפני הפגישה.\n"
                         f"📅 לחץ כאן להוספת תזכורת ביומן גוגל בלחיצה אחת:\n{gcal_url}"
@@ -3049,8 +3187,62 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "agent", greeting_reply)
         return {"ok": True, "reply": greeting_reply, "type": "greeting_reply"}
 
+    # 1.45 CHECK IF LAST AGENT MESSAGE ASKED AN OPEN OFFER/CHECK QUESTION (Prevent premature closing on "כן"!)
+    last_agent_msg = ""
+    if recent_history:
+        agent_lines = [l.replace("[סוכן]:", "").strip() for l in recent_history.split("\n") if l.strip().startswith("[סוכן]:")]
+        if agent_lines:
+            last_agent_msg = agent_lines[-1]
+
+    last_agent_asked_price_check = any(p in last_agent_msg for p in [
+        "שאבדוק כעת מול ערן", "לבדוק כעת מול ערן", "שאבדוק מול ערן", "לבדוק מול ערן", "העלות הסופית עבורך", "המחיר המדויק עבורך"
+    ])
+    last_agent_asked_order = any(p in last_agent_msg for p in [
+        "האם תרצה שנזמין", "רוצה שנזמין", "אפשר להזמין אם אתה רוצה"
+    ])
+    last_agent_asked_satisfaction = any(p in last_agent_msg for p in [
+        "האם הצלחתי לעזור", "מענה לפנייתך", "במשהו נוסף"
+    ])
+    last_agent_is_open_question = bool(
+        last_agent_msg and not last_agent_asked_satisfaction and is_in_progress_or_question(last_agent_msg)
+    )
+
+    if (last_agent_asked_price_check or last_agent_asked_order) and is_satisfaction_yes(message_text):
+        cust_phone_fmt = format_phone_display(sender_phone)
+        if last_agent_asked_price_check:
+            reply_chk_direct = "מעולה! אני בודק כעת מול ערן את הזמינות במלאי ואת המחיר המדויק וכבר חוזר אליך עם תשובה. 😃"
+            send_whatsapp_message(sender_phone, reply_chk_direct, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", reply_chk_direct)
+            saved_id_chk = None
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (sender_phone, "נעם שיח - מעבדה וחלפים", recent_history[-200:] if recent_history else message_text, "ממתין לאישור מחיר מדויק מערן", "", "pending", datetime.now().isoformat())
+                )
+                saved_id_chk = cur.lastrowid
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+            for adm in target_admins:
+                send_whatsapp_message(
+                    adm,
+                    f"❓ *בדיקת מחיר מדויק ומלאי עבור לקוח* {f'[#REQ-{saved_id_chk}]' if saved_id_chk else ''} ({customer_name or cust_phone_fmt}):\n"
+                    f"הלקוח ביקש לבדוק מולך זמינות ומחיר מדויק.\n"
+                    f"💬 *הקשר השיחה:*\n{recent_history}\n\n"
+                    f"💬 *כתוב כאן את המחיר המדויק (למשל: 'אין במלאי אפשר להזמין ב 400' או '400') והסוכן יציע ללקוח להזמין!*"
+                )
+            return {"ok": True, "reply": reply_chk_direct, "type": "escalated_exact_price_check", "escalated": True}
+
     # 1.5 FAST DETERMINISTIC PATH: Satisfaction "YES" or Thank You -> Send Hasidic Blessing
-    if is_satisfaction_yes(message_text) or is_thank_you_or_closing(message_text, recent_history):
+    # CRITICAL GUARD: Only treat "כן" as a closing satisfaction confirmation if the bot actually asked the satisfaction question (or there is no open question)!
+    can_close_on_yes = is_satisfaction_yes(message_text) and (last_agent_asked_satisfaction or not last_agent_is_open_question)
+    if can_close_on_yes or is_thank_you_or_closing(message_text, recent_history):
         closing_reply = get_closing_reply(customer_name, message_text)
         send_whatsapp_message(sender_phone, closing_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
@@ -3099,8 +3291,8 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "agent", owner_reply)
         return {"ok": True, "reply": owner_reply, "type": "store_owner_info"}
 
-    # 3. FAST DETERMINISTIC PATH: Warranty Confirmation / Inquiry (Send WhatsApp FIRST, then save to DB)
-    if is_warranty_followup_confirmation(message_text, recent_history):
+    # 3. FAST DETERMINISTIC PATH: Warranty Confirmation / Inquiry (ONLY for Kosher & Half-Touch devices, NEVER for lab repairs or smartphones!)
+    if is_warranty_followup_confirmation(message_text, recent_history) and not is_repair_or_smartphone_context(message_text) and not last_agent_asked_price_check:
         warranty_reply = get_warranty_explanation_with_pdf(customer_name)
         
         # 1. Send formatted text message with clickable PDF link
@@ -3143,24 +3335,48 @@ async def unified_whatsapp_webhook(req: Request):
             
         return {"ok": True, "reply": warranty_reply, "type": "warranty_full_explanation", "escalated": False}
 
-    # 3.4 FAST DETERMINISTIC PATH: Scheduling / Store Purchase / Installation / Lab Queue Requests (Never let AI unilaterally book or invent 14:00!)
+    # 3.4 FAST DETERMINISTIC PATH: Scheduling / Store Purchase / Installation / Lab Queue Requests (Handles both single & multi-question inquiries!)
     if is_scheduling_request(message_text):
         sched_display, sched_s_iso, sched_e_iso = parse_scheduling_datetime(message_text)
         appt_meta = get_appointment_meta(message_text, recent_history)
+        combined_part_inq = is_part_or_repair_price_inquiry(message_text, allow_with_scheduling=True)
+        has_stock_or_price_q = bool(combined_part_inq.get("matched")) or any(
+            w in message_text.lower() for w in ["יש במלאי", "במלאי", "כמה עולה", "מה המחיר", "יש לכם", "קיים במלאי"]
+        )
         cust_phone_fmt = format_phone_display(sender_phone)
         name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
         has_explicit_hour = bool(sched_s_iso)
 
+        avg_price_sentence = ""
+        if combined_part_inq.get("matched"):
+            avg_price_sentence = f"המחיר הממוצע עבור {combined_part_inq['part_name']} נע בדרך כלל סביב *{combined_part_inq['avg_range']}* (בהתאם לדגם ולזמינות החלק). 🛠️\n"
+
         if has_explicit_hour:
-            reply_sched = (
-                f"תודה על פנייתך{name_str}! אני בודק כעת את היומן והזמינות של ערן עבור {appt_meta['short_label']} ל{sched_display} וכבר חוזר אליך עם אישור סופי. 😃\n\n"
-                f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך, או שאתה מעדיף מספר אחר?"
-            )
+            if has_stock_or_price_q:
+                reply_sched = (
+                    f"תודה על פנייתך{name_str}!\n"
+                    f"{avg_price_sentence}"
+                    f"אני בודק כעת מול ערן גם את הזמינות במלאי והמחיר המדויק וגם את היומן עבור {appt_meta['short_label']} ל{sched_display}, וכבר חוזר אליך עם תשובה מלאה! 😃\n\n"
+                    f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך, או שאתה מעדיף מספר אחר?"
+                )
+            else:
+                reply_sched = (
+                    f"תודה על פנייתך{name_str}! אני בודק כעת את היומן והזמינות של ערן עבור {appt_meta['short_label']} ל{sched_display} וכבר חוזר אליך עם אישור סופי. 😃\n\n"
+                    f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך, או שאתה מעדיף מספר אחר?"
+                )
         else:
-            reply_sched = (
-                f"תודה על פנייתך{name_str}! אני בודק כעת מול ערן מתי ניתן לקבוע לך {appt_meta['short_label']} ל{sched_display} כדי שלא תצטרך להמתין. באיזו שעה בערך הכי נוח לך? 😃\n\n"
-                f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך, או שאתה מעדיף מספר אחר?"
-            )
+            if has_stock_or_price_q:
+                reply_sched = (
+                    f"תודה על פנייתך{name_str}!\n"
+                    f"{avg_price_sentence}"
+                    f"אני בודק כעת מול ערן גם את הזמינות במלאי והמחיר המדויק וגם מתי ניתן לקבוע לך {appt_meta['short_label']} ל{sched_display} כדי שלא תצטרך להמתין. באיזו שעה בערך הכי נוח לך? 😃\n\n"
+                    f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך, או שאתה מעדיף מספר אחר?"
+                )
+            else:
+                reply_sched = (
+                    f"תודה על פנייתך{name_str}! אני בודק כעת מול ערן מתי ניתן לקבוע לך {appt_meta['short_label']} ל{sched_display} כדי שלא תצטרך להמתין. באיזו שעה בערך הכי נוח לך? 😃\n\n"
+                    f"בנוסף, האם המספר שממנו אנחנו מתכתבים כעת ({cust_phone_fmt}) הוא המספר הנוח לחזרה אליך, או שאתה מעדיף מספר אחר?"
+                )
 
         send_whatsapp_message(sender_phone, reply_sched, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
@@ -3177,7 +3393,7 @@ async def unified_whatsapp_webhook(req: Request):
                     sender_phone,
                     f"נעם שיח - {appt_meta['short_label']}",
                     message_text if _classify_single_service_text(message_text) else f"{message_text} ({appt_meta['type_label']})",
-                    f"תיאום ל{sched_display} - ממתין לאישור מנהל",
+                    f"תיאום ל{sched_display} ובירור מלאי/מחיר - ממתין לאישור מנהל" if has_stock_or_price_q else f"תיאום ל{sched_display} - ממתין לאישור מנהל",
                     "",
                     "pending",
                     datetime.now().isoformat()
@@ -3190,16 +3406,21 @@ async def unified_whatsapp_webhook(req: Request):
             print(f"[Save Sched Request Notice]: {e_s}")
 
         target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+        stock_q_note = "1. *בדיקת מלאי ומחיר מדויק* עבור החלק המבוקש.\n2. " if has_stock_or_price_q else ""
         if has_explicit_hour:
-            admin_summary_line = f"תיאום {appt_meta['type_label']} ל{sched_display} עבור {customer_name or cust_phone_fmt} (טלפון לחזרה: {cust_phone_fmt}) - האם המועד מתאים לך? (השב 'כן' לאישור ביומן, או ציין שעה חלופית)"
+            admin_summary_line = (
+                f"{stock_q_note}*תיאום {appt_meta['type_label']}* ל{sched_display} עבור {customer_name or cust_phone_fmt} (טלפון לחזרה: {cust_phone_fmt}) - האם המועד מתאים לך?"
+            )
         else:
-            admin_summary_line = f"תיאום {appt_meta['type_label']} ל{sched_display} עבור {customer_name or cust_phone_fmt} (טלפון לחזרה: {cust_phone_fmt}) - הלקוח לא ציין שעה מסוימת. באיזו שעה מתאים לך לקבוע איתו?"
+            admin_summary_line = (
+                f"{stock_q_note}*תיאום {appt_meta['type_label']}* ל{sched_display} עבור {customer_name or cust_phone_fmt} (טלפון לחזרה: {cust_phone_fmt}) - הלקוח לא ציין שעה מסוימת. באיזו שעה מתאים לך לקבוע איתו?"
+            )
 
         admin_notification = (
             f"❓ *פנייה מלקוח שדורשת את תשובתך* {f'[#REQ-{saved_req_id}]' if saved_req_id else ''} ({customer_name or cust_phone_fmt}):\n"
-            f"📌 *מהות הפנייה:* {admin_summary_line}\n\n"
+            f"📌 *מהות הפנייה:*\n{admin_summary_line}\n\n"
             f"💬 *הודעת הלקוח:* \"{message_text}\"\n\n"
-            f"💬 *למענה מהיר: פשוט כתוב כאן את תשובתך (למשל: 'כן' או '16:00' או 'לי מתאים ב 16:00' — אין צורך לכתוב 'תשובה:')*"
+            f"💬 *למענה מהיר: כתוב כאן את התשובה (כולל מחיר/זמינות ושעה, למשל: 'יש במלאי עולה 400 ואפשר ב 16:00' או 'עולה 400 אוכל להזמין ותבוא ב 16:00' — הסוכן יעביר ללקוח את שני הנושאים יחד!)*"
         )
         for adm in target_admins:
             send_whatsapp_message(adm, admin_notification)
@@ -3212,7 +3433,7 @@ async def unified_whatsapp_webhook(req: Request):
         reply_kb = kb_answer
         if customer_name and msg_count <= 1 and not already_greeted:
             reply_kb = f"שלום {customer_name}, מה שלומך? {reply_kb}"
-        reply_kb = ensure_warranty_question_in_device_quote(reply_kb, message_text)
+        reply_kb = ensure_warranty_question_in_device_quote(reply_kb, message_text, recent_history)
         
         # If the reply invites the customer to bring the device and the store is currently closed, add arrival advice
         if not store_status["is_open"] and any(w in reply_kb for w in ["מוזמן להביא", "במקום", "להגיע", "לבוא"]):
@@ -3249,8 +3470,10 @@ async def unified_whatsapp_webhook(req: Request):
             
         return {"ok": True, "reply": reply_kb, "type": "learned_kb_direct", "escalated": False}
 
-    # 3.6 FAST DETERMINISTIC PATH: Part / Screen / Battery / Port Inquiry -> Give Average Price & Offer Exact Price Check with Eran!
+    # 3.6 FAST DETERMINISTIC PATH: Part / Screen / Battery / Port Inquiry (or follow-up "כמה זה עולה" when context is a part/repair) -> Give Average Price & Offer Exact Price Check with Eran!
     part_inq = is_part_or_repair_price_inquiry(message_text)
+    if not part_inq.get("matched") and any(q in message_text.lower() for q in ["כמה זה עולה", "כמה עולה", "מה המחיר", "מה העלות"]):
+        part_inq = is_part_or_repair_price_inquiry(recent_history, allow_with_scheduling=True)
     if part_inq.get("matched"):
         salutation = f"שלום {customer_name}, מה שלומך? " if (customer_name and msg_count <= 1 and not already_greeted) else ""
         reply_avg = (
@@ -3512,7 +3735,7 @@ async def unified_whatsapp_webhook(req: Request):
             is_escalated = False
 
     # Ensure device price quotes always conclude with the mandatory warranty question
-    reply_text = ensure_warranty_question_in_device_quote(reply_text, message_text)
+    reply_text = ensure_warranty_question_in_device_quote(reply_text, message_text, recent_history)
 
     # Guard and clean salutations/name (enforcing 3 stages: Start, Middle, End)
     if customer_name:
