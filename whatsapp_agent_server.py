@@ -71,7 +71,12 @@ ADMIN_WHATSAPP_PHONE = DEFAULT_ADMIN_PHONE if (not _raw_admin or _raw_admin == "
 
 # Bit Payment Configuration (until a direct payment terminal is connected)
 BIT_PAYMENT_PHONE = os.getenv("BIT_PAYMENT_PHONE", "052-4043644").strip().strip('"').strip("'")
-BIT_PAYMENT_PHONE_DIGITS = "0524043644" 
+BIT_PAYMENT_PHONE_DIGITS = "0524043644"
+
+# Live POS / Cash Register Integration (PC Software Push Sync or Direct Cloud API Pull)
+POS_API_URL = os.getenv("POS_API_URL", "").strip().strip('"').strip("'")
+POS_API_KEY = os.getenv("POS_API_KEY", "").strip().strip('"').strip("'")
+POS_SYNC_SECRET = os.getenv("POS_SYNC_SECRET", "").strip().strip('"').strip("'") 
 
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().strip('"').strip("'")
 PORT = os.getenv("PORT", "8000")
@@ -286,8 +291,8 @@ PERMANENT_LEARNED_KB = [
         "keywords": "f22 pro, f22p, f22 p, f22pro, שיאומי f22 pro, שיאומי f22p, שיאומי f22, qin f22 pro, qin f22p, qin f22, f22",
         "answer": (
             "כן, מכשיר שיאומי Qin F22 Pro (F22P) זמין אצלנו במלאי ב-2 מסלולי אחריות לבחירתך: 📱\n"
-            "• מסלול גלות (אחריות יבואן רשמי בלבד): 850 ₪\n"
-            "• ⭐ מסלול ימות המשיח (המסלול המומלץ והמשתלם ביותר שלנו!): 950 ₪ — בתוספת קטנה אתה מקבל שקט נפשי מלא עם תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n\n"
+            "• מסלול גלות (אחריות יבואן רשמי בלבד): 770 ₪\n"
+            "• ⭐ מסלול ימות המשיח (המסלול המומלץ והמשתלם ביותר שלנו!): 870 ₪ — בתוספת קטנה אתה מקבל שקט נפשי מלא עם תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n\n"
             "🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
         )
     },
@@ -831,27 +836,44 @@ def extract_kosher_device_track_prices(text: str, recent_history: str = "") -> d
 
     # 2. Explicit prices next to גלות and ימות המשיח in text
     m_galut_txt = (
-        re.search(r"גלות[^\n0-9]{0,35}(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?", combined)
-        or re.search(r"(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?\s*\([^)]*גלות", combined)
+        re.search(r"(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?\s*(?:\([^)]*\)\s*)?(?:במסלול\s+|מסלול\s+|ב-?|ב\s+)?גלות", combined)
+        or re.search(r"גלות(?:\s*\([^)]*\))?\s*[:=-]?\s*(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?", combined)
     )
     m_yemot_txt = (
-        re.search(r"ימות\s+המשיח[^\n0-9]{0,60}(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?", combined)
-        or re.search(r"(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?\s*\([^)]*ימות\s+המשיח", combined)
+        re.search(r"(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?\s*(?:\([^)]*\)\s*)?(?:במסלול\s+|מסלול\s+|ב-?|ב\s+)?ימות\s+המשיח", combined)
+        or re.search(r"ימות\s+המשיח(?:\s*\([^)]*\))?\s*[:=-]?\s*(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?", combined)
     )
     if m_galut_txt and m_yemot_txt:
-        return {
-            "matched": True,
-            "device_label": dev_label,
-            "galut_price": m_galut_txt.group(1),
-            "yemot_price": m_yemot_txt.group(1)
-        }
+        p1, p2 = int(m_galut_txt.group(1)), int(m_yemot_txt.group(1))
+        if p1 != p2:
+            return {
+                "matched": True,
+                "device_label": dev_label,
+                "galut_price": str(min(p1, p2)),
+                "yemot_price": str(max(p1, p2))
+            }
+
+    # 2.5 Check live POS inventory table for custom synced device track prices
+    if not is_repair_or_smartphone_context(combined):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            pos_rows = conn.execute(
+                "SELECT product_name, keywords, price_galut, price_yemot FROM pos_inventory WHERE price_galut IS NOT NULL AND price_yemot IS NOT NULL"
+            ).fetchall()
+            conn.close()
+            for p_name, p_kws, pg, py in pos_rows:
+                terms = [t.strip().lower() for t in f"{p_name or ''},{p_kws or ''}".split(",") if len(t.strip()) >= 3]
+                if any(t in combined for t in terms):
+                    return {"matched": True, "device_label": p_name, "galut_price": str(pg), "yemot_price": str(py)}
+        except Exception:
+            pass
 
     # 3. Known official device models when not a screen/repair inquiry
     if not is_repair_or_smartphone_context(combined):
         if any(k in combined for k in ["f21p", "f21 p", "f21 pro", "f21pro", "f21"]):
             return {"matched": True, "device_label": "שיאומי Qin F21 Pro", "galut_price": "550", "yemot_price": "650"}
         if any(k in combined for k in ["f22p", "f22 p", "f22 pro", "f22pro", "f22"]):
-            return {"matched": True, "device_label": "שיאומי Qin F22 Pro", "galut_price": "850", "yemot_price": "950"}
+            return {"matched": True, "device_label": "שיאומי Qin F22 Pro", "galut_price": "770", "yemot_price": "870"}
         if any(k in combined for k in ["f25p", "f25 p", "f25 pro", "f25pro", "f25"]):
             return {"matched": True, "device_label": "F25 Pro", "galut_price": "770", "yemot_price": "870"}
 
@@ -860,8 +882,8 @@ def extract_kosher_device_track_prices(text: str, recent_history: str = "") -> d
 
 def is_price_dispute_or_challenge(text: str, recent_history: str = "") -> bool:
     """
-    Detects when a customer challenges or disputes a price quoted by the bot
-    (e.g., 'זה לא המחיר', 'המחיר שגוי', 'יקר מדי אמרו לי שזה עולה פחות', 'בטוח שזה המחיר?').
+    Detects when a customer challenges, questions, or disputes a price quoted by the bot
+    (e.g., 'המחיר ממש גבוה פעם שעברה שלמתי 770', 'מדוע המחיר כה גבוה', 'זה לא המחיר', 'המחיר שגוי', 'יקר מדי').
     """
     clean = (text or "").strip().lower()
     if not clean:
@@ -869,13 +891,16 @@ def is_price_dispute_or_challenge(text: str, recent_history: str = "") -> bool:
     dispute_phrases = [
         "זה לא המחיר", "לא המחיר", "המחיר לא נכון", "המחיר שגוי", "מחיר שגוי",
         "טעות במחיר", "טעית במחיר", "אמרו לי מחיר אחר", "אמרו לי פחות",
-        "עולה פחות", "המחיר נמוך יותר", "גבוה מדי", "בטוח שזה המחיר",
+        "עולה פחות", "המחיר נמוך יותר", "גבוה מדי", "ממש גבוה", "כה גבוה", "כל כך גבוה",
+        "המחיר גבוה", "מחיר גבוה", "למה המחיר", "מדוע המחיר", "למה זה עולה", "למה כזה יקר",
+        "יקר מדי", "ממש יקר", "התייקר", "עלה המחיר", "פעם שעברה", "פעם שעבר", "בפעם הקודמת",
+        "פעם קודמת", "שלמתי", "שילמתי", "קניתי ב", "עלה לי", "בטוח שזה המחיר",
         "התבלבלת במחיר", "לא הגיוני המחיר", "בחנות אמרתם", "ערן אמר לי"
     ]
     if any(p in clean for p in dispute_phrases):
         return True
-    # Also if recent history had a price quote and customer says "לא נכון" or "זה לא ככה"
-    if ("₪" in (recent_history or "") or "מחיר" in (recent_history or "")) and clean in ["לא נכון", "זה לא נכון", "אתה טועה", "טעות"]:
+    # Also if recent history had a price quote and customer says "לא נכון" or "יקר" or "גבוה"
+    if ("₪" in (recent_history or "") or "מחיר" in (recent_history or "")) and clean in ["לא נכון", "זה לא נכון", "אתה טועה", "טעות", "יקר", "גבוה"]:
         return True
     return False
 
@@ -1842,24 +1867,35 @@ def get_warranty_explanation_with_pdf(customer_name: str = "") -> str:
 🔥 נשארו יחידות אחרונות במלאי — באיזה מסלול אחריות תרצה לבחור כדי שנשריין עבורך את המכשיר כעת? 😃"""
 
 
-def detect_chosen_warranty_track(text: str) -> str:
+def detect_chosen_warranty_track(text: str, galut_price: str = "", yemot_price: str = "") -> str:
     """
     Detects if the customer is selecting a specific warranty track ('yemot', 'galut', or 'geula')
-    to purchase/reserve a device (rather than asking 'what is the difference between tracks?').
+    to purchase/reserve a device (rather than asking 'what is the difference between tracks?'
+    or complaining about a price like 'פעם שעברה שלמתי 770').
     Returns 'yemot', 'galut', 'geula', or ''.
     """
     clean = (text or "").strip().lower()
     if not clean:
         return ""
-    # If customer is asking to explain the differences, it is not a final track selection yet
-    if any(q in clean for q in ["מה ההבדל", "הבדלים", "תפרט", "הסבר על", "מה זה מסלול", "טבלת השוואה", "קובץ pdf"]):
+    # Never treat a price dispute / complaint / question as a warranty track selection!
+    if is_price_dispute_or_challenge(clean):
         return ""
-    if any(w in clean for w in ["ימות המשיח", "ימות משיח", "המומלץ", "מסלול המומלץ", "אחריות מעבדה", "650", "870", "950"]):
+    if any(q in clean for q in [
+        "מה ההבדל", "הבדלים", "תפרט", "הסבר על", "מה זה מסלול", "טבלת השוואה", "קובץ pdf",
+        "גבוה", "יקר", "פעם שעברה", "פעם שעבר", "שלמתי", "שילמתי", "למה", "מדוע"
+    ]):
+        return ""
+    if any(w in clean for w in ["ימות המשיח", "ימות משיח", "המומלץ", "מסלול המומלץ", "אחריות מעבדה"]):
         return "yemot"
-    if any(w in clean for w in ["מסלול גלות", "בגלות", "גלות", "אחריות יבואן", "יבואן רשמי", "550", "770", "850"]):
+    if any(w in clean for w in ["מסלול גלות", "בגלות", "גלות", "אחריות יבואן", "יבואן רשמי"]):
         return "galut"
     if any(w in clean for w in ["מסלול גאולה", "גאולה"]):
         return "geula"
+    # Match exact price number ONLY if it matches the active device's galut_price or yemot_price
+    if yemot_price and re.search(rf"(?:^|\s){re.escape(str(yemot_price))}(?:$|\s|₪)", clean):
+        return "yemot"
+    if galut_price and re.search(rf"(?:^|\s){re.escape(str(galut_price))}(?:$|\s|₪)", clean):
+        return "galut"
     return ""
 
 
@@ -1975,6 +2011,110 @@ BACKUP_KB_JSON_PATH = os.path.join(
     os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
     "learned_kb_cache.json"
 )
+BACKUP_POS_JSON_PATH = os.path.join(
+    os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
+    "pos_inventory_cache.json"
+)
+
+def sync_pos_inventory_to_json():
+    """Exports live synced POS inventory to local JSON cache for durability."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors, updated_at FROM pos_inventory"
+        ).fetchall()
+        conn.close()
+        data = [
+            {
+                "sku": r[0], "product_name": r[1], "keywords": r[2], "category": r[3],
+                "price_galut": r[4], "price_yemot": r[5], "single_price": r[6],
+                "stock_qty": r[7], "colors": r[8], "updated_at": r[9]
+            }
+            for r in rows
+        ]
+        with open(BACKUP_POS_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def format_pos_item_answer(item: dict) -> str:
+    """Formats a live POS inventory record into a persuasive customer WhatsApp response."""
+    name = item.get("product_name") or "המוצר"
+    cat = (item.get("category") or "").lower()
+    galut_p = item.get("price_galut")
+    yemot_p = item.get("price_yemot")
+    single_p = item.get("single_price")
+    stock_qty = item.get("stock_qty")
+    colors = (item.get("colors") or "").strip()
+
+    if stock_qty is not None and int(stock_qty) <= 0:
+        price_str = f" בעלות של *{single_p or galut_p} ₪*" if (single_p or galut_p) else ""
+        return f"כרגע *{name}* אזל זמנית מהמלאי בחנות, אך ניתן להזמין אותו עבורך{price_str}. האם תרצה שנזמין ונשריין עבורך? 😃"
+
+    color_line = f"\n🎨 *צבעים במלאי:* {colors}" if colors else ""
+    if galut_p and yemot_p and ("כשר" in cat or "מכשיר" in cat or not is_repair_or_smartphone_context(name)):
+        return (
+            f"כן, מכשיר *{name}* זמין אצלנו במלאי ב-2 מסלולי אחריות לבחירתך: 📱{color_line}\n"
+            f"• מסלול גלות (אחריות יבואן רשמי בלבד): {galut_p} ₪\n"
+            f"• ⭐ מסלול ימות המשיח (המסלול המומלץ והמשתלם ביותר שלנו!): {yemot_p} ₪ — בתוספת קטנה אתה מקבל שקט נפשי מלא עם תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n\n"
+            f"🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+        )
+    price_val = single_p or galut_p or yemot_p
+    if price_val:
+        if is_repair_or_smartphone_context(name) or "תיקון" in cat or "מעבדה" in cat or "חלק" in cat:
+            return f"*{name}* זמין אצלנו במלאי במחיר *{price_val} ₪*. 🛠️{color_line}\nהאם תרצה שנקבע או נשריין עבורך? 😃"
+        return f"כן, *{name}* זמין אצלנו במלאי במחיר *{price_val} ₪*. 📱{color_line}\n🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך כעת כדי שלא תיתקע בלי? 😃"
+    return ""
+
+def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> dict:
+    """
+    Checks live POS / Cash Register inventory (first via synced SQLite pos_inventory table,
+    and optionally via live HTTP pull if POS_API_URL is configured).
+    Returns {"matched": bool, "answer": str, "item": dict}
+    """
+    clean = (message_text or "").lower().strip()
+    clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
+    if not clean_no_punct or is_scheduling_request(message_text) or is_price_dispute_or_challenge(message_text, recent_history):
+        return {"matched": False}
+
+    is_asking_color = any(w in clean for w in ["צבע", "צבעים", "באיזה צבע"])
+    is_asking_repair = any(w in clean for w in ["מסך", "סוללה", "שקע"])
+
+    # 1. Check local SQLite pos_inventory (synced live from PC Cash Register software)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors FROM pos_inventory ORDER BY id DESC"
+        ).fetchall()
+        conn.close()
+        for r in rows:
+            sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r
+            search_terms = [k.strip().lower() for k in f"{prod_name or ''},{kw_str or ''},{sku or ''}".split(",") if k.strip() and len(k.strip()) >= 2]
+            for kw in search_terms:
+                kw_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in kw]).strip()
+                if not kw_clean or len(kw_clean) < 2:
+                    continue
+                if "מסך" not in kw_clean and "תיקון" not in kw_clean and is_asking_repair:
+                    continue
+                if re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct):
+                    item_dict = {
+                        "sku": sku, "product_name": prod_name, "keywords": kw_str, "category": cat,
+                        "price_galut": p_galut, "price_yemot": p_yemot, "single_price": p_single,
+                        "stock_qty": qty, "colors": colors
+                    }
+                    if is_asking_color and colors:
+                        ans = (
+                            f"המכשיר (*{prod_name}*) קיים אצלנו במלאי בצבעים: *{colors}*. 🎨📱\n"
+                            f"באיזה צבע תרצה לבחור כדי שנשריין עבורך את המכשיר כעת? 😃"
+                        )
+                        return {"matched": True, "answer": ans, "item": item_dict}
+                    ans = format_pos_item_answer(item_dict)
+                    if ans:
+                        return {"matched": True, "answer": ans, "item": item_dict}
+    except Exception:
+        pass
+
+    return {"matched": False}
 
 def sync_learned_kb_to_json():
     """Exports learned_kb to local JSON cache for extra durability across restarts."""
@@ -2000,6 +2140,11 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
     """
     if is_scheduling_request(message_text) or is_price_dispute_or_challenge(message_text, recent_history):
         return ""
+
+    # 0. Check Live POS / Cash Register Inventory FIRST!
+    pos_hit = lookup_live_pos_inventory(message_text, recent_history)
+    if pos_hit.get("matched") and pos_hit.get("answer"):
+        return pos_hit["answer"]
 
     clean = (message_text or "").lower().strip()
     clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
@@ -2179,6 +2324,46 @@ def init_db():
                 created_at TEXT
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS pos_inventory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sku TEXT UNIQUE,
+                product_name TEXT,
+                keywords TEXT,
+                category TEXT,
+                price_galut INTEGER,
+                price_yemot INTEGER,
+                single_price INTEGER,
+                stock_qty INTEGER DEFAULT 5,
+                colors TEXT DEFAULT '',
+                updated_at TEXT
+            )
+        """)
+        if os.path.exists(BACKUP_POS_JSON_PATH):
+            try:
+                with open(BACKUP_POS_JSON_PATH, "r", encoding="utf-8") as f:
+                    pos_cached = json.load(f)
+                if isinstance(pos_cached, list):
+                    for pi in pos_cached:
+                        if isinstance(pi, dict) and pi.get("product_name"):
+                            c.execute("""
+                                INSERT OR REPLACE INTO pos_inventory
+                                (sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                pi.get("sku") or pi.get("product_name"),
+                                pi.get("product_name"),
+                                pi.get("keywords", ""),
+                                pi.get("category", "מכשיר כשר"),
+                                pi.get("price_galut"),
+                                pi.get("price_yemot"),
+                                pi.get("single_price"),
+                                pi.get("stock_qty", 5),
+                                pi.get("colors", ""),
+                                pi.get("updated_at") or datetime.now().isoformat()
+                            ))
+            except Exception:
+                pass
         c.execute("""
             CREATE TABLE IF NOT EXISTS subscribers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2628,6 +2813,89 @@ async def add_contact_api(req: Request):
             return {"ok": False, "error": "phone and name are required"}
         save_contact_name(phone, name)
         return {"ok": True, "phone": phone, "name": name}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/api/pos/inventory")
+def get_pos_inventory():
+    """Returns all items currently synced from the store's POS / Cash Register."""
+    items = []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors, updated_at FROM pos_inventory ORDER BY updated_at DESC"
+        ).fetchall()
+        conn.close()
+        items = [
+            {
+                "sku": r[0], "product_name": r[1], "keywords": r[2], "category": r[3],
+                "price_galut": r[4], "price_yemot": r[5], "single_price": r[6],
+                "stock_qty": r[7], "colors": r[8], "updated_at": r[9]
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "total": len(items), "items": items}
+
+@app.post("/api/pos/sync")
+async def sync_pos_inventory_api(req: Request):
+    """
+    Live POS / Cash Register webhook & sync endpoint.
+    Accepts single item or list of items from PC POS software (JSON), updating prices, stock quantities, and colors in real time!
+    """
+    try:
+        body = await req.json()
+        if POS_SYNC_SECRET:
+            req_secret = req.headers.get("X-POS-Secret", "") or body.get("secret", "")
+            if req_secret != POS_SYNC_SECRET:
+                return JSONResponse(status_code=401, content={"ok": False, "error": "Unauthorized POS secret"})
+
+        items = body.get("items", [body]) if isinstance(body, dict) else (body if isinstance(body, list) else [])
+        conn = sqlite3.connect(DB_PATH)
+        synced_count = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            prod_name = str(item.get("product_name") or item.get("name") or item.get("title") or "").strip()
+            if not prod_name:
+                continue
+            sku = str(item.get("sku") or item.get("barcode") or item.get("id") or prod_name).strip()
+            keywords = str(item.get("keywords") or prod_name).strip()
+            category = str(item.get("category") or "מכשיר כשר").strip()
+            p_galut = item.get("price_galut") or item.get("price")
+            p_yemot = item.get("price_yemot") or (int(p_galut) + 100 if p_galut and "כשר" in category else None)
+            p_single = item.get("single_price") or item.get("price")
+            stock_qty = item.get("stock_qty", item.get("qty", 5))
+            colors = str(item.get("colors") or "").strip()
+
+            conn.execute("""
+                INSERT INTO pos_inventory (sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(sku) DO UPDATE SET
+                    product_name=excluded.product_name,
+                    keywords=excluded.keywords,
+                    category=excluded.category,
+                    price_galut=excluded.price_galut,
+                    price_yemot=excluded.price_yemot,
+                    single_price=excluded.single_price,
+                    stock_qty=excluded.stock_qty,
+                    colors=excluded.colors,
+                    updated_at=excluded.updated_at
+            """, (
+                sku, prod_name, keywords, category,
+                int(p_galut) if p_galut is not None else None,
+                int(p_yemot) if p_yemot is not None else None,
+                int(p_single) if p_single is not None else None,
+                int(stock_qty) if stock_qty is not None else 5,
+                colors,
+                datetime.now().isoformat()
+            ))
+            synced_count += 1
+        conn.commit()
+        conn.close()
+        sync_pos_inventory_to_json()
+        return {"ok": True, "synced_items": synced_count, "timestamp": datetime.now().isoformat()}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -3687,10 +3955,88 @@ async def unified_whatsapp_webhook(req: Request):
                 save_chat_message(sender_phone, "agent", warranty_reply)
                 return {"ok": True, "reply": warranty_reply, "type": "warranty_full_explanation_in_sale", "escalated": False}
 
-            chosen_track = detect_chosen_warranty_track(message_text)
+            dev_label = kosher_dev_ctx["device_label"]
+            galut_p = kosher_dev_ctx["galut_price"]
+            yemot_p = kosher_dev_ctx["yemot_price"]
+            chosen_track = detect_chosen_warranty_track(message_text, galut_price=galut_p, yemot_price=yemot_p)
             chosen_color = detect_chosen_color(message_text)
             m_prev_color = re.search(r"\[COLOR:([^\]]+)\]", open_action_taken or "")
             active_color = chosen_color or (m_prev_color.group(1) if m_prev_color else "")
+            color_display = f" בצבע *{active_color}*" if active_color else ""
+            color_admin_str = f" (צבע: {active_color})" if active_color else ""
+
+            # Check if we ALREADY asked the customer the Galut -> Yemot HaMashiach (+100 ₪) upgrade question!
+            was_galut_upsell_asked = "[GALUT_UPSELL_ASKED]" in (open_action_taken or "")
+            if was_galut_upsell_asked:
+                wants_upgrade_to_yemot = (
+                    chosen_track == "yemot"
+                    or (
+                        not cust_has_neg
+                        and chosen_track != "galut"
+                        and not any(w in cust_clean for w in ["להישאר", "גלות", "בלי", "רגיל"])
+                        and (
+                            is_satisfaction_yes(message_text)
+                            or any(w in cust_clean for w in ["כן", "להוסיף", "תוסיף", "לשדרג", "תשדרג", "שדרג", "ימות המשיח", "100", str(yemot_p)])
+                        )
+                    )
+                )
+                wants_stay_galut = (
+                    chosen_track == "galut"
+                    or cust_has_neg
+                    or any(w in cust_clean for w in ["להישאר", "גלות", "רק גלות", "בלי שדרוג", str(galut_p)])
+                )
+                if wants_upgrade_to_yemot or wants_stay_galut:
+                    if wants_upgrade_to_yemot:
+                        final_dev_price = yemot_p
+                        track_title = "מסלול ימות המשיח ⭐ (אחריות מעבדה מלאה בחדרה)"
+                        track_note = " (כולל תיקון אקספרס תוך שעתיים במעבדה שלנו בחדרה, מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!)"
+                    else:
+                        final_dev_price = galut_p
+                        track_title = "מסלול גלות (אחריות יבואן רשמי)"
+                        track_note = ""
+
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        conn.execute(
+                            "UPDATE customer_requests SET status='awaiting_bit_payment', action_taken=? WHERE id=?",
+                            (f"שריון מכשיר {dev_label}{color_admin_str} ב{track_title} - נשלחו פרטי ביט על סך {final_dev_price} ₪ ל-{BIT_PAYMENT_PHONE}", open_req_id)
+                        )
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        pass
+
+                    reply_dev_bit = (
+                        f"בחירה מצוינת! שריינתי עבורך את המכשיר (*{dev_label}*{color_display}) ב*{track_title}*{track_note} בסך *{final_dev_price} ₪*. 📱🙌\n\n"
+                        f"כדי להשלים את השריון כעת ולהבטיח את המכשיר מהמלאי, אנא העבר *{final_dev_price} ₪* בביט (Bit) למספר:\n"
+                        f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n\n"
+                        f"לאחר ההעברה, שלח לנו כאן עדכון או צילום מסך, ועדכנתי כבר עכשיו את ערן לשמור עבורך את המכשיר! 😃"
+                    )
+                    send_whatsapp_message(sender_phone, reply_dev_bit, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reply_dev_bit)
+
+                    target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                    for adm in target_admins:
+                        send_whatsapp_message(
+                            adm,
+                            f"📦 *הלקוח ביקש לשריין/לרכוש מכשיר!* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                            f"📱 *מכשיר:* {dev_label}{color_admin_str}\n"
+                            f"🛡️ *מסלול שנבחר:* {track_title}\n"
+                            f"💰 *סכום לתשלום בביט:* {final_dev_price} ₪ (נשלחו ללקוח פרטי העברה בביט למספר {BIT_PAYMENT_PHONE})\n"
+                            f"💬 *הודעת הלקוח:* \"{message_text}\"\n"
+                            f"📞 *טלפון הלקוח:* {cust_phone_fmt}"
+                        )
+                    return {
+                        "ok": True,
+                        "reply": reply_dev_bit,
+                        "type": "device_reserved_bit_sent",
+                        "device": dev_label,
+                        "color": active_color,
+                        "track": track_title,
+                        "amount": final_dev_price,
+                        "bit_phone": BIT_PAYMENT_PHONE
+                    }
 
             is_question_not_selection = (
                 not chosen_track and not chosen_color and (
@@ -3709,23 +4055,44 @@ async def unified_whatsapp_webhook(req: Request):
                 ])
             )
             if wants_device_reserve:
-                dev_label = kosher_dev_ctx["device_label"]
-                galut_p = kosher_dev_ctx["galut_price"]
-                yemot_p = kosher_dev_ctx["yemot_price"]
-                color_display = f" בצבע *{active_color}*" if active_color else ""
-                color_admin_str = f" (צבע: {active_color})" if active_color else ""
-
-                if chosen_track in ["yemot", "galut", "geula"]:
-                    if chosen_track == "galut":
-                        final_dev_price = galut_p
-                        track_title = "מסלול גלות (אחריות יבואן רשמי)"
-                        track_note = (
-                            f"\n💡 *לידיעתך:* בתוספת של 100 ₪ בלבד ({yemot_p} ₪) תוכל לבחור ב*מסלול ימות המשיח ⭐* ולקבל תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים, מכשיר חלופי והעברת נתונים חינם!"
+                if chosen_track == "galut":
+                    # Customer selected Galut -> First offer the +100 ₪ upgrade option to Yemot HaMashiach ⭐ BEFORE asking for Bit payment!
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        updated_act_galut = re.sub(r"\s*\[COLOR:[^\]]+\]", "", open_action_taken or "").strip()
+                        if active_color:
+                            updated_act_galut += f" [COLOR:{active_color}]"
+                        updated_act_galut += f" [GALUT_PRICE:{galut_p}] [YEMOT_PRICE:{yemot_p}] [GALUT_UPSELL_ASKED]"
+                        conn.execute(
+                            "UPDATE customer_requests SET status='awaiting_customer_reply', action_taken=? WHERE id=?",
+                            (updated_act_galut, open_req_id)
                         )
-                    else:
-                        final_dev_price = yemot_p
-                        track_title = "מסלול ימות המשיח ⭐ (אחריות מעבדה מלאה בחדרה)"
-                        track_note = " (כולל תיקון אקספרס תוך שעתיים במעבדה שלנו בחדרה, מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!)"
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        pass
+
+                    reply_galut_upsell = (
+                        f"רשמתי לפניי את בחירתך ב*מסלול גלות (אחריות יבואן רשמי)* ב-*{galut_p} ₪* עבור *{dev_label}*{color_display}. 📱\n\n"
+                        f"💡 *לפני שנשלים את השריון — כדאי מאוד לדעת:* בתוספת של *100 ₪ בלבד* תוכל לשדרג ל*מסלול ימות המשיח ⭐* ולקבל אחריות מעבדה מלאה אצלנו בחדרה עם תיקון אקספרס תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n\n"
+                        f"תרצה להוסיף כעת עוד 100 ₪ ולשדרג ל*מסלול ימות המשיח ⭐* (ובסך הכל *{yemot_p} ₪*), או להישאר ב*מסלול גלות* (*{galut_p} ₪*)? 😃"
+                    )
+                    send_whatsapp_message(sender_phone, reply_galut_upsell, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reply_galut_upsell)
+                    return {
+                        "ok": True,
+                        "reply": reply_galut_upsell,
+                        "type": "offered_yemot_upgrade_before_bit",
+                        "device": dev_label,
+                        "color": active_color,
+                        "galut_price": galut_p,
+                        "yemot_price": yemot_p
+                    }
+                elif chosen_track in ["yemot", "geula"]:
+                    final_dev_price = yemot_p
+                    track_title = "מסלול ימות המשיח ⭐ (אחריות מעבדה מלאה בחדרה)"
+                    track_note = " (כולל תיקון אקספרס תוך שעתיים במעבדה שלנו בחדרה, מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!)"
 
                     try:
                         conn = sqlite3.connect(DB_PATH)
@@ -4446,7 +4813,7 @@ async def unified_whatsapp_webhook(req: Request):
    • מחירון מכשירים במלאי:
      - F25 Pro (F25P): 770 ₪ (מסלול גלות יבואן רשמי) / 870 ₪ (מסלול ימות המשיח ⭐ מעבדה מקומית — המומלץ!)
      - שיאומי Qin F21 Pro (F21P): 550 ₪ (מסלול גלות) / 650 ₪ (מסלול ימות המשיח ⭐ מעבדה מקומית — המומלץ!)
-     - שיאומי Qin F22 Pro (F22P): 850 ₪ (מסלול גלות) / 950 ₪ (מסלול ימות המשיח ⭐ מעבדה מקומית — המומלץ!)
+     - שיאומי Qin F22 Pro (F22P): 770 ₪ (מסלול גלות) / 870 ₪ (מסלול ימות המשיח ⭐ מעבדה מקומית — המומלץ!)
      - החלפת מסך שיאומי Qin F21: 220 ₪ כולל אחריות חצי שנה
    • כאשר לקוח שואל על רכישת מכשיר או מחיר מכשיר כשר / חצי טאץ':
      1. הצג לו תמיד את המחיר בשתי אפשרויות האחריות:
