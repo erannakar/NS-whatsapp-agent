@@ -258,20 +258,35 @@ COMMON_NON_NAMES = {
 # ----------------- Permanent Learned KB Seed (Immune to Server Rebuilds) -----------------
 PERMANENT_LEARNED_KB = [
     {
-        "keywords": "f25 pro, f25, שיאומי f25, f25pro",
-        "answer": "כן, יש לנו מכשיר F25 Pro במלאי! 📱\n• אחריות יבואן רשמי (מסלול גלות): 770 ₪\n• אחריות מעבדה מלאה אצלנו (מסלול ימות המשיח ⭐): 870 ₪"
-    },
-    {
-        "keywords": "מסך f21, תיקון f21, מסך שיאומי f21, f21 מסך",
+        "keywords": "מסך f21, תיקון f21, מסך שיאומי f21, f21 מסך, מסך ל-f21, מסך ל f21, החלפת מסך f21, מסך f21p, מסך f21 pro",
         "answer": "תיקון מסך שיאומי Qin F21 עולה 220 ₪ כולל אחריות לחצי שנה במעבדה שלנו בחדרה. מוזמן להביא את המכשיר ונתקן לך במקום! 🛠️"
     },
     {
-        "keywords": "f21 pro, שיאומי f21 pro, f21",
-        "answer": "מכשיר שיאומי Qin F21 Pro זמין אצלנו ב-2 מסלולי אחריות:\n• אחריות יבואן רשמי (מסלול גלות): 650 ₪\n• אחריות מעבדה מלאה אצלנו (מסלול ימות המשיח ⭐): 750 ₪"
+        "keywords": "f25 pro, f25p, f25 p, f25, שיאומי f25, שיאומי f25p, f25pro, qin f25",
+        "answer": (
+            "כן, יש לנו מכשיר F25 Pro במלאי ב-2 מסלולי אחריות לבחירתך: 📱\n"
+            "• מסלול גלות (אחריות יבואן רשמי בלבד): 770 ₪\n"
+            "• ⭐ מסלול ימות המשיח (המסלול המומלץ והמשתלם ביותר שלנו!): 870 ₪ — בתוספת קטנה אתה מקבל שקט נפשי מלא עם תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n\n"
+            "🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+        )
     },
     {
-        "keywords": "f22 pro, שיאומי f22 pro, f22",
-        "answer": "מכשיר שיאומי Qin F22 Pro זמין אצלנו ב-2 מסלולי אחריות:\n• אחריות יבואן רשמי (מסלול גלות): 850 ₪\n• אחריות מעבדה מלאה אצלנו (מסלול ימות המשיח ⭐): 950 ₪"
+        "keywords": "f21 pro, f21p, f21 p, f21pro, שיאומי f21 pro, שיאומי f21p, שיאומי f21, qin f21 pro, qin f21p, qin f21, f21",
+        "answer": (
+            "כן, מכשיר שיאומי Qin F21 Pro (F21P) זמין אצלנו במלאי ב-2 מסלולי אחריות לבחירתך: 📱\n"
+            "• מסלול גלות (אחריות יבואן רשמי בלבד): 550 ₪\n"
+            "• ⭐ מסלול ימות המשיח (המסלול המומלץ והמשתלם ביותר שלנו!): 650 ₪ — בתוספת קטנה אתה מקבל שקט נפשי מלא עם תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n\n"
+            "🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+        )
+    },
+    {
+        "keywords": "f22 pro, f22p, f22 p, f22pro, שיאומי f22 pro, שיאומי f22p, שיאומי f22, qin f22 pro, qin f22p, qin f22, f22",
+        "answer": (
+            "כן, מכשיר שיאומי Qin F22 Pro (F22P) זמין אצלנו במלאי ב-2 מסלולי אחריות לבחירתך: 📱\n"
+            "• מסלול גלות (אחריות יבואן רשמי בלבד): 850 ₪\n"
+            "• ⭐ מסלול ימות המשיח (המסלול המומלץ והמשתלם ביותר שלנו!): 950 ₪ — בתוספת קטנה אתה מקבל שקט נפשי מלא עם תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n\n"
+            "🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+        )
     }
 ]
 
@@ -778,7 +793,141 @@ def extract_price_nis(text: str) -> str:
     return ""
 
 
-def extract_non_time_admin_details(admin_answer: str, request_text: str = "") -> tuple[str, str]:
+def extract_kosher_device_track_prices(text: str, recent_history: str = "") -> dict:
+    """
+    Identifies if a conversation or message involves a Kosher / Half-Touch device with 2 warranty tracks
+    (מסלול גלות and מסלול ימות המשיח ⭐), returning:
+    {"matched": bool, "device_label": str, "galut_price": str, "yemot_price": str}
+    """
+    combined = f"{text or ''} {recent_history or ''}".lower()
+    # 1. Explicit tags [GALUT_PRICE:550] [YEMOT_PRICE:650]
+    m_g = re.search(r"\[galut_price:(\d{2,4})\]", combined, re.IGNORECASE)
+    m_y = re.search(r"\[yemot_price:(\d{2,4})\]", combined, re.IGNORECASE)
+    dev_label = "המכשיר"
+    if any(k in combined for k in ["f21p", "f21 p", "f21 pro", "f21pro", "f21"]):
+        dev_label = "שיאומי Qin F21 Pro"
+    elif any(k in combined for k in ["f22p", "f22 p", "f22 pro", "f22pro", "f22"]):
+        dev_label = "שיאומי Qin F22 Pro"
+    elif any(k in combined for k in ["f25p", "f25 p", "f25 pro", "f25pro", "f25"]):
+        dev_label = "F25 Pro"
+
+    if m_g and m_y:
+        return {
+            "matched": True,
+            "device_label": dev_label,
+            "galut_price": m_g.group(1),
+            "yemot_price": m_y.group(1)
+        }
+
+    # 2. Explicit prices next to גלות and ימות המשיח in text
+    m_galut_txt = (
+        re.search(r"גלות[^\n0-9]{0,35}(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?", combined)
+        or re.search(r"(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?\s*\([^)]*גלות", combined)
+    )
+    m_yemot_txt = (
+        re.search(r"ימות\s+המשיח[^\n0-9]{0,60}(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?", combined)
+        or re.search(r"(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?\s*\([^)]*ימות\s+המשיח", combined)
+    )
+    if m_galut_txt and m_yemot_txt:
+        return {
+            "matched": True,
+            "device_label": dev_label,
+            "galut_price": m_galut_txt.group(1),
+            "yemot_price": m_yemot_txt.group(1)
+        }
+
+    # 3. Known official device models when not a screen/repair inquiry
+    if not is_repair_or_smartphone_context(combined):
+        if any(k in combined for k in ["f21p", "f21 p", "f21 pro", "f21pro", "f21"]):
+            return {"matched": True, "device_label": "שיאומי Qin F21 Pro", "galut_price": "550", "yemot_price": "650"}
+        if any(k in combined for k in ["f22p", "f22 p", "f22 pro", "f22pro", "f22"]):
+            return {"matched": True, "device_label": "שיאומי Qin F22 Pro", "galut_price": "850", "yemot_price": "950"}
+        if any(k in combined for k in ["f25p", "f25 p", "f25 pro", "f25pro", "f25"]):
+            return {"matched": True, "device_label": "F25 Pro", "galut_price": "770", "yemot_price": "870"}
+
+    return {"matched": False, "device_label": dev_label, "galut_price": "", "yemot_price": ""}
+
+
+def is_price_dispute_or_challenge(text: str, recent_history: str = "") -> bool:
+    """
+    Detects when a customer challenges or disputes a price quoted by the bot
+    (e.g., 'זה לא המחיר', 'המחיר שגוי', 'יקר מדי אמרו לי שזה עולה פחות', 'בטוח שזה המחיר?').
+    """
+    clean = (text or "").strip().lower()
+    if not clean:
+        return False
+    dispute_phrases = [
+        "זה לא המחיר", "לא המחיר", "המחיר לא נכון", "המחיר שגוי", "מחיר שגוי",
+        "טעות במחיר", "טעית במחיר", "אמרו לי מחיר אחר", "אמרו לי פחות",
+        "עולה פחות", "המחיר נמוך יותר", "גבוה מדי", "בטוח שזה המחיר",
+        "התבלבלת במחיר", "לא הגיוני המחיר", "בחנות אמרתם", "ערן אמר לי"
+    ]
+    if any(p in clean for p in dispute_phrases):
+        return True
+    # Also if recent history had a price quote and customer says "לא נכון" or "זה לא ככה"
+    if ("₪" in (recent_history or "") or "מחיר" in (recent_history or "")) and clean in ["לא נכון", "זה לא נכון", "אתה טועה", "טעות"]:
+        return True
+    return False
+
+
+def is_admin_meta_or_error_correction(text: str) -> bool:
+    """
+    Detects when Admin (Eran) is speaking TO the bot about a bot mistake, price error, or meta-instruction
+    (e.g. 'נכון המחיר שנתת ללקוח שגוי ועשית טעות של 100 שח', 'טעית במחיר', 'המחיר המעודכן נמוך ב-100 שח').
+    Such text must NEVER be saved raw into learned_kb or parroted to the customer!
+    """
+    clean = (text or "").strip().lower()
+    if not clean:
+        return False
+    meta_signals = [
+        "נתת ללקוח", "שנתת ללקוח", "נתת לו", "שנתת לו", "רשמת ללקוח", "שרשמת ללקוח",
+        "כתבת ללקוח", "שכתבת ללקוח", "אמרת ללקוח", "שאמרת ללקוח", "שלחת ללקוח", "מסרת ללקוח",
+        "עשית טעות", "טעית", "התבלבלת", "המחיר שנתת", "המחיר שרשמת", "המחיר שכתבת",
+        "המחיר שאמרת", "מחיר שגוי", "שגוי", "טעות של", "נמוך ב-", "נמוך ב ", "גבוה ב-", "גבוה ב ",
+        "פחות ממה ש", "יותר ממה ש", "תתקן את", "תתנצל בפני", "תגיד ללקוח", "תמסור ללקוח",
+        "תרשום ללקוח", "תכתוב ללקוח", "תעדכן את הלקוח", "תשאל את הלקוח", "שישאל את הלקוח",
+        "אם הלקוח רוצה", "אם הלקוח מעוניין"
+    ]
+    return any(sig in clean for sig in meta_signals)
+
+
+def sanitize_admin_leakage(text: str) -> str:
+    """
+    Final ironclad outgoing customer-message safety sanitizer.
+    Guarantees that NO internal Admin-to-Bot meta-criticism ('נתת ללקוח', 'עשית טעות', 'טעית', 'שגוי')
+    or 3rd-person customer reference ('ללקוח', 'הלקוח') ever leaks to a customer in any code path!
+    """
+    if not text:
+        return ""
+    cleaned = text
+    # Strip any leaked admin meta-criticism clauses
+    cleaned = re.sub(
+        r"(?:נכון\s*,?\s*)?(?:המחיר\s+)?(?:שנתת|שרשמת|שכתבת|שאמרת|ששלחת|שמסרת)(?:\s+ללקוח|\s+לו)?\s+(?:הוא\s+)?(?:שגוי|לא\s+נכון|מוטעה)(?:\s+ו?(?:עשית\s+טעות|טעית)(?:\s+של\s*\d+\s*(?:₪|ש\"ח|שח|שקל)?)?)?[.,!\s]*",
+        "סליחה על הבלבול מקודם! בדקתי שוב מול ערן והנה הפרטים המעודכנים: ",
+        cleaned,
+        flags=re.IGNORECASE
+    )
+    cleaned = re.sub(
+        r"\b(?:עשית\s+טעות|טעית(?:\s+במחיר)?|התבלבלת(?:\s+במחיר)?)(?:\s+של\s*\d+\s*(?:₪|ש\"ח|שח|שקל)?)?[.,!\s]*",
+        "סליחה על הבלבול מקודם! ",
+        cleaned,
+        flags=re.IGNORECASE
+    )
+    # Replace any remaining 2nd-person bot verbs + ללקוח / לו
+    cleaned = re.sub(r"\b(?:שנתת|שרשמת|שכתבת|שאמרת|ששלחת)\s+(?:ללקוח|לו)\b", "שנמסר קודם", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:נתת|רשמת|כתבת|אמרת|שלחת)\s+(?:ללקוח|לו)\b", "נמסר קודם", cleaned, flags=re.IGNORECASE)
+    # Replace any remaining 3rd-person "ללקוח" / "הלקוח"
+    cleaned = re.sub(r"\bאם\s+הלקוח\s+רוצה\b", "אם אתה רוצה", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bאם\s+הלקוח\s+מעוניין\b", "אם אתה מעוניין", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bעבור\s+הלקוח\b", "עבורך", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bשל\s+הלקוח\b", "שלך", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bאת\s+הלקוח\b", "אותך", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bללקוח\b", "לך", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+    return cleaned
+
+
+def extract_non_time_admin_details(admin_answer: str, request_text: str = "", recent_history: str = "") -> tuple[str, str]:
     """
     When Admin answers a multi-part customer question (e.g., "מסך עולה 400₪ אוכל להזמין ותבוא לתקן בשעה 16:00"
     or "יש ועולה 400₪ ואפשר לבוא ב 16:00"), extracts both:
@@ -790,7 +939,7 @@ def extract_non_time_admin_details(admin_answer: str, request_text: str = "") ->
     if not raw:
         return "", ""
     price_nis = extract_price_nis(raw)
-    adapted_full, _ = adapt_admin_answer(raw, request_text)
+    adapted_full, _ = adapt_admin_answer(raw, request_text, recent_history)
 
     # Convert 1st-person Admin offers ("אוכל להזמין", "אני יכול להזמין") into clear store phrasing ("נוכל להזמין עבורך")
     adapted_full = re.sub(r"\bאוכל\s+להזמין(?:\s+לך|\s+עבורך)?\b", "נוכל להזמין עבורך", adapted_full)
@@ -805,8 +954,12 @@ def extract_non_time_admin_details(admin_answer: str, request_text: str = "") ->
     if not has_extra_info:
         return "", ""
 
-    # Strip the trailing question automatically added by adapt_admin_answer if we are combining it with the scheduling question
-    cleaned_info = re.sub(r"\s*(?:האם\s+תרצה\s+שנזמין\s+עבורך(?:\s+את\s+החלק)?\s*\??\s*😃?|—\s*האם\s+זה\s+מתאים\s+לך\?\s*😃?)\s*$", "", adapted_full).strip()
+    # Strip the trailing question / sales pitch automatically added by adapt_admin_answer if we are combining it with the scheduling question
+    cleaned_info = re.sub(
+        r"\s*(?:🔥\s*נשארו\s+יחידות\s+אחרונות[^\n]*|האם\s+תרצה\s+שנזמין\s+עבורך(?:\s+את\s+החלק)?\s*\??\s*😃?|—\s*האם\s+זה\s+מתאים\s+לך\?\s*😃?)\s*$",
+        "",
+        adapted_full
+    ).strip()
     # Also strip redundant trailing time phrase if scheduling block already presents the time clearly
     cleaned_info = re.sub(r"[,.]?\s*(?:ו?(?:תבוא|תגיע|אפשר\s+לבוא|אפשר\s+להגיע|מוזמן\s+להגיע|מוזמן\s+לבוא)(?:\s+לתקן|\s+אלינו)?\s*(?:מחר\s*)?(?:בשעה|ב-|ב)\s*[0-2]?[0-9](?::[0-5][0-9])?)\s*[.!]?\s*$", "", cleaned_info).strip()
     cleaned_info = cleaned_info.rstrip(",. ")
@@ -889,21 +1042,19 @@ def is_payment_confirmation_message(text: str, type_msg: str = "") -> bool:
 def is_in_progress_or_question(text: str) -> bool:
     """
     Checks if a message is an open question, diagnostic inquiry, conditional offer (e.g. ordering a part/device
-    if the customer wants), or intermediate step expecting a customer response or action, where asking
+    or reserving last units in stock), or intermediate step expecting a customer response or action, where asking
     a closing satisfaction question is strictly premature.
     """
     if not text:
         return False
     clean = text.strip()
     
-    # Check for question marks (excluding satisfaction / warranty followup questions themselves)
+    # Check for question marks (excluding satisfaction questions themselves)
     clean_no_closing = (
         clean.replace("האם הצלחתי לעזור לך ולתת לך מענה לפנייתך", "")
         .replace("האם הצלחתי לעזור", "")
         .replace("האם אוכל לעזור לך במשהו נוסף", "")
         .replace("האם אוכל לעזור במשהו נוסף", "")
-        .replace("האם תרצה פירוט מורחב של ההבדלים", "")
-        .replace("האם תרצה פירוט מורחב", "")
     )
     if "?" in clean_no_closing or "؟" in clean_no_closing:
         return True
@@ -917,12 +1068,13 @@ def is_in_progress_or_question(text: str) -> bool:
         "היכנס", "לחץ", "בצע", "הפעל", "הפעל מחדש", "התקן", "בדוק", "שישאל", "תשאל", "לשאול",
         "באיזה מכשיר", "באיזה דגם", "איך זה קרה", "ממתי", "שלח לי", "תשלח",
         "אם זה הסתדר", "אם הסתדר",
-        # Open offers & conditional ordering phrases (customer is expected to reply yes/no!)
+        # Open offers, reservations & conditional ordering phrases (customer is expected to reply!)
         "אם אתה רוצה", "אם תרצה", "אם את רוצה", "אם תרצי", "אם הלקוח רוצה", "אם הוא רוצה",
         "אם אתה מעוניין", "אם הלקוח מעוניין", "אם מתאים לך", "אם זה מתאים לך",
         "אפשר להזמין", "ניתן להזמין", "צריך להזמין", "תרצה שנזמין", "רוצה שנזמין",
         "נזמין לך", "נזמין עבורך", "להזמין לך", "להזמין עבורך", "תרצה שנשמור",
-        "מה אתה מעדיף", "מה דעתך"
+        "נשארו יחידות אחרונות", "תרצה שנשריין", "תרצה לשריין", "באיזה מסלול אחריות",
+        "איזה מסלול", "מה אתה מעדיף", "מה דעתך"
     ]
     if any(stem in clean for stem in question_and_open_offer_stems):
         return True
@@ -937,19 +1089,127 @@ def is_in_progress_or_question(text: str) -> bool:
 
     return False
 
-def adapt_admin_answer(raw_answer: str, request_text: str = "") -> tuple[str, bool]:
+
+def adapt_admin_answer(raw_answer: str, request_text: str = "", recent_history: str = "") -> tuple[str, bool]:
     """
-    Converts 3rd-person admin notes/instructions (e.g. 'אין במלאי וצריך להזמין אם הלקוח רוצה',
-    'תגיד לו ש...', 'שישאל מה סוג ההגנה שיש ללקוח') into natural, direct 2nd-person
-    statements/questions addressed to the customer.
-    Never parrots 3rd-person admin phrasing verbatim!
+    Holistic, system-wide Admin-to-Customer Translation & Meta-Coaching Engine.
+    Transforms ALL forms of Admin communication:
+    1. Bot error / price corrections ('נכון המחיר שנתת ללקוח שגוי ועשית טעות של 100 שח', 'המחיר המעודכן נמוך ב 100 שח')
+       -> Strips all meta-criticism, calculates relative price adjustments from history/KB, apologizes politely in 1st person,
+          and presents the updated price with a strong sales close & persuasion for 'ימות המשיח ⭐'.
+    2. 3rd-person customer instructions ('אין במלאי וצריך להזמין אם הלקוח רוצה', 'תגיד לו ש...', 'שישאל את הלקוח...')
+       -> Rewrites into natural, direct 2nd-person Hebrew ('אתה', 'לך', 'עבורך').
+    3. Any price quote (device or part) -> Attaches active sales closing / scarcity reservation CTA instead of passive closing.
     Returns (adapted_text, is_question_or_in_progress).
     """
     clean = str(raw_answer or "").strip()
     if not clean:
         return "", False
 
-    # 1. Specific diagnostic question templates
+    combined_ctx = f"{request_text or ''} {recent_history or ''}".strip()
+
+    # =========================================================================
+    # LAYER 1: Admin Meta-Criticism & Bot Error / Relative Price Correction
+    # =========================================================================
+    has_bot_error_meta = bool(
+        re.search(
+            r"(?:נתת|רשמת|כתבת|אמרת|שלחת|מסרת)\s+(?:ללקוח|לו)|"
+            r"(?:עשית\s+טעות|טעית|התבלבלת|שגוי|שגויה|טעות\s+של)|"
+            r"(?:המחיר\s+(?:המעודכן\s+)?(?:נמוך|גבוה|זול|יקר)\s+ב)",
+            clean,
+            flags=re.IGNORECASE
+        )
+    )
+
+    # Check for relative price delta (e.g., "טעות של 100 שח", "נמוך ב 100 שח", "פחות 100 שח", "הורדתי 100 שח")
+    m_rel_delta = re.search(
+        r'(?:טעות\s+של|נמוך\s+ב-?|פחות\s+|זול\s+ב-?|הורדתי\s+|להוריד\s+|גבוה\s+ב-?|יקר\s+ב-?)\s*(\d{2,3})\s*(?:₪|ש"ח|ש\'\'ח|שח|שקלים|שקל)?',
+        clean,
+        flags=re.IGNORECASE
+    )
+    rel_delta = int(m_rel_delta.group(1)) if m_rel_delta else 0
+    is_delta_add = bool(
+        rel_delta
+        and re.search(r"המחיר\s+המעודכן\s+(?:גבוה|יקר)\s+ב", clean)
+        and not re.search(r"(?:שנתת|שרשמת|שכתבת|שאמרת)\s+(?:ללקוח\s+|לו\s+)?(?:הוא\s+)?(?:גבוה|יקר)", clean)
+    )
+
+    if has_bot_error_meta:
+        clean_without_delta = re.sub(
+            r'(?:טעות\s+של|נמוך\s+ב-?|פחות\s+|זול\s+ב-?|הורדתי\s+|להוריד\s+|גבוה\s+ב-?|יקר\s+ב-?)\s*\d{2,3}\s*(?:₪|ש"ח|ש\'\'ח|שח|שקלים|שקל)?',
+            " ",
+            clean,
+            flags=re.IGNORECASE
+        )
+        explicit_prices_in_admin = [
+            int(m.group(1)) for m in re.finditer(r"\b(\d{3,4})\b", clean_without_delta)
+            if 100 <= int(m.group(1)) <= 6000
+        ]
+
+        kosher_info = extract_kosher_device_track_prices(request_text, recent_history)
+        if kosher_info.get("matched"):
+            dev_label = kosher_info["device_label"]
+            if len(explicit_prices_in_admin) >= 2:
+                p_low = min(explicit_prices_in_admin[0], explicit_prices_in_admin[1])
+                p_high = max(explicit_prices_in_admin[0], explicit_prices_in_admin[1])
+            elif len(explicit_prices_in_admin) == 1:
+                p_low = explicit_prices_in_admin[0]
+                p_high = p_low + 100
+            elif rel_delta > 0:
+                hist_galut_all = re.findall(r"גלות[^\n0-9]{0,45}(\d{3,4})", combined_ctx)
+                hist_yemot_all = re.findall(r"ימות\s+המשיח[^\n0-9]{0,80}(\d{3,4})", combined_ctx)
+                if hist_galut_all and hist_yemot_all:
+                    old_g = int(hist_galut_all[-1])
+                    old_y = int(hist_yemot_all[-1])
+                    p_low = (old_g + rel_delta) if is_delta_add else (old_g - rel_delta)
+                    p_high = (old_y + rel_delta) if is_delta_add else (old_y - rel_delta)
+                else:
+                    p_low = int(kosher_info["galut_price"])
+                    p_high = int(kosher_info["yemot_price"])
+            else:
+                p_low = int(kosher_info["galut_price"])
+                p_high = int(kosher_info["yemot_price"])
+
+            corrected_msg = (
+                f"סליחה על הבלבול מקודם! בדקתי שוב מול ערן והמחיר המעודכן והמדויק עבור {dev_label} הוא: 📱\n"
+                f"• מסלול גלות (אחריות יבואן רשמי בלבד): {p_low} ₪\n"
+                f"• ⭐ מסלול ימות המשיח (המסלול המומלץ והמשתלם ביותר שלנו!): {p_high} ₪ — בתוספת קטנה אתה מקבל שקט נפשי מלא עם תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n\n"
+                f"🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+            )
+            return corrected_msg, True
+
+        if explicit_prices_in_admin:
+            new_p = explicit_prices_in_admin[0]
+            if is_repair_or_smartphone_context(combined_ctx):
+                return (
+                    f"סליחה על הבלבול מקודם! בדקתי שוב מול ערן והמחיר המעודכן והמדויק עבורך הוא *{new_p} ₪*. 🛠️\n"
+                    f"האם תרצה שנזמין ונשריין עבורך כעת? 😃"
+                ), True
+            return (
+                f"סליחה על הבלבול מקודם! בדקתי שוב מול ערן והמחיר המעודכן והמדויק עבורך הוא *{new_p} ₪*. 📱\n"
+                f"🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך כעת כדי שלא תיתקע בלי? 😃"
+            ), True
+
+        if rel_delta > 0:
+            prev_p_str = extract_price_nis(combined_ctx)
+            if prev_p_str and int(prev_p_str) > rel_delta:
+                old_p = int(prev_p_str)
+                new_p = (old_p + rel_delta) if is_delta_add else (old_p - rel_delta)
+                if is_repair_or_smartphone_context(combined_ctx):
+                    return (
+                        f"סליחה על הבלבול מקודם! בדקתי שוב מול ערן והמחיר המעודכן והמדויק עבורך הוא *{new_p} ₪*. 🛠️\n"
+                        f"האם תרצה שנזמין ונשריין עבורך כעת? 😃"
+                    ), True
+                return (
+                    f"סליחה על הבלבול מקודם! בדקתי שוב מול ערן והמחיר המעודכן והמדויק עבורך הוא *{new_p} ₪*. 📱\n"
+                    f"🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך כעת כדי שלא תיתקע בלי? 😃"
+                ), True
+
+        clean = sanitize_admin_leakage(clean)
+
+    # =========================================================================
+    # LAYER 2: Specific Diagnostic & Instruction Templates
+    # =========================================================================
     if re.search(r"(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+|אותו\s+)?מה\s+סוג\s+ההגנה", clean, re.IGNORECASE):
         return "כדי שנוכל לעזור לך לסדר את המכשיר מרחוק, מה סוג ההגנה שמותקן עליו כרגע? (למשל: כשר פליי / נטספרק / אחר)", True
 
@@ -959,33 +1219,34 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "") -> tuple[str, bo
     if re.search(r"(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+|אותו\s+)?(?:מה\s+)?איזה\s+דגם", clean, re.IGNORECASE):
         return "באיזה דגם מכשיר מדובר בדיוק?", True
 
-    # 2. Strip leading meta-directives directed at the bot ("תגיד לו ש...", "תרשום ללקוח ש...", "תמסור לו ש...")
     clean = re.sub(
-        r"^(?:תגיד|תאמר|תמסור|תכתוב|תרשום|תעדכן|תענה|תשיב)\s+(?:לו|לה|ללקוח|אותו|את\s+הלקוח)\s*(?:ש-|ש|:)?\s*",
+        r"^(?:תתנצל\s+(?:בפניו\s+|בפני\s+הלקוח\s+)?ו?)?(?:תגיד|תאמר|תמסור|תכתוב|תרשום|תעדכן|תענה|תשיב|תסביר|תציע|תמליץ)\s+(?:לו|לה|ללקוח|אותו|את\s+הלקוח|עבורו)\s*(?:ש-|ש|:)?\s*",
         "",
         clean,
         flags=re.IGNORECASE
     ).strip()
 
-    # 3. Generic "שישאל אותו..." / "תשאל את הלקוח..."
-    m_ask = re.match(r"^(?:שישאל|תשאל|לשאול)\s+(?:אותו\s+|את\s+הלקוח\s+)?(?:אם\s+|האם\s+)?(.+)$", clean)
+    m_ask = re.match(r"^(?:שישאל|תשאל|לשאול|תברר|שנברר)\s+(?:אותו\s+|את\s+הלקוח\s+|איתו\s+|מול\s+הלקוח\s+)?(?:אם\s+|האם\s+)?(.+)$", clean)
     if m_ask:
-        is_if = bool(re.match(r"^(?:שישאל|תשאל|לשאול)\s+(?:אותו\s+|את\s+הלקוח\s+)?(?:אם|האם)\s+", clean))
+        is_if = bool(re.match(r"^(?:שישאל|תשאל|לשאול|תברר|שנברר)\s+(?:אותו\s+|את\s+הלקוח\s+|איתו\s+|מול\s+הלקוח\s+)?(?:אם|האם)\s+", clean))
         content = m_ask.group(1).strip()
         content = re.sub(r"\bהלקוח\s+רוצה\b", "אתה רוצה", content)
+        content = re.sub(r"\bהלקוח\s+מעוניין\b", "אתה מעוניין", content)
+        content = re.sub(r"\bהלקוח\s+בוחר\b", "אתה בוחר", content)
         content = re.sub(r"\bהוא\s+רוצה\b", "אתה רוצה", content)
         content = re.sub(r"\bהוא\s+מעוניין\b", "אתה מעוניין", content)
+        content = re.sub(r"\bהוא\s+בוחר\b", "אתה בוחר", content)
         content = re.sub(r"\bלו\b", "לך", content)
         content = re.sub(r"\bשלו\b", "שלך", content)
         content = re.sub(r"\bאותו\b", "אותך", content)
+        content = re.sub(r"\bאיתו\b", "איתך", content)
         content = re.sub(r"\bהוא\b", "אתה", content)
         if is_if and not content.startswith(("האם", "אם")):
             content = f"האם {content}"
         if not content.endswith("?"):
             content += "?"
-        return content, True
+        return sanitize_admin_leakage(content), True
 
-    # 4. Instruction steps starting with 3rd-person jussives ("שיכנס להגדרות ואז...")
     m_step = re.match(r"^(?:שיכנס|שילחץ|שיבצע|שיוריד|שיעדכן|שיפעיל)\s+(.+)$", clean)
     if m_step:
         verb = clean.split()[0]
@@ -1002,33 +1263,48 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "") -> tuple[str, bo
         rest = re.sub(r"\bלו\b", "לך", rest)
         rest = re.sub(r"\bשלו\b", "שלך", rest)
         adapted = f"{direct_verb} {rest}\nעדכן אותי בבקשה אם זה הסתדר לך."
-        return adapted, True
+        return sanitize_admin_leakage(adapted), True
 
-    # 5. General 3rd-person -> 2nd-person transformation for any Admin message (such as "אין במלאי וצריך להזמין אם הלקוח רוצה")
+    # =========================================================================
+    # LAYER 3: Comprehensive 3rd-Person & 2nd-Person-Bot -> Customer Speech
+    # =========================================================================
     adapted = clean
 
-    # Convert "וצריך להזמין" / "צריך להזמין" into customer-facing "אפשר להזמין"
     adapted = re.sub(r"\bוצריך\s+להזמין\b", "ואפשר להזמין", adapted)
     adapted = re.sub(r"\bצריך\s+להזמין\b", "אפשר להזמין", adapted)
+    adapted = re.sub(r"\bאוכל\s+להזמין(?:\s+לך|\s+עבורך|\s+ללקוח|\s+לו)?\b", "נוכל להזמין עבורך", adapted)
+    adapted = re.sub(r"\bאני\s+יכול\s+להזמין(?:\s+לך|\s+עבורך|\s+ללקוח|\s+לו)?\b", "נוכל להזמין עבורך", adapted)
 
-    # Convert 3rd-person customer references into direct 2nd-person ("אתה" / "לך" / "שלך")
     replacements = [
+        (r"\bו?(?:תגיד|תאמר|תמסור|תכתוב|תרשום|תעדכן|תסביר)\s+(?:לו|לה|ללקוח|אותו|את\s+הלקוח)\s*(?:ש-|ש|:)?\s*", ""),
+        (r"\bו?(?:תשאל|שישאל|תברר)\s+(?:אותו|את\s+הלקוח|איתו)\s+", "ו"),
+        (r"\b(?:שנתת|שרשמת|שכתבת|שאמרת|ששלחת)\s+(?:ללקוח|לו)\b", "שנמסר קודם"),
+        (r"\b(?:נתת|רשמת|כתבת|אמרת|שלחת)\s+(?:ללקוח|לו)\b", "נמסר קודם"),
         (r"אם\s+הלקוח\s+רוצה", "אם אתה רוצה"),
         (r"אם\s+הוא\s+רוצה", "אם אתה רוצה"),
         (r"אם\s+הלקוח\s+ירצה", "אם תרצה"),
         (r"אם\s+הוא\s+ירצה", "אם תרצה"),
         (r"אם\s+הלקוח\s+מעוניין", "אם אתה מעוניין"),
         (r"אם\s+הוא\s+מעוניין", "אם אתה מעוניין"),
+        (r"אם\s+הלקוח\s+בוחר", "אם אתה בוחר"),
+        (r"אם\s+הוא\s+בוחר", "אם אתה בוחר"),
+        (r"במה\s+הלקוח\s+בוחר", "במה אתה בוחר"),
+        (r"במה\s+הוא\s+בוחר", "במה אתה בוחר"),
+        (r"איזה\s+מסלול\s+הלקוח\s+רוצה", "איזה מסלול אתה רוצה"),
+        (r"איזה\s+מסלול\s+הוא\s+רוצה", "איזה מסלול אתה רוצה"),
         (r"אם\s+(?:זה\s+)?מתאים\s+ללקוח", "אם זה מתאים לך"),
         (r"אם\s+(?:זה\s+)?מתאים\s+לו", "אם זה מתאים לך"),
         (r"אם\s+נוח\s+ללקוח", "אם נוח לך"),
         (r"אם\s+נוח\s+לו", "אם נוח לך"),
         (r"עבור\s+הלקוח", "עבורך"),
         (r"בשביל\s+הלקוח", "בשבילך"),
+        (r"מול\s+הלקוח", "איתך"),
         (r"\bעבורו\b", "עבורך"),
         (r"\bבשבילו\b", "בשבילך"),
         (r"להזמין\s+ללקוח", "להזמין לך"),
         (r"להזמין\s+לו\b", "להזמין לך"),
+        (r"לשריין\s+ללקוח", "לשריין לך"),
+        (r"לשריין\s+לו\b", "לשריין לך"),
         (r"לסדר\s+ללקוח", "לסדר לך"),
         (r"לסדר\s+לו\b", "לסדר לך"),
         (r"לבדוק\s+ללקוח", "לבדוק לך"),
@@ -1054,6 +1330,10 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "") -> tuple[str, bo
         (r"\bשיכתוב\b", "תכתוב לנו"),
         (r"\bשיעדכן\b", "תעדכן אותנו"),
         (r"\bשישלח\b", "שלח לנו"),
+        (r"\bשישלם\b", "תוכל לשלם"),
+        (r"\bשיעביר\b", "תוכל להעביר"),
+        (r"\bשיבחר\b", "תבחר"),
+        (r"\bשישריין\b", "תשריין"),
         (r"\bשיביא\b", "אתה מוזמן להביא"),
         (r"\bשיגיע\b", "אתה מוזמן להגיע"),
         (r"\bשיבוא\b", "אתה מוזמן להגיע"),
@@ -1061,31 +1341,48 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "") -> tuple[str, bo
     for pat, repl in replacements:
         adapted = re.sub(pat, repl, adapted, flags=re.IGNORECASE)
 
-    # Smooth phrasing when "אין במלאי ואפשר להזמין..." is used
+    adapted = sanitize_admin_leakage(adapted)
+
     adapted = re.sub(r"^אין\s+במלאי\s+ואפשר\s+להזמין", "כרגע אין במלאי, אך אפשר להזמין", adapted)
     adapted = re.sub(r"^אין\s+במלאי\s+אפשר\s+להזמין", "כרגע אין במלאי, אפשר להזמין", adapted)
 
-    # Check if Admin replied with a bare number/price (e.g. "280") or price for a part/repair inquiry
+    # =========================================================================
+    # LAYER 4: Automatic Sales Closing & Reservation CTA on Any Price Quote
+    # =========================================================================
     detected_price = extract_price_nis(adapted)
     req_part_info = is_part_or_repair_price_inquiry(request_text)
     if re.fullmatch(r"\d{2,4}", adapted.strip()) and detected_price:
-        adapted = f"המחיר המדויק הוא {detected_price} ₪"
+        adapted = f"המחיר המדויק הוא *{detected_price} ₪*"
     elif detected_price and "₪" not in adapted and "שח" not in adapted and 'ש"ח' not in adapted and "שקל" not in adapted:
         adapted = re.sub(rf"\b{re.escape(detected_price)}\b", f"{detected_price} ₪", adapted, count=1)
 
-    # Check if this message is an open offer / ordering option or question awaiting the customer's response
-    is_order_offer = any(w in adapted for w in ["אפשר להזמין", "ניתן להזמין", "להזמין לך", "להזמין עבורך", "נזמין לך"])
+    is_order_offer = any(w in adapted for w in ["אפשר להזמין", "ניתן להזמין", "להזמין לך", "להזמין עבורך", "נזמין לך", "נוכל להזמין"])
     is_conditional_choice = any(w in adapted for w in ["אם אתה רוצה", "אם תרצה", "אם אתה מעוניין", "אם זה מתאים לך", "אם נוח לך"])
 
-    # If the original customer request was about a part/screen/repair (or checking exact price) and Admin provided/approved a price:
     is_price_approval_for_part = bool(
         detected_price and (
             req_part_info.get("matched")
+            or is_repair_or_smartphone_context(combined_ctx)
             or any(w in (request_text or "") for w in ["מסך", "סוללה", "שקע", "חלק", "להזמין", "מחיר מדויק", "בדיקת מחיר"])
         )
     )
+    is_device_price_quote = bool(detected_price and not is_price_approval_for_part and not is_scheduling_request(request_text))
 
-    if is_price_approval_for_part and not is_order_offer and "?" not in adapted:
+    if is_device_price_quote and "?" not in adapted:
+        kosher_check = extract_kosher_device_track_prices(f"{adapted} {request_text}", recent_history)
+        if kosher_check.get("matched") or any(w in combined_ctx.lower() for w in ["כשר", "f21", "f22", "f25", "qin", "גלות", "ימות המשיח"]):
+            adapted = (
+                adapted.rstrip(".!, ")
+                + "\n\n⭐ *המלצה חמה:* אנו ממליצים לבחור ב*מסלול ימות המשיח* שמעניק אחריות מעבדה מלאה אצלנו בחדרה, תיקון אקספרס תוך שעתיים ומכשיר חלופי חינם!\n"
+                + "🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור? 😃"
+            )
+        else:
+            adapted = (
+                adapted.rstrip(".!, ")
+                + ".\n🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? 😃"
+            )
+        is_order_offer = True
+    elif is_price_approval_for_part and not is_order_offer and "?" not in adapted:
         adapted = adapted.rstrip(".!, ") + ". האם תרצה שנזמין עבורך את החלק? 😃"
         is_order_offer = True
     elif (is_order_offer or is_conditional_choice) and "?" not in adapted:
@@ -1094,30 +1391,31 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "") -> tuple[str, bo
         else:
             adapted = adapted.rstrip(".!, ") + " — האם זה מתאים לך? 😃"
 
-    is_q = is_in_progress_or_question(adapted) or is_order_offer or is_conditional_choice or is_price_approval_for_part
+    is_q = is_in_progress_or_question(adapted) or is_order_offer or is_conditional_choice or is_price_approval_for_part or is_device_price_quote
     return adapted, is_q
 
-def format_admin_answer_for_customer(target_phone: str, admin_answer: str, request_text: str = "", customer_name: str = "", msg_count: int = 2) -> str:
+
+def format_admin_answer_for_customer(target_phone: str, admin_answer: str, request_text: str = "", customer_name: str = "", msg_count: int = 2, recent_history: str = "") -> str:
     # Reduce name usage: only at the very start of conversation
     name_str = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES and msg_count <= 1) else ""
     
     # Generic accurate lead-in: "חזרתי אליך בנוגע לפנייתך"
     lead_in = f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:" if name_str else "חזרתי אליך בנוגע לפנייתך:"
 
-    adapted_ans, is_in_prog = adapt_admin_answer(admin_answer, request_text)
+    adapted_ans, is_in_prog = adapt_admin_answer(admin_answer, request_text, recent_history)
 
-    if adapted_ans.startswith(("שלום", "היי", "הי")):
+    if adapted_ans.startswith(("שלום", "היי", "הי", "סליחה על הבלבול")):
         reply = adapted_ans
     else:
         reply = f"{lead_in}\n{adapted_ans}"
 
-    # Strictly do NOT append satisfaction question if the message is in progress, asking a question, or awaiting customer decision (e.g. ordering a screen)!
+    # Strictly do NOT append satisfaction question if the message is in progress, quoting a price/sale, asking a question, or awaiting customer decision!
     if not is_in_prog and not is_in_progress_or_question(reply):
         closing_q = "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
-        if not any(q in reply for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "לעזור לך", "במשהו נוסף"]):
+        if not any(q in reply for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "לעזור לך", "במשהו נוסף", "נשארו יחידות אחרונות", "תרצה שנשריין"]):
             reply = f"{reply.rstrip()}\n\n{closing_q}"
 
-    return reply
+    return sanitize_admin_leakage(reply)
 
 def is_pure_greeting(text: str) -> bool:
     clean = re.sub(r"[^\w\sא-תa-zA-Z]", " ", text or "").strip().lower()
@@ -1277,7 +1575,7 @@ def sanitize_closed_store_advice(text: str, is_open: bool, arrival_advice: str) 
     pat_now = re.compile(r'\b(ו?(?:תבוא|תגיע|בוא|לבוא|להגיע|להביא|תביא))\s+(?:אותו\s+)?(?:כבר\s+)?(?:עכשיו|כעת|מיד)\b')
     cleaned = pat_now.sub(_repl_now, cleaned)
     
-    if (has_come_now or any(w in cleaned for w in ['להגיע', 'לבוא', 'להביא', 'ישעיהו 10', 'מעבדה'])) and 'סגור' not in cleaned:
+    if (has_come_now or any(w in cleaned for w in ['מוזמן להגיע', 'מוזמן לבוא', 'מוזמן להביא', 'להגיע אלינו', 'לבוא אלינו', 'תגיע אלינו'])) and 'סגור' not in cleaned:
         cleaned = cleaned.rstrip() + f'\n\n📌 שים לב: {arrival_advice}'
             
     return cleaned
@@ -1334,35 +1632,64 @@ def get_warranty_explanation_with_pdf(customer_name: str = "") -> str:
 📄 *לצפייה ולהורדת טבלת ההשוואה המלאה בקובץ PDF מעוצב:*
 {pdf_url}
 
-איזה מסלול תרצה שנתאים עבורך? 😃"""
+⭐ *המלצת נעם שיח:* אנו ממליצים בחום לבחור ב*מסלול ימות המשיח* שמעניק שקט נפשי מלא, תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים ומכשיר חלופי חינם!
+🔥 נשארו יחידות אחרונות במלאי — באיזה מסלול אחריות תרצה לבחור כדי שנשריין עבורך את המכשיר כעת? 😃"""
+
+
+def detect_chosen_warranty_track(text: str) -> str:
+    """
+    Detects if the customer is selecting a specific warranty track ('yemot', 'galut', or 'geula')
+    to purchase/reserve a device (rather than asking 'what is the difference between tracks?').
+    Returns 'yemot', 'galut', 'geula', or ''.
+    """
+    clean = (text or "").strip().lower()
+    if not clean:
+        return ""
+    # If customer is asking to explain the differences, it is not a final track selection yet
+    if any(q in clean for q in ["מה ההבדל", "הבדלים", "תפרט", "הסבר על", "מה זה מסלול", "טבלת השוואה", "קובץ pdf"]):
+        return ""
+    if any(w in clean for w in ["ימות המשיח", "ימות משיח", "המומלץ", "מסלול המומלץ", "אחריות מעבדה", "650", "870", "950"]):
+        return "yemot"
+    if any(w in clean for w in ["מסלול גלות", "בגלות", "גלות", "אחריות יבואן", "יבואן רשמי", "550", "770", "850"]):
+        return "galut"
+    if any(w in clean for w in ["מסלול גאולה", "גאולה"]):
+        return "geula"
+    return ""
+
 
 def is_warranty_followup_confirmation(text: str, history_text: str = "") -> bool:
     clean = (text or "").strip().lower()
 
-    # 1. Direct and proactive inquiry about differences or warranty (even with zero prior history)
+    # If the customer is selecting a track to reserve/buy (e.g. "אני בוחר בימות המשיח" or "ימות המשיח" after being asked which track they choose),
+    # let the device reservation & Bit payment handler process it!
+    if detect_chosen_warranty_track(clean) and any(
+        p in (history_text or "") for p in ["באיזה מסלול אחריות תרצה לבחור", "איזה מסלול לרשום לך", "נשארו יחידות אחרונות במלאי"]
+    ):
+        return False
+
+    # 1. Direct and proactive inquiry about differences or warranty explanation
     direct_warranty_triggers = [
         "הבדל", "הבדלים", "שוני",
-        "מסלולי אחריות", "מסלולי האחריות", "מסלול אחריות", "סוגי אחריות",
-        "מסלול גלות", "ימות המשיח", "מסלול גאולה",
+        "מסלולי אחריות", "מסלולי האחריות", "סוגי אחריות",
         "פירוט אחריות", "פירוט האחריות", "הסבר על האחריות", "הסבר על מסלולי",
-        "האחריות שלכם", "אחריות יבואן", "אחריות מעבדה", "אחריות מורחבת",
-        "טבלת אחריות", "טבלת השוואה", "קובץ אחריות", "קובץ pdf"
+        "האחריות שלכם", "טבלת אחריות", "טבלת השוואה", "קובץ אחריות", "קובץ pdf",
+        "מה זה ימות המשיח", "מה זה גלות", "מה זה מסלול"
     ]
     if any(phrase in clean for phrase in direct_warranty_triggers):
         return True
 
-    # 2. Positive followups when warranty context was present in history
-    had_warranty_context = any(m in (history_text or "") for m in [
-        "מסלולי אחריות", "מסלולי האחריות", "מסלול גלות", "ימות המשיח",
-        "אחריות יבואן", "אחריות", "הבדלים המלאים", "הבדל"
+    # 2. Positive followups ONLY when the bot specifically asked if they want the extended warranty explanation
+    asked_for_warranty_explanation = any(m in (history_text or "") for m in [
+        "האם תרצה פירוט מורחב של ההבדלים", "פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות"
     ])
     positive_signals = [
-        "כן", "אשמח", "תפרט", "פרט", "מעוניין", "תשלח", "שלח", "תסביר",
+        "כן", "אשמח", "תפרט", "פרט", "תשלח", "שלח", "תסביר",
         "רוצה לדעת", "אשמח לפירוט", "כן אשמח", "תשלח לי", "בטח", "ודאי",
-        "רוצה", "אני רוצה", "שלח לי", "אשמח להסבר", "תן פרטים", "סבבה", "בכיף"
+        "שלח לי", "אשמח להסבר", "תן פרטים"
     ]
     is_positive = any(clean == sig or clean.startswith(sig) or f" {sig} " in f" {clean} " for sig in positive_signals)
-    return had_warranty_context and is_positive
+    return asked_for_warranty_explanation and is_positive
+
 
 def is_repair_or_smartphone_context(text: str) -> bool:
     """
@@ -1384,11 +1711,12 @@ def is_repair_or_smartphone_context(text: str) -> bool:
         return True
     return False
 
+
 def ensure_warranty_question_in_device_quote(reply: str, customer_msg: str, recent_history: str = "") -> str:
     """
-    Ensures Kosher & Half-Touch device purchase price quotes end with the warranty tracks question,
-    while STRICTLY stripping/blocking warranty tracks from any lab repair or smartphone messages,
-    and NEVER asking 2 questions in the same bubble!
+    Ensures Kosher & Half-Touch device purchase price quotes include persuasive recommendation for
+    מסלול ימות המשיח ⭐ and active sales closing with scarcity urgency ("נשארו יחידות אחרונות במלאי! תרצה שנשריין..."),
+    while STRICTLY stripping/blocking warranty tracks from any lab repair or smartphone messages!
     """
     clean_reply = (reply or "").strip()
     clean_msg = (customer_msg or "").strip().lower()
@@ -1396,7 +1724,6 @@ def ensure_warranty_question_in_device_quote(reply: str, customer_msg: str, rece
 
     # Rule C: If this is a lab repair (screen, battery, port) or smartphone context, NEVER mention Kosher device warranty tracks!
     if is_repair_or_smartphone_context(combined_ctx):
-        # Strip any accidental warranty question that the LLM might have generated
         clean_reply = re.sub(
             r"\s*האם\s+תרצה\s+פירוט\s+מורחב\s+של\s+ההבדלים(?:\s+המלאים)?\s+בין\s+מסלולי\s+האחריות\?\s*😃?\s*",
             " ",
@@ -1404,22 +1731,36 @@ def ensure_warranty_question_in_device_quote(reply: str, customer_msg: str, rece
         ).strip()
         return clean_reply
 
-    # Rule: Never append a second question if the reply ALREADY asks a question!
-    if "?" in clean_reply or "؟" in clean_reply:
-        return clean_reply
-
+    # Strip any passive closing ("האם אוכל לעזור במשהו נוסף", "האם הצלחתי לעזור") if the reply is quoting a device price!
     kosher_device_indicators = ["גלות", "ימות המשיח", "f21", "f22", "f25", "qin", "מכשיר כשר", "טלפון כשר", "חצי טאץ", "מקשים"]
     has_kosher_device_price = any(w in clean_reply.lower() for w in ["גלות", "ימות המשיח"]) or (
         ("₪" in clean_reply or "שח" in clean_reply or 'ש"ח' in clean_reply)
         and any(d in combined_ctx for d in kosher_device_indicators)
     )
-    already_asks_warranty = any(q in clean_reply for q in [
-        "הבדלים המלאים", "פירוט מורחב", "מסלולי האחריות", "הסבר על מסלולי", "הבדלים בין מסלולי", "מסלולי אחריות"
-    ])
+    if has_kosher_device_price:
+        clean_reply = re.sub(
+            r"\s*(?:האם\s+הצלחתי\s+לעזור[^\n]*|האם\s+אוכל\s+לעזור(?:\s+לך)?\s+במשהו\s+נוסף\??\s*😃?|האם\s+אפשר\s+לעזור\s+במשהו\s+נוסף\??\s*😃?)\s*$",
+            "",
+            clean_reply
+        ).strip()
 
-    if has_kosher_device_price and not already_asks_warranty:
-        closing = 'האם תרצה פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות? 😃'
-        return clean_reply.rstrip() + "\n\n" + closing
+    already_has_sales_cta = any(q in clean_reply for q in [
+        "נשארו יחידות אחרונות", "תרצה שנשריין", "תרצה לשריין", "באיזה מסלול אחריות תרצה לבחור"
+    ])
+    if has_kosher_device_price and not already_has_sales_cta:
+        # Replace generic warranty question if LLM added it, and append strong sales close + ימות המשיח recommendation
+        clean_reply = re.sub(
+            r"\s*האם\s+תרצה\s+פירוט\s+מורחב\s+של\s+ההבדלים(?:\s+המלאים)?\s+בין\s+מסלולי\s+האחריות\?\s*😃?\s*$",
+            "",
+            clean_reply
+        ).strip()
+        sales_closing = (
+            "⭐ *המלצה שלנו:* ב*מסלול ימות המשיח* אתה מקבל אחריות מעבדה מלאה אצלנו בחדרה עם תיקון אקספרס תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם והעברת נתונים ללא עלות!\n\n"
+            "🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+        )
+        if "תיקון אקספרס" in clean_reply:
+            sales_closing = "🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+        return clean_reply.rstrip() + "\n\n" + sales_closing
     return clean_reply
 
 # ----------------- Database Initialization & JSON Backup Sync -----------------
@@ -1435,19 +1776,23 @@ def sync_learned_kb_to_json():
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute("SELECT DISTINCT keywords, answer FROM learned_kb").fetchall()
         conn.close()
-        data = [{"keywords": r[0], "answer": r[1]} for r in rows if r[0] and r[1]]
+        data = [
+            {"keywords": r[0], "answer": r[1]}
+            for r in rows
+            if r[0] and r[1] and not is_admin_meta_or_error_correction(r[1])
+        ]
         with open(BACKUP_KB_JSON_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
-def find_matching_learned_knowledge(message_text: str) -> str:
+def find_matching_learned_knowledge(message_text: str, recent_history: str = "") -> str:
     """
     Direct deterministic lookup for learned rules and known product prices.
     Uses whole-word and phrase matching, preventing spurious matches on stopwords or single words.
+    Never returns canned KB answers when the customer is disputing/challenging a price or scheduling!
     """
-    # Never answer scheduling requests with canned learned rules!
-    if is_scheduling_request(message_text):
+    if is_scheduling_request(message_text) or is_price_dispute_or_challenge(message_text, recent_history):
         return ""
 
     clean = (message_text or "").lower().strip()
@@ -1456,16 +1801,31 @@ def find_matching_learned_knowledge(message_text: str) -> str:
     STOP_KEYWORDS = {
         "חנות", "בעל", "בית", "איך", "מה", "זה", "שלי", "שלך", "הוא", "היא",
         "יש", "אין", "לא", "כן", "פה", "כאן", "טוב", "תודה", "שלום", "היי",
-        "של", "על", "עם", "את", "או", "גם", "רק", "עוד", "כל"
+        "של", "על", "עם", "את", "או", "גם", "רק", "עוד", "כל", "מחיר", "המחיר"
     }
 
-    # 1. Check database first (dynamic learned knowledge)
+    # 1. Check PERMANENT_LEARNED_KB first so official store prices (like F21P = 550/650 ₪) are always authoritative!
+    for item in PERMANENT_LEARNED_KB:
+        keywords = [k.strip().lower() for k in item["keywords"].split(",") if k.strip()]
+        for kw in keywords:
+            if len(kw) < 3 or kw in STOP_KEYWORDS:
+                continue
+            kw_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in kw]).strip()
+            if not kw_clean or len(kw_clean) < 3 or kw_clean in STOP_KEYWORDS:
+                continue
+            # If the keyword is for a device purchase (f21, f22, f25) without 'מסך'/'תיקון', skip if the customer is asking about a screen/repair
+            if "מסך" not in kw and "תיקון" not in kw and any(w in clean for w in ["מסך", "סוללה", "שקע"]):
+                continue
+            if re.search(rf"(?:^|\s){re.escape(kw)}(?:$|\s)", clean) or (re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct)):
+                return item["answer"]
+
+    # 2. Check dynamic database learned knowledge (filtering out any accidental meta-comments)
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute("SELECT keywords, answer FROM learned_kb ORDER BY id DESC").fetchall()
         conn.close()
         for kw_str, ans in rows:
-            if not kw_str or not ans:
+            if not kw_str or not ans or is_admin_meta_or_error_correction(ans):
                 continue
             keywords = [k.strip().lower() for k in kw_str.replace(";", ",").replace("|", ",").split(",") if k.strip()]
             for kw in keywords:
@@ -1475,21 +1835,9 @@ def find_matching_learned_knowledge(message_text: str) -> str:
                 if not kw_clean or len(kw_clean) < 3 or kw_clean in STOP_KEYWORDS:
                     continue
                 if re.search(rf"(?:^|\s){re.escape(kw)}(?:$|\s)", clean) or (re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct)):
-                    return ans
+                    return sanitize_admin_leakage(ans)
     except Exception:
         pass
-
-    # 2. Check permanent embedded knowledge (immune to container resets)
-    for item in PERMANENT_LEARNED_KB:
-        keywords = [k.strip().lower() for k in item["keywords"].split(",") if k.strip()]
-        for kw in keywords:
-            if len(kw) < 3 or kw in STOP_KEYWORDS:
-                continue
-            kw_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in kw]).strip()
-            if not kw_clean or len(kw_clean) < 3 or kw_clean in STOP_KEYWORDS:
-                continue
-            if re.search(rf"(?:^|\s){re.escape(kw)}(?:$|\s)", clean) or (re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct)):
-                return item["answer"]
 
     return ""
 
@@ -1517,7 +1865,7 @@ def init_db():
                 created_at TEXT
             )
         """)
-        # Deduplicate learned_kb if any duplicates exist and add unique index
+        # Deduplicate learned_kb and purge any stale F21/F22/F25 entries or leaked Admin meta-comments
         try:
             c.execute("""
                 DELETE FROM learned_kb WHERE id NOT IN (
@@ -1525,7 +1873,12 @@ def init_db():
                 )
             """)
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_learned_kb_kw_ans ON learned_kb(keywords, answer)")
-            c.execute("DELETE FROM learned_kb WHERE keywords LIKE '%לקבוע%' OR keywords LIKE '%לתאם%' OR keywords LIKE '%תור%' OR answer LIKE '%לא מתאים%' OR answer LIKE '%#2:%'")
+            c.execute(
+                "DELETE FROM learned_kb WHERE keywords LIKE '%לקבוע%' OR keywords LIKE '%לתאם%' OR keywords LIKE '%תור%' "
+                "OR keywords LIKE '%f21%' OR keywords LIKE '%f22%' OR keywords LIKE '%f25%' "
+                "OR answer LIKE '%לא מתאים%' OR answer LIKE '%#2:%' OR answer LIKE '%נתת ללקוח%' "
+                "OR answer LIKE '%עשית טעות%' OR answer LIKE '%טעית%' OR answer LIKE '%שגוי%'"
+            )
         except Exception:
             pass
         c.execute("""
@@ -1628,7 +1981,7 @@ def init_db():
                 VALUES (?, ?, datetime('now'))
             """, (item["keywords"], item["answer"]))
 
-        # 4. Restore learned_kb from JSON cache if present
+        # 4. Restore learned_kb from JSON cache if present (skipping any stale F21/F22/F25 or admin meta-error rows)
         if os.path.exists(BACKUP_KB_JSON_PATH):
             try:
                 with open(BACKUP_KB_JSON_PATH, "r", encoding="utf-8") as f:
@@ -1636,10 +1989,16 @@ def init_db():
                 if isinstance(kb_cached, list):
                     for item in kb_cached:
                         if isinstance(item, dict) and item.get("keywords") and item.get("answer"):
+                            kw_l = str(item["keywords"]).lower()
+                            ans_s = str(item["answer"])
+                            if any(k in kw_l for k in ["f21", "f22", "f25", "לקבוע", "לתאם", "תור"]):
+                                continue
+                            if is_admin_meta_or_error_correction(ans_s):
+                                continue
                             c.execute("""
                                 INSERT OR IGNORE INTO learned_kb (keywords, answer, created_at)
                                 VALUES (?, ?, datetime('now'))
-                            """, (item["keywords"], item["answer"]))
+                            """, (item["keywords"], sanitize_admin_leakage(ans_s)))
             except Exception:
                 pass
 
@@ -1696,6 +2055,10 @@ def send_whatsapp_message(phone: str, text: str, raw_chat_id: str = "") -> bool:
     if (not clean_phone and not raw_chat_id) or not clean_text:
         print(f"[WhatsApp Skip] Invalid phone or empty text: phone={clean_phone}")
         return False
+
+    # Final safety guard on customer-facing messages (never allow Admin meta-criticism to leak to a customer)
+    if not clean_text.startswith(("❓", "✅", "🕒", "📞", "💳", "📦", "ℹ️", "⚠️")):
+        clean_text = sanitize_admin_leakage(clean_text)
 
     _, _, send_url = parse_green_api_credentials()
     if not send_url:
@@ -1923,7 +2286,7 @@ def purge_unwanted_phrases(text: str) -> str:
     cleaned = text
     cleaned = re.sub(r"בודק(?:\s+זאת|\s+כעת)?\s+מול\s+המעבדה(?:\s+שלנו)?", "בודק כעת את המחיר העדכני", cleaned)
     cleaned = re.sub(r"מול\s+המעבדה(?:\s+שלנו)?", "את המחיר העדכני", cleaned)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
     return cleaned
 
 def apply_customer_name_guard(reply_text: str, customer_name: str, already_greeted: bool, msg_count: int = 2, is_closing: bool = False) -> str:
@@ -2444,12 +2807,14 @@ async def unified_whatsapp_webhook(req: Request):
 
             is_sched_req = bool(target_pending and is_scheduling_request(target_pending[2] or ""))
             req_text_for_adapt = (target_pending[2] if (target_pending and len(target_pending) > 2) else "") or ""
-            adapted_admin_ans, is_admin_ans_in_prog = adapt_admin_answer(admin_answer, req_text_for_adapt)
+            recent_cust_text = get_recent_chat_history(target_pending[1], limit=8) if target_pending else ""
+            adapted_admin_ans, is_admin_ans_in_prog = adapt_admin_answer(admin_answer, req_text_for_adapt, recent_cust_text)
 
-            # Save clean rule to learned_kb ONLY for general knowledge answers (not scheduling, not open questions, and not temporary out-of-stock/order offers unless explicit keywords were provided)
+            # Save clean rule to learned_kb ONLY for general knowledge answers (NEVER save raw Admin meta-corrections, scheduling, or temporary stock replies)
             has_explicit_kb_kw = len(parts) > 1 and bool(parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip())
             is_temp_stock_msg = any(w in admin_answer for w in ["אין במלאי", "אזל", "צריך להזמין", "אפשר להזמין"])
-            if not is_sched_req and (has_explicit_kb_kw or (not is_admin_ans_in_prog and not is_temp_stock_msg)):
+            is_meta_err = is_admin_meta_or_error_correction(admin_answer)
+            if not is_sched_req and not is_meta_err and (has_explicit_kb_kw or (not is_admin_ans_in_prog and not is_temp_stock_msg)):
                 if has_explicit_kb_kw:
                     keywords = parts[1].replace("מילות מפתח:", "").replace("מילות מפתח", "").strip()
                 else:
@@ -2475,7 +2840,6 @@ async def unified_whatsapp_webhook(req: Request):
 
                 # Extract callback phone if customer specified one in conversation
                 found_cb = ""
-                recent_cust_text = get_recent_chat_history(target_cust_phone, limit=8)
                 for line in recent_cust_text.split("\n"):
                     if "[לקוח]:" in line:
                         maybe_cb = detect_callback_phone_in_text(line.replace("[לקוח]:", "").strip(), target_cust_phone)
@@ -2487,7 +2851,7 @@ async def unified_whatsapp_webhook(req: Request):
                     appt_meta = get_appointment_meta(req_text, recent_cust_text)
                     req_hr, req_mn = extract_explicit_hour_minute(req_text)
                     adm_hr, adm_mn = extract_explicit_hour_minute(admin_answer)
-                    extra_info_str, adm_price_nis = extract_non_time_admin_details(admin_answer, req_text)
+                    extra_info_str, adm_price_nis = extract_non_time_admin_details(admin_answer, req_text, recent_cust_text)
                     admin_clean = admin_answer.strip().lower()
 
                     has_negation = bool(
@@ -2641,15 +3005,18 @@ async def unified_whatsapp_webhook(req: Request):
                     # CASE 4: Admin rejected without specifying a new hour (e.g. "מחר עמוס, רק ביום שני")
                     else:
                         name_str = f" {target_cust_name}" if (target_cust_name and target_cust_name not in COMMON_NON_NAMES) else ""
-                        cust_reply_msg = f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\n{admin_answer}. איזה יום ושעה יתאימו לך? 😃"
+                        adapted_case4, _ = adapt_admin_answer(admin_answer, req_text, recent_cust_text)
+                        adapted_case4_clean = re.sub(r"\s*(?:איזה\s+יום\s+ושעה[^?]*\?|האם\s+זה\s+מתאים\s+לך\?)\s*😃?\s*$", "", adapted_case4).rstrip(".!, ")
+                        cust_reply_msg = f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\n{adapted_case4_clean}. איזה יום ושעה יתאימו לך? 😃"
                         send_whatsapp_message(target_cust_phone, cust_reply_msg)
                         save_chat_message(target_cust_phone, "agent", cust_reply_msg)
-                        send_whatsapp_message(sender_phone, f"✅ העברתי ללקוח ({target_cust_name or callback_phone}) את הודעתך וממתין שייבחר מועד חלופי.", raw_chat_id)
+                        send_whatsapp_message(sender_phone, f"✅ העברתי ללקוח ({target_cust_name or callback_phone}) את הודעתך בשפה ישירה וממתין שייבחר מועד חלופי.", raw_chat_id)
                         conn.commit()
                         conn.close()
                         return {"ok": True, "admin_action": "alternative_day_requested", "customer": target_cust_phone}
                 else:
-                    adm_price = extract_price_nis(admin_answer)
+                    adm_price = extract_price_nis(adapted_admin_ans) or extract_price_nis(admin_answer)
+                    kosher_tracks_adm = extract_kosher_device_track_prices(adapted_admin_ans, recent_cust_text)
                     # Check if customer had ALREADY agreed to order and was just waiting for Eran's exact price
                     prev_action = conn.execute("SELECT action_taken FROM customer_requests WHERE id=?", (target_pending[0],)).fetchone()
                     prev_action_str = (prev_action[0] if prev_action else "") or ""
@@ -2669,8 +3036,12 @@ async def unified_whatsapp_webhook(req: Request):
                         send_whatsapp_message(target_cust_phone, cust_reply_msg)
                         save_chat_message(target_cust_phone, "agent", cust_reply_msg)
                     else:
-                        cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count)
-                        action_with_price = f"{adapted_admin_ans} [PRICE:{adm_price}]" if adm_price else adapted_admin_ans
+                        cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count, recent_cust_text)
+                        action_with_price = adapted_admin_ans
+                        if kosher_tracks_adm.get("matched"):
+                            action_with_price += f" [GALUT_PRICE:{kosher_tracks_adm['galut_price']}] [YEMOT_PRICE:{kosher_tracks_adm['yemot_price']}]"
+                        elif adm_price:
+                            action_with_price += f" [PRICE:{adm_price}]"
                         if is_admin_ans_in_prog or is_in_progress_or_question(cust_reply_msg):
                             conn.execute(
                                 "UPDATE customer_requests SET status='awaiting_customer_reply', action_taken=? WHERE id=?",
@@ -2907,11 +3278,40 @@ async def unified_whatsapp_webhook(req: Request):
         cust_phone_fmt = format_phone_display(sender_phone)
         cust_has_neg = bool(re.search(r"\b(?:לא|אין\s+צורך|לא\s+צריך|לא\s+רוצה|לא\s+כרגע|מוותר|אסתדר)\b", cust_clean))
 
+        # (0.6.0) Customer disputes / challenges the quoted price -> Immediately escalate to Eran!
+        if is_price_dispute_or_challenge(message_text, recent_history):
+            updated_req_disp = f"{open_req_text} | השגת לקוח על המחיר: {message_text}"
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute(
+                    "UPDATE customer_requests SET status='pending', request_text=?, action_taken=? WHERE id=?",
+                    (updated_req_disp, "הלקוח טוען שהמחיר אינו מדויק - ממתין לבדיקת ערן", open_req_id)
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            reply_disp = "אני בודק כעת מול ערן את המחיר המעודכן ביותר עבורך וכבר חוזר אליך עם תשובה מדויקת! 😃"
+            send_whatsapp_message(sender_phone, reply_disp, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", reply_disp)
+            target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+            for adm in target_admins:
+                send_whatsapp_message(
+                    adm,
+                    f"❓ *בירור מחיר מול לקוח* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                    f"📌 *פנייה מקורית:* {open_req_text}\n"
+                    f"💬 *הודעת הלקוח כעת:* \"{message_text}\"\n\n"
+                    f"💬 *למענה מהיר: כתוב כאן את המחיר המעודכן (הסוכן יתנצל בשמו על הבלבול, יעדכן את הלקוח בשפה ישירה ויחתור למכירה!)*"
+                )
+            return {"ok": True, "reply": reply_disp, "type": "price_dispute_escalated", "escalated": True}
+
         # (0.6.1) Customer is in 'awaiting_bit_payment' and confirms they paid via Bit (or sends screenshot)
         if open_status == "awaiting_bit_payment":
             if is_payment_confirmation_message(message_text, type_msg):
                 m_pr = re.search(r"(\d{2,4})\s*₪", open_action_taken or "")
                 paid_amount_str = f" בסך *{m_pr.group(1)} ₪*" if m_pr else ""
+                is_dev_sale_paid = any(w in f"{open_req_text} {open_action_taken}" for w in ["מכשיר", "מסלול", "שריון", "f21", "f22", "f25", "qin"])
                 try:
                     conn = sqlite3.connect(DB_PATH)
                     conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"הלקוח עדכן שביצע העברה בביט: {message_text}", open_req_id))
@@ -2919,11 +3319,22 @@ async def unified_whatsapp_webhook(req: Request):
                     conn.close()
                 except Exception:
                     pass
-                reply_paid = (
-                    f"תודה רבה! קיבלתי את העדכון על התשלום בביט{paid_amount_str} ועדכנתי את ערן להזמין עבורך את החלק מיד. 🛠️\n"
-                    f"נעדכן אותך ברגע שהחלק יגיע למעבדה!\n\n"
-                    f"האם אוכל לעזור לך במשהו נוסף? 😃"
-                )
+                if is_dev_sale_paid:
+                    reply_paid = (
+                        f"תודה רבה! קיבלתי את העדכון על התשלום בביט{paid_amount_str} ושריינתי עבורך את המכשיר מיד! 📱🙌\n"
+                        f"עדכנתי את ערן להכין ולשמור עבורך את המכשיר.\n\n"
+                        f"האם אוכל לעזור לך במשהו נוסף? 😃"
+                    )
+                    admin_paid_header = "💳 *אישור תשלום בביט ושריון מכשיר!*"
+                    admin_paid_footer = "📱 *נא לשמור ולהכין עבורו את המכשיר!*"
+                else:
+                    reply_paid = (
+                        f"תודה רבה! קיבלתי את העדכון על התשלום בביט{paid_amount_str} ועדכנתי את ערן להזמין עבורך את החלק מיד. 🛠️\n"
+                        f"נעדכן אותך ברגע שהחלק יגיע למעבדה!\n\n"
+                        f"האם אוכל לעזור לך במשהו נוסף? 😃"
+                    )
+                    admin_paid_header = "💳 *אישור תשלום בביט והזמנת חלק!*"
+                    admin_paid_footer = "🛠️ *נא להזמין עבורו את החלק!*"
                 send_whatsapp_message(sender_phone, reply_paid, raw_chat_id)
                 save_chat_message(sender_phone, "customer", message_text)
                 save_chat_message(sender_phone, "agent", reply_paid)
@@ -2936,11 +3347,11 @@ async def unified_whatsapp_webhook(req: Request):
                 for adm in target_admins:
                     send_whatsapp_message(
                         adm,
-                        f"💳 *אישור תשלום בביט והזמנת חלק!* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                        f"{admin_paid_header} [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
                         f"הלקוח עדכן שביצע העברה בביט{paid_amount_str} עבור: *{open_req_text}*\n"
                         f"💬 *הודעת הלקוח:* \"{message_text}\"\n"
                         f"📞 *טלפון הלקוח:* {cust_phone_fmt}\n"
-                        f"🛠️ *נא להזמין עבורו את החלק!*"
+                        f"{admin_paid_footer}"
                     )
                 return {"ok": True, "reply": reply_paid, "type": "bit_payment_confirmed"}
 
@@ -2994,7 +3405,129 @@ async def unified_whatsapp_webhook(req: Request):
                 asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
                 return {"ok": True, "reply": reply_no_chk, "type": "declined_exact_price_check"}
 
-        is_order_context = any(w in (open_action_taken or "") for w in ["להזמין", "נזמין", "הזמנה", "[PRICE:"])
+        # (0.6.3) Check if open dialogue is a Kosher Device Purchase / Reservation Flow (with 2 warranty tracks)
+        kosher_dev_ctx = extract_kosher_device_track_prices(f"{open_req_text} {open_action_taken}", recent_history)
+        if kosher_dev_ctx.get("matched") and not is_repair_or_smartphone_context(open_req_text):
+            # If customer asks for the full explanation of warranty differences first, send it and keep the sale open!
+            if is_warranty_followup_confirmation(message_text, recent_history):
+                warranty_reply = get_warranty_explanation_with_pdf(customer_name)
+                send_whatsapp_message(sender_phone, warranty_reply, raw_chat_id)
+                render_url = (RENDER_EXTERNAL_URL or "https://ns-whatsapp-agent-1.onrender.com").strip().rstrip("/")
+                pdf_url = f"{render_url}/noam_siach_warranty_guide.pdf"
+                send_whatsapp_file_by_url(
+                    sender_phone,
+                    pdf_url,
+                    "noam_siach_warranty_guide.pdf",
+                    caption="טבלת השוואת מסלולי אחריות - נעם שיח תקשורת 🛡️",
+                    raw_chat_id=raw_chat_id
+                )
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", warranty_reply)
+                return {"ok": True, "reply": warranty_reply, "type": "warranty_full_explanation_in_sale", "escalated": False}
+
+            chosen_track = detect_chosen_warranty_track(message_text)
+            wants_device_reserve = not cust_has_neg and (
+                bool(chosen_track)
+                or is_satisfaction_yes(message_text)
+                or any(w in cust_clean for w in [
+                    "כן", "רוצה", "תשריין", "לשריין", "שריין", "בטח", "ודאי", "אשמח",
+                    "מעוניין", "סבבה", "בסדר", "מעולה", "בבקשה", "אני לוקח", "לקנות", "לרכוש", "תזמין"
+                ])
+            )
+            if wants_device_reserve:
+                dev_label = kosher_dev_ctx["device_label"]
+                galut_p = kosher_dev_ctx["galut_price"]
+                yemot_p = kosher_dev_ctx["yemot_price"]
+
+                if chosen_track in ["yemot", "galut", "geula"]:
+                    if chosen_track == "galut":
+                        final_dev_price = galut_p
+                        track_title = "מסלול גלות (אחריות יבואן רשמי)"
+                        track_note = (
+                            f"\n💡 *לידיעתך:* בתוספת של 100 ₪ בלבד ({yemot_p} ₪) תוכל לבחור ב*מסלול ימות המשיח ⭐* ולקבל תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים, מכשיר חלופי והעברת נתונים חינם!"
+                        )
+                    else:
+                        final_dev_price = yemot_p
+                        track_title = "מסלול ימות המשיח ⭐ (אחריות מעבדה מלאה בחדרה)"
+                        track_note = " (כולל תיקון אקספרס תוך שעתיים במעבדה שלנו בחדרה, מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!)"
+
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        conn.execute(
+                            "UPDATE customer_requests SET status='awaiting_bit_payment', action_taken=? WHERE id=?",
+                            (f"שריון מכשיר {dev_label} ב{track_title} - נשלחו פרטי ביט על סך {final_dev_price} ₪ ל-{BIT_PAYMENT_PHONE}", open_req_id)
+                        )
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        pass
+
+                    reply_dev_bit = (
+                        f"בחירה מצוינת! שריינתי עבורך את המכשיר (*{dev_label}*) ב*{track_title}*{track_note} בסך *{final_dev_price} ₪*. 📱🙌\n\n"
+                        f"כדי להשלים את השריון כעת ולהבטיח את המכשיר מהמלאי, אנא העבר *{final_dev_price} ₪* בביט (Bit) למספר:\n"
+                        f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n\n"
+                        f"לאחר ההעברה, שלח לנו כאן עדכון או צילום מסך, ועדכנתי כבר עכשיו את ערן לשמור עבורך את המכשיר! 😃"
+                    )
+                    send_whatsapp_message(sender_phone, reply_dev_bit, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reply_dev_bit)
+
+                    target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                    for adm in target_admins:
+                        send_whatsapp_message(
+                            adm,
+                            f"📦 *הלקוח ביקש לשריין/לרכוש מכשיר!* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                            f"📱 *מכשיר:* {dev_label}\n"
+                            f"🛡️ *מסלול שנבחר:* {track_title}\n"
+                            f"💰 *סכום לתשלום בביט:* {final_dev_price} ₪ (נשלחו ללקוח פרטי העברה בביט למספר {BIT_PAYMENT_PHONE})\n"
+                            f"💬 *הודעת הלקוח:* \"{message_text}\"\n"
+                            f"📞 *טלפון הלקוח:* {cust_phone_fmt}"
+                        )
+                    return {
+                        "ok": True,
+                        "reply": reply_dev_bit,
+                        "type": "device_reserved_bit_sent",
+                        "device": dev_label,
+                        "track": track_title,
+                        "amount": final_dev_price,
+                        "bit_phone": BIT_PAYMENT_PHONE
+                    }
+                else:
+                    # Customer said "כן" / "תשריין לי" without specifying which warranty track yet -> Ask & persuade for ימות המשיח ⭐!
+                    reply_choose_track = (
+                        f"מעולה! אשמח לשריין עבורך יחידה של *{dev_label}* מהמלאי כבר עכשיו. 📱🔥\n"
+                        f"באיזה מסלול אחריות תרצה לבחור עבור המכשיר?\n"
+                        f"• ⭐ *מסלול ימות המשיח ({yemot_p} ₪ — המסלול המומלץ והמשתלם ביותר!):* אחריות מעבדה מלאה אצלנו בחדרה, תיקון אקספרס תוך שעתיים במקום להמתין 3 שבועות ליבואן, מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n"
+                        f"• *מסלול גלות ({galut_p} ₪):* אחריות יבואן רשמי בלבד (שליחה למעבדת היבואן בעת תקלה).\n\n"
+                        f"איזה מסלול לרשום לך כדי שאשלח לך מיד את פרטי התשלום בביט לשריון המכשיר? 😃"
+                    )
+                    send_whatsapp_message(sender_phone, reply_choose_track, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reply_choose_track)
+                    return {
+                        "ok": True,
+                        "reply": reply_choose_track,
+                        "type": "asked_customer_for_warranty_track",
+                        "device": dev_label
+                    }
+            elif cust_has_neg:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"הלקוח לא מעוניין בשריון מכשיר כרגע: {message_text}", open_req_id))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                reply_decline_dev = "בסדר גמור, בשמחה! אנחנו כאן לכל שאלה.\n\nהאם אוכל לעזור לך במשהו נוסף? 😃"
+                send_whatsapp_message(sender_phone, reply_decline_dev, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_decline_dev)
+                ts = std_time.time()
+                PENDING_SATISFACTION_CHECKS[sender_phone] = ts
+                asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
+                return {"ok": True, "reply": reply_decline_dev, "type": "customer_declined_device_reservation"}
+
+        is_order_context = any(w in (open_action_taken or "") for w in ["להזמין", "נזמין", "הזמנה", "לשריין", "שריון", "יחידות אחרונות", "[PRICE:"])
         is_followup_q = (
             "?" in message_text
             or "؟" in message_text
@@ -3026,11 +3559,11 @@ async def unified_whatsapp_webhook(req: Request):
                 )
             return {"ok": True, "reply": reply_fq, "type": "open_dialogue_followup_question", "escalated": True}
 
-        # (B) Open dialogue was an Order Offer (e.g. after Eran approved the price or offered to order the part)
+        # (B) Open dialogue was an Order / Reservation Offer (e.g. after Eran approved the price or offered to order/reserve)
         if is_order_context:
             wants_to_order = not cust_has_neg and (
                 is_satisfaction_yes(message_text)
-                or any(w in cust_clean for w in ["כן", "רוצה", "תזמין", "תזמינו", "בטח", "ודאי", "אשמח", "מעוניין", "סבבה", "בסדר", "מעולה", "בבקשה", "להזמין"])
+                or any(w in cust_clean for w in ["כן", "רוצה", "תזמין", "תזמינו", "תשריין", "לשריין", "שריין", "בטח", "ודאי", "אשמח", "מעוניין", "סבבה", "בסדר", "מעולה", "בבקשה", "להזמין"])
             )
             if wants_to_order:
                 # Extract approved price from open_action_taken or open_req_text
@@ -3427,8 +3960,48 @@ async def unified_whatsapp_webhook(req: Request):
 
         return {"ok": True, "reply": reply_sched, "type": "scheduling_request", "escalated": True, "has_explicit_hour": has_explicit_hour}
 
+    # 3.45 FAST DETERMINISTIC PATH: Customer Disputes / Challenges a Price -> Immediately Escalate to Eran!
+    if is_price_dispute_or_challenge(message_text, recent_history):
+        cust_phone_fmt = format_phone_display(sender_phone)
+        reply_disp = "אני בודק כעת מול ערן את המחיר המעודכן ביותר עבורך וכבר חוזר אליך עם תשובה מדויקת! 😃"
+        send_whatsapp_message(sender_phone, reply_disp, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", reply_disp)
+        saved_disp_id = None
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sender_phone,
+                    "נעם שיח - בירור מחיר",
+                    f"{recent_history[-250:] if recent_history else ''} | הודעת לקוח: {message_text}".strip(" |"),
+                    "הלקוח טוען שהמחיר אינו מדויק - ממתין לבדיקת ערן",
+                    "",
+                    "pending",
+                    datetime.now().isoformat()
+                )
+            )
+            saved_disp_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+        for adm in target_admins:
+            send_whatsapp_message(
+                adm,
+                f"❓ *בירור מחיר מול לקוח* {f'[#REQ-{saved_disp_id}]' if saved_disp_id else ''} ({customer_name or cust_phone_fmt}):\n"
+                f"💬 *הודעת הלקוח:* \"{message_text}\"\n"
+                f"📌 *הקשר השיחה:*\n{recent_history}\n\n"
+                f"💬 *למענה מהיר: כתוב כאן את המחיר המעודכן (הסוכן יתנצל בשמו על הבלבול, יעדכן את הלקוח בשפה ישירה ויחתור למכירה!)*"
+            )
+        return {"ok": True, "reply": reply_disp, "type": "price_dispute_escalated", "escalated": True}
+
     # 3.5 FAST DETERMINISTIC PATH: Learned Knowledge & Known Device Prices (Zero delay, Never escalate)
-    kb_answer = find_matching_learned_knowledge(message_text)
+    kb_answer = find_matching_learned_knowledge(message_text, recent_history)
     if kb_answer:
         reply_kb = kb_answer
         if customer_name and msg_count <= 1 and not already_greeted:
@@ -3439,8 +4012,8 @@ async def unified_whatsapp_webhook(req: Request):
         if not store_status["is_open"] and any(w in reply_kb for w in ["מוזמן להביא", "במקום", "להגיע", "לבוא"]):
             reply_kb = sanitize_closed_store_advice(reply_kb, store_status["is_open"], store_status["arrival_advice"])
         
-        # If not asking warranty followup, and not an open question or in progress, append satisfaction question
-        if not any(q in reply_kb for q in ["פירוט מורחב", "בין מסלולי האחריות", "האם הצלחתי לעזור"]):
+        # If not asking warranty/sales followup, and not an open question or in progress, append satisfaction question
+        if not any(q in reply_kb for q in ["פירוט מורחב", "בין מסלולי האחריות", "האם הצלחתי לעזור", "נשארו יחידות אחרונות", "תרצה שנשריין"]):
             if not is_in_progress_or_question(reply_kb):
                 reply_kb = f"{reply_kb.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
             
@@ -3448,6 +4021,16 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", reply_kb)
         
+        kosher_kb_info = extract_kosher_device_track_prices(f"{message_text} {reply_kb}", recent_history)
+        kb_single_price = extract_price_nis(reply_kb)
+        is_open_kb_sale = kosher_kb_info.get("matched") or is_in_progress_or_question(reply_kb)
+        kb_status = "awaiting_customer_reply" if is_open_kb_sale else "handled"
+        kb_action = "מענה אוטונומי ממאגר ידע ומחירון"
+        if kosher_kb_info.get("matched"):
+            kb_action += f" - הצעת מחיר ושריון {kosher_kb_info['device_label']} [GALUT_PRICE:{kosher_kb_info['galut_price']}] [YEMOT_PRICE:{kosher_kb_info['yemot_price']}]"
+        elif kb_single_price:
+            kb_action += f" [PRICE:{kb_single_price}]"
+
         try:
             conn = sqlite3.connect(DB_PATH)
             conn.execute(
@@ -3457,9 +4040,9 @@ async def unified_whatsapp_webhook(req: Request):
                     sender_phone,
                     "נעם שיח - מעבדה ומכירות",
                     message_text,
-                    "מענה אוטונומי ממאגר ידע ומחירון",
-                    "מסלול ימות המשיח",
-                    "handled",
+                    kb_action,
+                    "מסלול ימות המשיח ⭐",
+                    kb_status,
                     datetime.now().isoformat()
                 )
             )
@@ -3468,7 +4051,7 @@ async def unified_whatsapp_webhook(req: Request):
         except Exception:
             pass
             
-        return {"ok": True, "reply": reply_kb, "type": "learned_kb_direct", "escalated": False}
+        return {"ok": True, "reply": reply_kb, "type": "learned_kb_direct", "escalated": False, "open_sale": is_open_kb_sale}
 
     # 3.6 FAST DETERMINISTIC PATH: Part / Screen / Battery / Port Inquiry (or follow-up "כמה זה עולה" when context is a part/repair) -> Give Average Price & Offer Exact Price Check with Eran!
     part_inq = is_part_or_repair_price_inquiry(message_text)
@@ -3556,18 +4139,20 @@ async def unified_whatsapp_webhook(req: Request):
    • לעולם אל תגיד ללקוח "אני בודק מול המעבדה" או "בודק זאת מול המעבדה שלנו"!
    • במקום זאת אמור תמיד: "אני בודק כעת את המחיר העדכני וכבר חוזר אליך עם תשובה מדויקת" או "אני בודק כעת את הזמינות והמחיר העדכני".
 
-3. רכישת מכשירים ומסלולי אחריות בנעם שיח (כלל 2 השלבים):
+3. רכישת מכשירים, חתירה אקטיבית למכירה ומסלולי אחריות בנעם שיח:
    • מחירון מכשירים במלאי:
-     - F25 Pro: 770 ₪ (מסלול גלות יבואן רשמי) / 870 ₪ (מסלול ימות המשיח ⭐ מעבדה מקומית)
-     - שיאומי Qin F21 Pro: 650 ₪ (גלות) / 750 ₪ (ימות המשיח ⭐)
-     - שיאומי Qin F22 Pro: 850 ₪ (גלות) / 950 ₪ (ימות המשיח ⭐)
+     - F25 Pro (F25P): 770 ₪ (מסלול גלות יבואן רשמי) / 870 ₪ (מסלול ימות המשיח ⭐ מעבדה מקומית — המומלץ!)
+     - שיאומי Qin F21 Pro (F21P): 550 ₪ (מסלול גלות) / 650 ₪ (מסלול ימות המשיח ⭐ מעבדה מקומית — המומלץ!)
+     - שיאומי Qin F22 Pro (F22P): 850 ₪ (מסלול גלות) / 950 ₪ (מסלול ימות המשיח ⭐ מעבדה מקומית — המומלץ!)
      - החלפת מסך שיאומי Qin F21: 220 ₪ כולל אחריות חצי שנה
-   • כאשר לקוח שואל על רכישת מכשיר או מחיר מכשיר חדש:
-     הצג לו תמיד את המחיר בשתי אפשרויות אחריות:
-     - אחריות יבואן ארצי (מסלול גלות)
-     - אחריות מלאה אצלנו במעבדה (מסלול ימות המשיח ⭐)
-     ושאל אותו בסוף ההודעה:
-     "האם תרצה פירוט מורחב של ההבדלים המלאים בין מסלולי האחריות? 😃"
+   • כאשר לקוח שואל על רכישת מכשיר או מחיר מכשיר כשר / חצי טאץ':
+     1. הצג לו תמיד את המחיר בשתי אפשרויות האחריות:
+        - מסלול גלות (אחריות יבואן ארצי בלבד)
+        - ⭐ מסלול ימות המשיח (המסלול המומלץ והמשתלם ביותר שלנו! תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים במקום להמתין 3 שבועות ליבואן, מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות).
+     2. חובה לחתור למכירה באופן אקטיבי (לעולם אל תכתוב "האם אפשר לעזור במשהו נוסף?" או "האם הצלחתי לעזור?" כשאתה שולח מחיר!):
+        כתוב תמיד בסוף הצעת המחיר:
+        "🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+     3. ברגע שהלקוח בוחר מסלול ומעוניין לשריין/לרכוש — שלח לו את פרטי התשלום בביט ({BIT_PAYMENT_PHONE} - ערן נקר, נעם שיח) עם הסכום המדויק של המסלול שבחר!
    • אם הדגם או המחיר ידועים לך מהרשימה לעיל — ענה מיד במדויק! לעולם אל תגיד שאתה בודק או שתחזור אליו על מכשירים שמחירם ידוע!
 
 4. תיאום תורים, רכישת מכשירים בחנות, התקנות מרחוק ותיקוני מעבדה — הבחנה מדויקת בין השירותים, חובת אישור מנהל (ערן), בירור טלפון לחזרה ותזכורת 15 דקות:
@@ -3730,11 +4315,11 @@ async def unified_whatsapp_webhook(req: Request):
         is_escalated = True
 
     # Guard: If reply contains concrete price quote and gives an answer, do NOT escalate!
-    if any(cur in reply_text for cur in ["770", "870", "220", "650", "850", "250 ₪", "350 ₪"]):
+    if any(cur in reply_text for cur in ["550", "650", "770", "870", "220", "850", "950", "250 ₪", "350 ₪"]):
         if not any(phrase in reply_text for phrase in ["אני בודק", "בודק כעת", "אבדוק"]):
             is_escalated = False
 
-    # Ensure device price quotes always conclude with the mandatory warranty question
+    # Ensure device price quotes always conclude with the active sales pitch & warranty track recommendation
     reply_text = ensure_warranty_question_in_device_quote(reply_text, message_text, recent_history)
 
     # Guard and clean salutations/name (enforcing 3 stages: Start, Middle, End)
@@ -3743,9 +4328,9 @@ async def unified_whatsapp_webhook(req: Request):
     else:
         reply_text = purge_unwanted_phrases(reply_text)
 
-    # Ensure satisfaction question is asked on complete answers ONLY (not when asking questions or in progress)
+    # Ensure satisfaction question is asked on complete answers ONLY (never when quoting a price, driving a sale, or asking an open question)
     if not is_escalated and not is_pure_greeting(message_text):
-        if not any(q in reply_text for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "פירוט מורחב", "בין מסלולי האחריות", "אני בודק כעת"]):
+        if not any(q in reply_text for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "פירוט מורחב", "בין מסלולי האחריות", "אני בודק כעת", "נשארו יחידות אחרונות", "תרצה שנשריין"]):
             if not is_in_progress_or_question(reply_text):
                 reply_text = f"{reply_text.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
 
@@ -3777,7 +4362,21 @@ async def unified_whatsapp_webhook(req: Request):
         asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
     saved_req_id = None
     try:
-        status = "pending" if is_escalated else "handled"
+        kosher_llm_info = extract_kosher_device_track_prices(f"{message_text} {reply_text}", recent_history)
+        llm_single_price = extract_price_nis(reply_text)
+        if is_escalated:
+            status = "pending"
+            llm_action = "הועבר למנהל"
+        elif kosher_llm_info.get("matched") or is_in_progress_or_question(reply_text):
+            status = "awaiting_customer_reply"
+            llm_action = f"מענה אוטונומי ({used_model})"
+            if kosher_llm_info.get("matched"):
+                llm_action += f" [GALUT_PRICE:{kosher_llm_info['galut_price']}] [YEMOT_PRICE:{kosher_llm_info['yemot_price']}]"
+            elif llm_single_price:
+                llm_action += f" [PRICE:{llm_single_price}]"
+        else:
+            status = "handled"
+            llm_action = f"מענה אוטונומי ({used_model})"
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute(
@@ -3787,7 +4386,7 @@ async def unified_whatsapp_webhook(req: Request):
                 sender_phone,
                 sub_info.get("system", "מעבדה/שירות"),
                 message_text,
-                "הועבר למנהל" if is_escalated else f"מענה אוטונומי ({used_model})",
+                llm_action,
                 "",
                 status,
                 datetime.now().isoformat()
