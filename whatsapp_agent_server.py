@@ -3053,12 +3053,12 @@ def format_pos_item_answer(item: dict, all_sale_prices: list[int] | None = None)
 def _parse_aspnet_form_inputs(html_text: str) -> dict:
     """
     Parses an ASP.NET WebForms HTML page (such as https://cellular.neworder.co.il/heb/login.aspx)
-    to extract all <input> fields, including:
+    to extract all <input>, <button>, and __doPostBack login fields:
     - hidden fields (__VIEWSTATE, __VIEWSTATEGENERATOR, __EVENTVALIDATION)
     - 3 login fields: company input(s) (שם חברה), username input(s) (שם משתמש), password input(s) (סיסמה)
     - checkbox inputs (e.g., simple 'אני לא רובוט' / 'זכור אותי' checkboxes) -> automatically checked ('on')
     - Google reCAPTCHA / Turnstile detection (has_recaptcha)
-    - submit button name and value
+    - submit buttons, image buttons (.x/.y), and __doPostBack link targets
     """
     hidden_fields = {}
     company_inputs = []
@@ -3067,6 +3067,8 @@ def _parse_aspnet_form_inputs(html_text: str) -> dict:
     password_inputs = []
     checkbox_inputs = []
     submit_inputs = []
+    image_submit_inputs = []
+    postback_targets = []
 
     company_keywords = ["comp", "firm", "business", "client", "account", "branch", "store", "org", "חברה", "עסק", "סניף", "לקוח", "קוד"]
     user_keywords = ["user", "login", "uname", "emp", "worker", "agent", "משתמש", "עובד"]
@@ -3100,7 +3102,10 @@ def _parse_aspnet_form_inputs(html_text: str) -> dict:
             checkbox_inputs.append((inp_name, inp_val or "on"))
         elif inp_type == "password" or any(k in combined_meta for k in ["pass", "pwd", "סיסמ"]):
             password_inputs.append(inp_name)
-        elif inp_type in ("submit", "image", "button") or any(k in inp_name.lower() for k in ["btn", "submit", "cmdlogin", "loginbutton"]):
+        elif inp_type == "image":
+            image_submit_inputs.append(inp_name)
+            submit_inputs.append((inp_name, inp_val))
+        elif inp_type in ("submit", "button") or any(k in inp_name.lower() for k in ["btn", "submit", "cmdlogin", "loginbutton"]):
             submit_inputs.append((inp_name, inp_val))
         elif inp_type in ("text", "email", "tel", "number"):
             if any(k in combined_meta for k in company_keywords):
@@ -3109,6 +3114,23 @@ def _parse_aspnet_form_inputs(html_text: str) -> dict:
                 user_inputs.append(inp_name)
             else:
                 other_text_inputs.append(inp_name)
+
+    # Also check <button> elements
+    for m_btn in re.finditer(r"<button\b([^>]*)>(.*?)</button>", html_text or "", flags=re.IGNORECASE | re.DOTALL):
+        b_attrs, b_inner = m_btn.group(1), m_btn.group(2)
+        m_bname = re.search(r"\bname\s*=\s*[\x22\x27]([^\x22\x27]+)[\x22\x27]", b_attrs, re.IGNORECASE)
+        if m_bname:
+            b_val_m = re.search(r"\bvalue\s*=\s*[\x22\x27]([^\x22\x27]*)[\x22\x27]", b_attrs, re.IGNORECASE)
+            b_txt = re.sub(r"<[^>]+>", "", b_inner).strip()
+            submit_inputs.append((m_bname.group(1).strip(), b_val_m.group(1) if b_val_m else (b_txt or "כניסה")))
+
+    # Also extract ASP.NET __doPostBack('target', 'arg') login triggers
+    for m_pb in re.finditer(r"__doPostBack\s*\(\s*[\x22\x27]([^\x22\x27]+)[\x22\x27]\s*,\s*[\x22\x27]([^\x22\x27]*)[\x22\x27]\s*\)", html_text or "", flags=re.IGNORECASE):
+        pb_target, pb_arg = m_pb.group(1).strip(), m_pb.group(2).strip()
+        if any(k in pb_target.lower() for k in ["login", "btn", "submit", "cmd", "enter", "ok"]):
+            postback_targets.insert(0, (pb_target, pb_arg))
+        else:
+            postback_targets.append((pb_target, pb_arg))
 
     # Smart positional resolution for NewOrder's 3-field login form (שם חברה + שם משתמש + סיסמה)
     if other_text_inputs:
@@ -3132,6 +3154,8 @@ def _parse_aspnet_form_inputs(html_text: str) -> dict:
         "password_inputs": password_inputs,
         "checkbox_inputs": checkbox_inputs,
         "submit_inputs": submit_inputs,
+        "image_submit_inputs": image_submit_inputs,
+        "postback_targets": postback_targets,
         "has_recaptcha": has_recaptcha,
     }
 
@@ -3295,10 +3319,17 @@ def authenticate_neworder_backoffice(
                 ]:
                     form_data[fallback_p] = eff_password
 
-            # 1D. Populate submit button if present
+            # 1D. Populate submit button, image button (.x/.y), or __doPostBack target
             if parsed_form["submit_inputs"]:
                 btn_name, btn_val = parsed_form["submit_inputs"][0]
                 form_data[btn_name] = btn_val or "כניסה"
+                if btn_name in parsed_form.get("image_submit_inputs", []):
+                    form_data[f"{btn_name}.x"] = "12"
+                    form_data[f"{btn_name}.y"] = "12"
+            if parsed_form.get("postback_targets") and not parsed_form["submit_inputs"]:
+                pb_t, pb_a = parsed_form["postback_targets"][0]
+                form_data["__EVENTTARGET"] = pb_t
+                form_data["__EVENTARGUMENT"] = pb_a
             else:
                 form_data.setdefault("__EVENTTARGET", "")
                 form_data.setdefault("__EVENTARGUMENT", "")
@@ -3309,6 +3340,7 @@ def authenticate_neworder_backoffice(
                 "password_fields": parsed_form["password_inputs"],
                 "checkbox_fields": [c[0] for c in parsed_form.get("checkbox_inputs", [])],
                 "submit_fields": [s[0] for s in parsed_form["submit_inputs"]],
+                "postback_targets": [p[0] for p in parsed_form.get("postback_targets", [])],
                 "has_recaptcha": has_recaptcha,
             }
 
@@ -3320,18 +3352,20 @@ def authenticate_neworder_backoffice(
             all_cookies = {k: v for k, v in sess.cookies.items()}
             final_url = str(post_resp.url)
             post_html = post_resp.text or ""
+            post_parsed = _parse_aspnet_form_inputs(post_html)
 
             # Discover internal .aspx pages linked after login
             discovered_links = sorted(list(set(
                 m.group(1) for m in re.finditer(r"href\s*=\s*[\x22\x27]([^\x22\x27]*\.aspx[^\x22\x27]*)[\x22\x27]", post_html, re.IGNORECASE)
-                if "login.aspx" not in m.group(1).lower()
+                if "login.aspx" not in m.group(1).lower() and "forgot" not in m.group(1).lower()
             )))[:25]
 
             redirected_away = "login.aspx" not in final_url.lower()
-            has_auth_cookie = any("auth" in k.lower() or "user" in k.lower() or "neworder" in k.lower() for k in all_cookies.keys())
-            has_logout_or_menu = any(w in post_html.lower() for w in ["logout", "יציאה", "התנתק", "קריאות שירות", "תיקונים", "מלאי", "לקוחות"]) or len(discovered_links) >= 2
+            still_has_password_box = bool(post_parsed.get("password_inputs"))
+            has_explicit_auth_cookie = any(".aspxauth" in k.lower() or "auth" in k.lower() for k in all_cookies.keys())
+            has_logout_link = any(w in post_html.lower() for w in ["logout", "יציאה", "התנתק", "signout", "logoff"])
 
-            if redirected_away or has_auth_cookie or has_logout_or_menu:
+            if redirected_away or has_explicit_auth_cookie or (has_logout_link and not still_has_password_box):
                 NEWORDER_SESSION_CACHE["cookies"] = all_cookies
                 NEWORDER_SESSION_CACHE["authenticated_at"] = now_ts
                 NEWORDER_SESSION_CACHE["landing_url"] = final_url
@@ -3562,9 +3596,56 @@ def get_confidential_pos_block_reply() -> str:
     )
 
 
+def _parse_pos_price_cell(cell_text: str) -> str:
+    """
+    Parses a price value from a POS table / Excel / CSV cell, handling:
+    - Decimal prices ('380.00', '1,250.00', '49.90')
+    - Currency symbols ('380 ₪', '₪420', '380 שח', '380 ש"ח')
+    - Plain numeric cells in a price column ('380', '1250')
+    Ignores phone numbers, model codes, and SKUs.
+    """
+    if not cell_text:
+        return ""
+    s = str(cell_text).strip()
+    # Ignore phone numbers and dates
+    if re.search(r"\b(?:05[0-9]-?[0-9]{7}|0[23489]-?[0-9]{7}|9725[0-9]{8})\b", s):
+        return ""
+    if re.search(r"\b\d{1,2}[/.]\d{1,2}[/.]\d{2,4}\b", s):
+        return ""
+    # Strip SKU / barcode prefixes
+    s_clean = re.sub(r"\b(?:sku|מקט|מק\"ט|ברקוד|קריאה|מספר)\s*[-:#]?\s*\d+\b", " ", s, flags=re.IGNORECASE)
+    # Strip model codes attached to letters (e.g. A15, F21, S24, 128GB, 4G, 5G)
+    s_clean = re.sub(r"\b(?:[aAsSmMfFqQgG]\s*-?\s*\d{1,3}|\d{1,4}\s*(?:gb|tb|mb|mah|g)|4x4)\b", " ", s_clean, flags=re.IGNORECASE)
+    # Remove thousands commas inside numbers (e.g. '1,250.00' -> '1250.00')
+    s_clean = re.sub(r"(?<=\d),(?=\d{3}(?:\b|\.|$))", "", s_clean)
+
+    # 1. Explicit currency match
+    m_cur = re.search(
+        r"(?:₪|\$)?\s*(\d{2,5}(?:\.\d{1,2})?)\s*(?:₪|ש\"ח|ש''ח|שח|שקלים|שקל|nis)(?:\b|$)|(?:₪)\s*(\d{2,5}(?:\.\d{1,2})?)\b",
+        s_clean,
+        flags=re.IGNORECASE,
+    )
+    if m_cur:
+        num_str = m_cur.group(1) or m_cur.group(2)
+        val = int(round(float(num_str)))
+        if 15 <= val <= 9500:
+            return str(val)
+
+    # 2. Pure numeric / decimal cell (e.g. '380.00' or '420' in an Excel/POS column)
+    m_pure = re.fullmatch(r"[₪\s]*(\d{2,4}(?:\.\d{1,2})?)[₪\s]*", s_clean.strip())
+    if m_pure:
+        val = int(round(float(m_pure.group(1))))
+        if 15 <= val <= 9500:
+            return str(val)
+
+    # 3. Fallback to extract_price_nis (after stripping .00 decimals)
+    s_no_dec = re.sub(r"\.\d{1,2}\b", "", s_clean)
+    return extract_price_nis(s_no_dec)
+
+
 def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) -> tuple[str, str, str]:
     """
-    Extracts ONLY (sku, clean_product_name, sale_price_nis) from a POS table row,
+    Extracts ONLY (sku, clean_product_name, sale_price_nis) from a POS table / Excel / CSV row,
     while STRICTLY blocking and discarding:
     - Cost / Purchase price columns (מחיר עלות / מחיר קנייה / עלות ספק)
     - Supplier / Importer columns (שם ספק / יבואן)
@@ -3589,7 +3670,7 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
     sku_val = ""
     if sku_col is not None and sku_col < len(cells):
         sku_val = str(cells[sku_col]).strip()[:40]
-    elif cells:
+    elif len(cells) >= 3 and re.fullmatch(r"[A-Za-z0-9\-_]{2,20}", str(cells[0]).strip()):
         sku_val = str(cells[0]).strip()[:40]
 
     # 2. Determine Clean Product Name (never include supplier, cost, or pure numbers)
@@ -3598,17 +3679,18 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
         prod_name = str(cells[name_col]).strip()
     else:
         for idx, c in enumerate(cells):
-            if idx in cost_cols or idx in supplier_cols or idx in qty_cols or idx == sale_col:
+            if idx in cost_cols or idx in supplier_cols or idx in qty_cols or idx == sale_col or idx == sku_col:
                 continue
             c_str = str(c).strip()
             if not c_str or c_str.isdigit() or re.fullmatch(r"[\d.,₪ש\"ח\s\-]+", c_str):
                 continue
-            if idx == 0 and re.match(r"^(?:sku|מקט|מק\"ט|ברקוד|\d{2,})", c_str, re.IGNORECASE) and len(cells) > 1:
+            if idx == 0 and len(cells) >= 3 and re.match(r"^(?:sku|מקט|מק\"ט|ברקוד|\d{3,})", c_str, re.IGNORECASE):
                 continue
             if any(m in c_str.lower() for m in ["עלות:", "ספק:", "יבואן:", "רווח:"]):
                 continue
-            prod_name = c_str
-            break
+            if re.search(r"[א-תa-zA-Z]", c_str):
+                prod_name = c_str
+                break
 
     # Strip any inline confidential annotations from prod_name (e.g. "(יבואן: X)" or "עלות 200")
     prod_name = re.sub(r"\([^)]*(?:יבואן|ספק|עלות|קנייה|קניה|רווח)[^)]*\)", "", prod_name, flags=re.IGNORECASE)
@@ -3617,25 +3699,24 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
     # 3. Extract Customer Sale Price ONLY (never Cost Price!)
     sale_price_val = ""
     if sale_col is not None and sale_col < len(cells):
-        sale_price_val = extract_price_nis(str(cells[sale_col]))
+        sale_price_val = _parse_pos_price_cell(str(cells[sale_col]))
 
     if not sale_price_val:
         explicit_sale_candidates = []
         general_price_candidates = []
         for idx, c in enumerate(cells):
-            if idx in cost_cols or idx in supplier_cols or idx in qty_cols or idx == sku_col:
+            if idx in cost_cols or idx in supplier_cols or idx in qty_cols or idx == sku_col or idx == name_col:
                 continue
-            if idx == 0 and len(cells) > 2:
+            if idx == 0 and len(cells) > 2 and sku_val == str(c).strip():
                 continue
             c_str = str(c).strip()
             c_low = c_str.lower()
-            # Strictly skip any cell that mentions cost/buy/supplier/margin
             if any(cm in c_low for cm in cost_cell_markers):
                 continue
-            p_nis = extract_price_nis(c_str)
+            p_nis = _parse_pos_price_cell(c_str)
             if p_nis and p_nis.isdigit():
                 val_i = int(p_nis)
-                if 20 <= val_i <= 8500:
+                if 15 <= val_i <= 9500:
                     if any(sm in c_low for sm in sale_cell_markers):
                         explicit_sale_candidates.append(val_i)
                     else:
@@ -3644,11 +3725,133 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
         if explicit_sale_candidates:
             sale_price_val = str(max(explicit_sale_candidates))
         elif general_price_candidates:
-            # CRITICAL SAFETY: If a headerless row has both Cost Price (lower) and Sale Price (higher),
-            # e.g. [SKU, Name, Cost=210, Sale=380], max() guarantees we take the Customer Sale Price (380) and NEVER the Cost Price (210)!
+            # CRITICAL SAFETY: When a headerless row has both Cost Price (lower) and Sale Price (higher),
+            # max() guarantees we take the Customer Sale Price and NEVER the lower Cost Price!
             sale_price_val = str(max(general_price_candidates))
 
     return sku_val, prod_name[:80], sale_price_val
+
+
+def _parse_inventory_file_bytes(file_bytes: bytes, filename: str = "") -> list[list[str]]:
+    """
+    Universal zero-dependency parser for NewOrder BackOffice / POS inventory exports:
+    1. .xlsx (Excel OpenXML ZIP archive via standard library zipfile + xml.etree.ElementTree)
+    2. .xls (HTML <table> export, XML SpreadsheetML <Row><Cell><Data>, or TSV)
+    3. .csv / .tsv / .txt (UTF-8, UTF-16, Windows-1255 / CP1255 Hebrew encodings, comma/tab/pipe/dash separated)
+    """
+    import zipfile
+    import io
+    import csv
+    import xml.etree.ElementTree as ET
+
+    if not file_bytes:
+        return []
+
+    rows_out = []
+    fn_low = (filename or "").lower()
+
+    # 1. Check if it's a ZIP-based .xlsx file (starts with PK\x03\x04)
+    if file_bytes[:4] == b"PK\x03\x04" or fn_low.endswith(".xlsx"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                shared_strings = []
+                if "xl/sharedStrings.xml" in zf.namelist():
+                    ss_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+                    for si in ss_root.iter():
+                        if si.tag.endswith("}si") or si.tag == "si":
+                            texts = [t.text or "" for t in si.iter() if t.tag.endswith("}t") or t.tag == "t"]
+                            shared_strings.append("".join(texts).strip())
+                sheet_files = sorted([n for n in zf.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")])
+                for sf in sheet_files:
+                    sh_root = ET.fromstring(zf.read(sf))
+                    for row_el in sh_root.iter():
+                        if not (row_el.tag.endswith("}row") or row_el.tag == "row"):
+                            continue
+                        row_cells = []
+                        for c_el in row_el:
+                            if not (c_el.tag.endswith("}c") or c_el.tag == "c"):
+                                continue
+                            c_type = c_el.attrib.get("t", "")
+                            val_txt = ""
+                            if c_type == "inlineStr":
+                                val_txt = "".join([t.text or "" for t in c_el.iter() if t.tag.endswith("}t") or t.tag == "t"]).strip()
+                            else:
+                                v_el = next((ch for ch in c_el if ch.tag.endswith("}v") or ch.tag == "v"), None)
+                                if v_el is not None and v_el.text is not None:
+                                    raw_v = v_el.text.strip()
+                                    if c_type == "s" and raw_v.isdigit() and int(raw_v) < len(shared_strings):
+                                        val_txt = shared_strings[int(raw_v)]
+                                    else:
+                                        val_txt = raw_v
+                            row_cells.append(val_txt)
+                        if any(row_cells):
+                            rows_out.append(row_cells)
+            if rows_out:
+                return rows_out
+        except Exception as e_xlsx:
+            print(f"[XLSX Parse Notice]: {e_xlsx}")
+
+    # 2. Decode text using UTF-8-SIG, UTF-16, or Hebrew Windows-1255 (cp1255)
+    decoded_text = ""
+    for enc in ("utf-8-sig", "utf-16", "cp1255", "iso-8859-8", "latin-1"):
+        try:
+            decoded_text = file_bytes.decode(enc)
+            if any("\u0590" <= ch <= "\u05ff" for ch in decoded_text) or enc in ("utf-8-sig", "cp1255"):
+                break
+        except Exception:
+            continue
+
+    if not decoded_text:
+        return []
+
+    # 3. Check if it's an HTML table (.xls exported from ASP.NET GridView)
+    if "<tr" in decoded_text.lower() and "<td" in decoded_text.lower():
+        html_rows = _extract_html_table_rows(decoded_text)
+        if html_rows:
+            return html_rows
+
+    # 4. Check if it's XML SpreadsheetML (<Row><Cell><Data>)
+    if "<row" in decoded_text.lower() and "<data" in decoded_text.lower():
+        try:
+            for m_r in re.finditer(r"<Row\b[^>]*>(.*?)</Row>", decoded_text, flags=re.IGNORECASE | re.DOTALL):
+                cells = [
+                    re.sub(r"<[^>]+>", "", m_d.group(1)).strip()
+                    for m_d in re.finditer(r"<Data\b[^>]*>(.*?)</Data>", m_r.group(1), flags=re.IGNORECASE | re.DOTALL)
+                ]
+                if any(cells):
+                    rows_out.append(cells)
+            if rows_out:
+                return rows_out
+        except Exception:
+            pass
+
+    # 5. Parse as CSV / TSV / Pipe / Dash-separated lines
+    lines = [ln.strip() for ln in decoded_text.splitlines() if ln.strip()]
+    for ln in lines:
+        if "\t" in ln:
+            cells = [c.strip().strip('"') for c in ln.split("\t") if c.strip()]
+        elif "|" in ln:
+            cells = [c.strip().strip('"') for c in ln.split("|") if c.strip()]
+        elif ";" in ln:
+            cells = [c.strip().strip('"') for c in ln.split(";") if c.strip()]
+        elif "," in ln and len(ln.split(",")) >= 2:
+            try:
+                cells = [c.strip() for c in next(csv.reader([ln])) if c.strip()]
+            except Exception:
+                cells = [c.strip() for c in ln.split(",") if c.strip()]
+        elif re.search(r"\s+[-:–]\s+", ln):
+            cells = [c.strip() for c in re.split(r"\s+[-:–]\s+", ln) if c.strip()]
+        else:
+            # Handle 'נוקיה 215 כשר 380' (product name followed by price at end of line)
+            m_line_p = re.match(r"^(.+?)\s+(\d{2,4}(?:\.\d{1,2})?)\s*(?:₪|ש\"ח|שח|שקל)?$", ln)
+            if m_line_p:
+                cells = [m_line_p.group(1).strip(), m_line_p.group(2).strip()]
+            else:
+                cells = [ln]
+        if len(cells) >= 2:
+            rows_out.append(cells)
+
+    return rows_out
 
 
 def _ingest_neworder_rows_into_db(rows: list[list[str]], source_label: str = "") -> dict:
@@ -3690,8 +3893,9 @@ def _ingest_neworder_rows_into_db(rows: list[list[str]], source_label: str = "")
             row_joined = " | ".join(clean_cells)
             row_low = row_joined.lower()
 
-            # Detect & map table header row
-            if sum(1 for hw in header_keywords if hw in row_low) >= 2 and not re.search(r"\b05[0-9]-?[0-9]{7}\b", row_joined):
+            # Detect & map table header row (never treat a data row containing numeric price/SKU cells as a header!)
+            has_numeric_data_cell = any(re.fullmatch(r"[₪\s]*\d+(?:[.,]\d+)?[₪\s]*", c) for c in clean_cells)
+            if not has_numeric_data_cell and sum(1 for hw in header_keywords if hw in row_low) >= 2 and not re.search(r"\b05[0-9]-?[0-9]{7}\b", row_joined):
                 for idx, h_cell in enumerate(clean_cells):
                     hl = h_cell.lower()
                     if any(w in hl for w in ["עלות", "קנייה", "קניה", "סיטונאי", "רווח", "cost", "buy", "margin"]):
@@ -3937,12 +4141,205 @@ def explore_neworder_menus_and_data(
     }
 
 
+POS_BILINGUAL_SYNONYMS = {
+    "nokia": "נוקיה",
+    "נוקייה": "נוקיה",
+    "samsung": "סמסונג",
+    "סאמסונג": "סמסונג",
+    "galaxy": "גלקסי",
+    "גלאקסי": "גלקסי",
+    "גאלקסי": "גלקסי",
+    "xiaomi": "שיאומי",
+    "שיומי": "שיאומי",
+    "שיואמי": "שיאומי",
+    "redmi": "רדמי",
+    "רידמי": "רדמי",
+    "poco": "פוקו",
+    "iphone": "אייפון",
+    "איפון": "אייפון",
+    "apple": "אפל",
+    "eskols": "אסקולס",
+    "אסקולס": "אסקולס",
+    "first": "פירסט",
+    "פירסטפון": "פירסט",
+    "ipro": "אייפרו",
+    "איפרו": "אייפרו",
+    "qin": "qin",
+    "קין": "qin",
+    "note": "נוט",
+    "pro": "פרו",
+    "plus": "פלוס",
+    "ultra": "אולטרה",
+    "max": "מקס",
+    "mini": "מיני",
+}
+
+POS_QUERY_STOPWORDS = {
+    "שלום", "היי", "הי", "אהלן", "בוקר", "ערב", "צהריים", "טוב", "טובים",
+    "אני", "רוצה", "צריך", "מבקש", "מעוניין", "לשאול", "לברר", "לבדוק", "לדעת",
+    "יש", "אין", "האם", "לכם", "אצלכם", "בחנות", "במלאי", "מלאי", "קיים", "זמין",
+    "כמה", "עולה", "מה", "המחיר", "מחיר", "עלות", "העלות", "של", "עבור", "לגבי", "על",
+    "מכשיר", "המכשיר", "מכשירים", "טלפון", "הטלפון", "טלפונים", "פלאפון", "הפלאפון",
+    "סלולרי", "נייד", "כשר", "כשרים", "תומך", "חדש", "חדשים", "מוכרים", "מחזיקים",
+    "אפשר", "ניתן", "לקנות", "לרכוש", "להזמין", "בבקשה", "תודה", "הוא", "היא", "זה", "הזה",
+    "איזה", "אילו", "באיזה", "דור", "4g", "5g", "lte", "יבואן", "רשמי", "מקורי", "כולל",
+    "אחריות", "עם", "בלי", "או", "וגם", "גם", "רק", "לי", "לנו", "את", "זה",
+}
+
+
+def _normalize_pos_tokens(text: str, strip_stopwords: bool = True) -> list[str]:
+    """
+    Tokenizes and normalizes Hebrew & English product/device names so customer queries
+    like 'יש לכם נוקיה 215 כשר?' or 'כמה עולה גלקסי A15?' match POS product rows like
+    'טלפון סלולרי Nokia 215 4G שחור' or 'סמסונג גלקסי A15 128GB'.
+    """
+    if not text:
+        return []
+    s = auto_fix_common_hebrew_typos(text.lower())
+    # Normalize 'דור 4' / 'דור 5' / 'דור 3' to '4g' / '5g' / '3g' so '4' is never mistaken for a device model code!
+    s = re.sub(r"\bדור\s*([345])(?:\.5)?\b", r"\1g", s)
+    # Separate Hebrew letters from attached Latin/digits (e.g. 'אייפרוF18' -> 'אייפרו f18', 'לa15' -> 'ל a15')
+    s = re.sub(r"([א-ת])([a-z0-9])", r"\1 \2", s)
+    s = re.sub(r"([a-z0-9])([א-ת])", r"\1 \2", s)
+    # Replace punctuation except '+' and 'x' inside 4x4/1s+
+    s = re.sub(r"[^\w\sא-תa-z0-9+]", " ", s)
+
+    raw_tokens = [t.strip() for t in s.split() if t.strip()]
+    out_tokens = []
+    for tok in raw_tokens:
+        # Strip Hebrew prefixes (ל, ב, ה, מ, ו, כ, ש) if the stripped word is known or >=3 chars
+        cand = tok
+        if len(cand) >= 4 and cand[0] in "לבהמוכש" and (cand[1:] in POS_BILINGUAL_SYNONYMS or cand[1:] in POS_QUERY_STOPWORDS or len(cand[1:]) >= 3):
+            if cand not in POS_BILINGUAL_SYNONYMS and cand not in POS_QUERY_STOPWORDS:
+                cand = cand[1:]
+        cand = POS_BILINGUAL_SYNONYMS.get(cand, cand)
+        if strip_stopwords and cand in POS_QUERY_STOPWORDS:
+            continue
+        if len(cand) >= 2 or cand.isdigit():
+            if cand not in out_tokens:
+                out_tokens.append(cand)
+    return out_tokens
+
+
+def _extract_model_codes(tokens: list[str]) -> set[str]:
+    """
+    Returns model number/code tokens (e.g. '215', '225', 'a15', 's24', 'f21', '4x4', 'q1', 'g10')
+    ignoring generic storage tokens like '128gb', '64gb', '256gb' unless nothing else has digits.
+    """
+    storage_re = re.compile(r"^\d+(?:gb|tb|mb|mah)$", re.IGNORECASE)
+    codes = set()
+    for t in tokens:
+        if storage_re.match(t) or t in ("4g", "5g", "3g", "lte"):
+            continue
+        if any(ch.isdigit() for ch in t):
+            codes.add(t.lstrip("0") or t)
+    return codes
+
+
+def _score_pos_item_match(query_tokens: list[str], query_model_codes: set[str], prod_name: str, kw_str: str = "", sku: str = "") -> float:
+    """
+    Computes a match score (>= 1.0 means strong match, 0.0 means no match) between a customer's
+    normalized query tokens and a POS inventory row.
+    Enforces a STRICT Model-Number Guard: if the customer specified a model number (e.g. '225' or 'a15'),
+    the POS item MUST contain that exact model number (so 'נוקיה 225' never matches 'נוקיה 215'!).
+    """
+    if not query_tokens:
+        return 0.0
+    item_tokens = _normalize_pos_tokens(f"{prod_name or ''} {kw_str or ''} {sku or ''}", strip_stopwords=True)
+    if not item_tokens:
+        return 0.0
+    item_token_set = set(item_tokens)
+    item_model_codes = _extract_model_codes(item_tokens)
+
+    # STRICT MODEL GUARD: Every model number/code in the customer's query MUST appear in the POS item!
+    if query_model_codes:
+        for q_code in query_model_codes:
+            if q_code not in item_model_codes and q_code not in item_token_set:
+                # Also check if attached inside an item token (e.g. 'f21' inside 'f21pro')
+                if not any(it.startswith(q_code) or it.endswith(q_code) for it in item_token_set):
+                    return 0.0
+
+    # Also if the POS item has a model number AND the query has no model number, only match if all query tokens match the brand/series name
+    matched_tokens = [qt for qt in query_tokens if qt in item_token_set or any(qt in it or it in qt for it in item_token_set if len(it) >= 3 and len(qt) >= 3)]
+    if not matched_tokens:
+        return 0.0
+
+    query_coverage = len(matched_tokens) / len(query_tokens)
+    item_coverage = len(matched_tokens) / max(1, len(item_tokens))
+
+    # If query has model code(s) and at least one matched token (or all query tokens matched)
+    if query_model_codes and len(matched_tokens) == len(query_tokens):
+        return 2.0 + item_coverage
+    if query_coverage >= 0.75 and (len(matched_tokens) >= 2 or (len(query_tokens) == 1 and len(matched_tokens[0]) >= 3)):
+        # If query has only 1 brand word (like 'נוקיה' or 'סמסונג') without a model, don't match a single random model unless it's the whole product name
+        if len(query_tokens) == 1 and query_tokens[0] in ("נוקיה", "סמסונג", "גלקסי", "שיאומי", "רדמי", "אייפון", "אפל") and len(item_tokens) > 1:
+            return 0.5  # Brand-only match (used to list available models of that brand!)
+        return 1.0 + query_coverage + item_coverage
+
+    return 0.0
+
+
+def is_general_pos_catalog_question(text: str) -> bool:
+    """
+    Detects when a customer asks what devices/phones exist in stock in general
+    (e.g. 'איזה מכשירים יש לכם במלאי?', 'אילו טלפונים כשרים יש לכם?', 'מה יש במלאי?').
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip().lower())
+    if not clean or is_screen_protector_or_accessory_context(clean):
+        return False
+    q_tokens = _normalize_pos_tokens(clean, strip_stopwords=True)
+    # If customer named a specific model code, it's a specific inquiry, not general
+    if _extract_model_codes(q_tokens):
+        return False
+    catalog_phrases = [
+        "איזה מכשירים", "אילו מכשירים", "איזה טלפונים", "אילו טלפונים", "איזה פלאפונים",
+        "מה יש במלאי", "מה יש לכם במלאי", "מכשירים במלאי", "מכשירים כשרים יש",
+        "רשימת מכשירים", "קטלוג מכשירים", "איזה דגמים יש", "אילו דגמים יש",
+    ]
+    return any(p in clean for p in catalog_phrases)
+
+
+def get_pos_inventory_prompt_context(message_text: str = "", limit: int = 25) -> str:
+    """
+    Builds a sanitized summary of POS inventory items (ONLY product names and Customer Sale Prices!)
+    for injection into the Gemini LLM system prompt so Gemini can also answer inventory questions.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT product_name, single_price, price_galut, price_yemot, colors FROM pos_inventory ORDER BY updated_at DESC LIMIT 150"
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return "טרם נטענו פריטים נוספים מטבלת הקופה (pos_inventory)."
+        grouped = {}
+        for p_name, p_single, p_galut, p_yemot, colors in rows:
+            if not p_name:
+                continue
+            key = p_name.strip()
+            grouped.setdefault(key, {"prices": set(), "colors": colors or ""})
+            for pv in (p_single, p_galut, p_yemot):
+                if pv and int(pv) > 0:
+                    grouped[key]["prices"].add(int(pv))
+        lines = []
+        for name, info in list(grouped.items())[:limit]:
+            pr_list = sorted(info["prices"])
+            if not pr_list:
+                continue
+            pr_str = f"{pr_list[0]}–{pr_list[-1]} ₪" if len(pr_list) >= 2 else f"{pr_list[0]} ₪"
+            lines.append(f"  * {name}: מחיר מכירה משוערך סביב {pr_str} (דורש בדיקת מלאי פיזי מול ערן)")
+        return "\n".join(lines) if lines else "אין פריטים נוספים."
+    except Exception:
+        return "אין פריטים נוספים."
+
+
 def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> dict:
     """
-    Checks live POS / Cash Register inventory with strict POS Data Firewall & Multi-Importer Price Aggregation:
-    1. First checks synced SQLite pos_inventory table, aggregating ALL matching product rows across different importers.
-    2. Second performs a live authenticated pull from NewOrder (https://cellular.neworder.co.il/heb/), extracting ONLY Customer Sale Prices (never Cost Prices or Supplier/Importer names).
-    3. Returns an Estimated Price (מחיר משוערך) across importers + triggers a physical stock verification check with Eran (`requires_stock_check: True`).
+    Checks live POS / Cash Register inventory with:
+    1. Smart Token + Model-Code + Bilingual Matching against `pos_inventory` (aggregating across multiple importers).
+    2. Brand-level & General Catalog Listing when a customer asks 'איזה מכשירים יש לכם במלאי?' or 'איזה דגמי נוקיה יש?'.
+    3. Live authenticated pull & auto-crawl from NewOrder using extracted product tokens (not the full conversational sentence).
+    4. Returns an Estimated Sale Price (מחיר משוערך) + triggers physical stock check with Eran (`requires_stock_check: True`).
     """
     clean = auto_fix_common_hebrew_typos((message_text or "").lower().strip())
     clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
@@ -3955,57 +4352,99 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
         return {"matched": False}
 
     is_asking_repair = any(w in clean for w in ["מסך", "סוללה", "שקע"]) and not is_screen_protector_or_accessory_context(clean)
-    matched_items = []
-    sale_prices_found = []
+    query_tokens = _normalize_pos_tokens(clean, strip_stopwords=True)
+    # If current message is just "כמה הוא עולה?" / "ומה המחיר שלו?", pull product tokens from recent_history!
+    if not query_tokens and recent_history:
+        last_lines = [ln for ln in recent_history.splitlines() if ln.strip()][-2:]
+        query_tokens = _normalize_pos_tokens(" ".join(last_lines), strip_stopwords=True)
+    query_model_codes = _extract_model_codes(query_tokens)
 
-    # 1. Check local SQLite pos_inventory (synced live from NewOrder, already sanitized of cost/supplier columns)
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute(
-            "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors FROM pos_inventory ORDER BY id DESC"
-        ).fetchall()
-        conn.close()
+    def _fetch_all_pos_rows():
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            r_all = conn.execute(
+                "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors FROM pos_inventory ORDER BY id DESC"
+            ).fetchall()
+            conn.close()
+            return r_all
+        except Exception:
+            return []
+
+    rows = _fetch_all_pos_rows()
+
+    # If pos_inventory is completely empty and NewOrder credentials/cookies exist, try a quick live sync first
+    if not rows and ((NEWORDER_USERNAME and NEWORDER_PASSWORD) or POS_API_KEY or NEWORDER_COOKIE or NEWORDER_SESSION_CACHE.get("cookies")):
+        try:
+            search_term_short = " ".join(query_tokens[:3]) if query_tokens else ""
+            explore_neworder_menus_and_data(search_query=search_term_short)
+            rows = _fetch_all_pos_rows()
+        except Exception:
+            pass
+
+    # 0. Check if customer is asking a general catalog question ("איזה מכשירים יש לכם במלאי?")
+    if is_general_pos_catalog_question(clean) and rows:
+        grouped_cat = {}
         for r in rows:
             sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r
-            search_terms = [
-                k.strip().lower()
-                for k in f"{prod_name or ''},{kw_str or ''},{sku or ''}".split(",")
-                if k.strip() and len(k.strip()) >= 2
-            ]
-            row_matched = False
-            for kw in search_terms:
-                kw_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in kw]).strip()
-                if not kw_clean or len(kw_clean) < 2:
-                    continue
-                if "מסך" not in kw_clean and "תיקון" not in kw_clean and is_asking_repair:
-                    continue
-                if re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct):
-                    row_matched = True
-                    break
-            if row_matched:
-                item_dict = {
-                    "sku": sku,
-                    "product_name": prod_name,
-                    "keywords": prod_name,
-                    "category": cat,
-                    "price_galut": p_galut,
-                    "price_yemot": p_yemot,
-                    "single_price": p_single,
-                    "stock_qty": qty,
-                    "colors": colors,
-                }
-                matched_items.append(item_dict)
-                for p_val in (p_single, p_galut):
-                    if p_val and int(p_val) > 0:
-                        sale_prices_found.append(int(p_val))
-    except Exception:
-        pass
+            if not prod_name:
+                continue
+            grouped_cat.setdefault(prod_name, set())
+            for pv in (p_single, p_galut):
+                if pv and int(pv) > 0:
+                    grouped_cat[prod_name].add(int(pv))
+        cat_lines = []
+        for p_nm, pr_set in list(grouped_cat.items())[:10]:
+            prs = sorted(pr_set)
+            if prs:
+                p_disp = f"{prs[0]}–{prs[-1]} ₪" if len(prs) >= 2 else f"{prs[0]} ₪"
+                cat_lines.append(f"• *{p_nm}* — מחיר משוערך: סביב *{p_disp}*")
+        if cat_lines:
+            ans_cat = (
+                "להלן מבחר מהמכשירים והמוצרים המופיעים אצלנו במערכת (בנוסף לדגמי שיאומי F21 Pro, F22 Pro ו-F25 Pro): 📱\n"
+                + "\n".join(cat_lines)
+                + "\n\nבאיזה מכשיר תרצה להתעניין כדי שאבדוק עבורך מול ערן זמינות במלאי הפיזי בחנות ומחיר סופי? 😃"
+            )
+            return {
+                "matched": True,
+                "requires_stock_check": False,
+                "answer": ans_cat,
+                "item": {"product_name": "מבחר מכשירים מהקופה"},
+                "estimated_price_str": "",
+                "all_sale_prices": [],
+                "importers_count": len(cat_lines),
+            }
 
-    # 2. Live HTTP Pull from NewOrder (if not yet matched locally and credentials/session are configured)
-    if not matched_items and ((NEWORDER_USERNAME and NEWORDER_PASSWORD) or POS_API_KEY or NEWORDER_COOKIE or NEWORDER_SESSION_CACHE.get("cookies")):
+    scored_matches = []
+    brand_only_matches = []
+
+    # 1. Score all local SQLite pos_inventory rows
+    for r in rows:
+        sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r
+        if is_asking_repair and "מסך" not in (prod_name or "") and "תיקון" not in (prod_name or "") and "סוללה" not in (prod_name or ""):
+            continue
+        score = _score_pos_item_match(query_tokens, query_model_codes, prod_name or "", kw_str or "", sku or "")
+        item_dict = {
+            "sku": sku,
+            "product_name": prod_name,
+            "keywords": prod_name,
+            "category": cat,
+            "price_galut": p_galut,
+            "price_yemot": p_yemot,
+            "single_price": p_single,
+            "stock_qty": qty,
+            "colors": colors,
+        }
+        if score >= 1.0:
+            scored_matches.append((score, item_dict))
+        elif score >= 0.5:
+            brand_only_matches.append(item_dict)
+
+    # 2. Live HTTP Pull from NewOrder using clean product query tokens (if not yet matched locally)
+    if not scored_matches and query_tokens and ((NEWORDER_USERNAME and NEWORDER_PASSWORD) or POS_API_KEY or NEWORDER_COOKIE or NEWORDER_SESSION_CACHE.get("cookies")):
         try:
             headers, cookies = build_neworder_auth_headers_and_cookies()
             if cookies or "Authorization" in headers:
+                search_kw = " ".join(query_tokens[:3])
                 candidate_urls = [
                     f"{NEWORDER_BASE_URL}/api/Inventory",
                     f"{NEWORDER_BASE_URL}/items.aspx",
@@ -4018,16 +4457,16 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                         if full_disc not in candidate_urls:
                             candidate_urls.insert(0, full_disc)
 
-                for ep in candidate_urls[:3]:
+                for ep in candidate_urls[:4]:
                     try:
                         resp = http_session.get(
                             ep,
-                            params={"branchId": NEWORDER_BRANCH_ID, "search": clean_no_punct[:40]},
+                            params={"branchId": NEWORDER_BRANCH_ID, "search": search_kw},
                             headers=headers,
                             cookies=cookies,
                             timeout=4.0,
                         )
-                        if resp.status_code != 200:
+                        if resp.status_code != 200 or "login.aspx" in str(resp.url).lower():
                             continue
                         ctype = (resp.headers.get("content-type") or "").lower()
                         if "json" in ctype or resp.text.strip().startswith(("{", "[")):
@@ -4041,14 +4480,13 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                                     continue
                                 # STRICT FIREWALL: Read ONLY salePrice / consumerPrice / price, NEVER costPrice / buyPrice / supplier!
                                 p_sale = item.get("salePrice") or item.get("consumerPrice") or item.get("retailPrice") or item.get("price") or item.get("single_price")
-                                try:
-                                    p_sale_int = int(float(str(p_sale))) if p_sale is not None else None
-                                except Exception:
-                                    p_sale_int = None
-                                if not p_sale_int or p_sale_int <= 0:
+                                p_sale_str = _parse_pos_price_cell(str(p_sale)) if p_sale is not None else ""
+                                if not p_sale_str:
                                     continue
-                                if any(w in p_name.lower() for w in clean_no_punct.split() if len(w) >= 2):
-                                    matched_items.append({
+                                p_sale_int = int(p_sale_str)
+                                sc = _score_pos_item_match(query_tokens, query_model_codes, p_name, p_name, str(item.get("sku") or ""))
+                                if sc >= 1.0:
+                                    scored_matches.append((sc, {
                                         "sku": str(item.get("sku") or item.get("barcode") or p_name),
                                         "product_name": p_name,
                                         "keywords": p_name,
@@ -4058,23 +4496,16 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                                         "single_price": p_sale_int,
                                         "stock_qty": 1,
                                         "colors": str(item.get("colors") or ""),
-                                    })
-                                    sale_prices_found.append(p_sale_int)
+                                    }))
                         else:
                             table_rows = _extract_html_table_rows(resp.text)
                             if table_rows:
-                                # Ingest through the strict firewall so cost/supplier columns are stripped
                                 _ingest_neworder_rows_into_db(table_rows, "LivePOS")
-                                # Re-check local DB after sanitized ingestion
-                                conn = sqlite3.connect(DB_PATH)
-                                rows2 = conn.execute(
-                                    "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors FROM pos_inventory ORDER BY id DESC"
-                                ).fetchall()
-                                conn.close()
-                                for r in rows2:
-                                    sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r
-                                    if prod_name and any(w in prod_name.lower() for w in clean_no_punct.split() if len(w) >= 3):
-                                        matched_items.append({
+                                for r2 in _fetch_all_pos_rows():
+                                    sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r2
+                                    sc = _score_pos_item_match(query_tokens, query_model_codes, prod_name or "", kw_str or "", sku or "")
+                                    if sc >= 1.0:
+                                        scored_matches.append((sc, {
                                             "sku": sku,
                                             "product_name": prod_name,
                                             "keywords": prod_name,
@@ -4084,28 +4515,77 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                                             "single_price": p_single,
                                             "stock_qty": qty,
                                             "colors": colors,
-                                        })
-                                        if p_single and int(p_single) > 0:
-                                            sale_prices_found.append(int(p_single))
+                                        }))
                     except Exception:
                         continue
         except Exception as e_pos:
             print(f"[NewOrder Live Inventory Pull Notice]: {e_pos}")
 
-    if matched_items and sale_prices_found:
-        primary_item = matched_items[0]
-        unique_prices = sorted(set(sale_prices_found))
-        est_str = f"{unique_prices[0]}–{unique_prices[-1]} ₪" if len(unique_prices) >= 2 else f"{unique_prices[0]} ₪"
-        ans = format_pos_item_answer(primary_item, unique_prices)
-        if ans:
+    # 3. If we found strong matches, group all importer rows for the best-matching product!
+    if scored_matches:
+        scored_matches.sort(key=lambda x: x[0], reverse=True)
+        best_score, primary_item = scored_matches[0]
+        primary_tokens = set(_normalize_pos_tokens(primary_item.get("product_name", ""), strip_stopwords=True))
+        primary_codes = _extract_model_codes(list(primary_tokens))
+
+        # Aggregate all rows that represent the same product/model across different importers
+        same_product_items = []
+        sale_prices_found = []
+        for sc, it in scored_matches:
+            it_tokens = set(_normalize_pos_tokens(it.get("product_name", ""), strip_stopwords=True))
+            it_codes = _extract_model_codes(list(it_tokens))
+            if it_codes == primary_codes and (sc >= best_score - 0.4 or it.get("product_name") == primary_item.get("product_name")):
+                same_product_items.append(it)
+                for pv in (it.get("single_price"), it.get("price_galut")):
+                    if pv and int(pv) > 0:
+                        sale_prices_found.append(int(pv))
+
+        if sale_prices_found:
+            unique_prices = sorted(set(sale_prices_found))
+            est_str = f"{unique_prices[0]}–{unique_prices[-1]} ₪" if len(unique_prices) >= 2 else f"{unique_prices[0]} ₪"
+            ans = format_pos_item_answer(primary_item, unique_prices)
+            if ans:
+                return {
+                    "matched": True,
+                    "requires_stock_check": True,
+                    "answer": ans,
+                    "item": primary_item,
+                    "estimated_price_str": est_str,
+                    "all_sale_prices": unique_prices,
+                    "importers_count": len(same_product_items),
+                }
+
+    # 4. If customer asked about a brand (e.g. 'יש לכם נוקיה?' or 'איזה מכשירי סמסונג יש?') and we have multiple models of that brand in POS:
+    if brand_only_matches:
+        grouped_brand = {}
+        for it in brand_only_matches:
+            nm = it.get("product_name") or ""
+            if not nm:
+                continue
+            grouped_brand.setdefault(nm, set())
+            for pv in (it.get("single_price"), it.get("price_galut")):
+                if pv and int(pv) > 0:
+                    grouped_brand[nm].add(int(pv))
+        b_lines = []
+        for nm, prs_set in list(grouped_brand.items())[:8]:
+            prs = sorted(prs_set)
+            if prs:
+                p_disp = f"{prs[0]}–{prs[-1]} ₪" if len(prs) >= 2 else f"{prs[0]} ₪"
+                b_lines.append(f"• *{nm}* — מחיר משוערך: סביב *{p_disp}*")
+        if b_lines:
+            ans_b = (
+                "הנה הדגמים התואמים שמופיעים אצלנו במערכת: 📱\n"
+                + "\n".join(b_lines)
+                + "\n\nבאיזה מהדגמים תרצה להתעניין כדי שאבדוק עבורך מול ערן שהוא קיים במלאי הפיזי בחנות ומה מחירו הסופי? 😃"
+            )
             return {
                 "matched": True,
-                "requires_stock_check": True,
-                "answer": ans,
-                "item": primary_item,
-                "estimated_price_str": est_str,
-                "all_sale_prices": unique_prices,
-                "importers_count": len(matched_items),
+                "requires_stock_check": False,
+                "answer": ans_b,
+                "item": brand_only_matches[0],
+                "estimated_price_str": "",
+                "all_sale_prices": [],
+                "importers_count": len(b_lines),
             }
 
     return {"matched": False}
@@ -5150,6 +5630,8 @@ async def pos_browser_bridge_api(req: Request):
     current_url = str(body.get("current_url") or body.get("url") or f"{NEWORDER_BASE_URL}/default.aspx").strip()
     html_content = str(body.get("html_content") or body.get("html") or "")
     pasted_text = str(body.get("pasted_text") or "").strip()
+    file_b64 = str(body.get("file_b64") or "").strip()
+    file_name = str(body.get("file_name") or "inventory.xlsx").strip()
     sub_pages = body.get("sub_pages") if isinstance(body.get("sub_pages"), list) else []
 
     now_ts = std_time.time()
@@ -5217,23 +5699,30 @@ async def pos_browser_bridge_api(req: Request):
                 "sample_rows": [" | ".join(r[:8]) for r in sp_rows[:5]],
             })
 
-    # 3. Process pasted table / TSV / CSV lines from BackOffice PC or Web
+    # 3. Process uploaded Excel (.xlsx / .xls) / CSV / TXT file from BackOffice or POS
+    if file_b64:
+        try:
+            if "," in file_b64 and file_b64.startswith("data:"):
+                file_b64 = file_b64.split(",", 1)[1]
+            raw_bytes = base64.b64decode(file_b64)
+            file_rows = _parse_inventory_file_bytes(raw_bytes, file_name)
+            if file_rows:
+                ing = _ingest_neworder_rows_into_db(file_rows, f"קובץ {file_name}")
+                total_repairs_synced += ing["repairs_added"]
+                total_items_synced += ing["items_added"]
+                pages_scanned.append({
+                    "menu_title": f"קובץ מלאי שהועלה ({file_name})",
+                    "category": "ייבוא קובץ קופה",
+                    "url": file_name,
+                    "total_rows": len(file_rows),
+                    "sample_rows": [" | ".join(r[:8]) for r in file_rows[:5]],
+                })
+        except Exception as e_fb:
+            print(f"[POS File Upload Parse Notice]: {e_fb}")
+
+    # 4. Process pasted table / TSV / CSV / lines from BackOffice PC or Web
     if pasted_text:
-        pasted_rows = []
-        for raw_line in pasted_text.splitlines():
-            line_s = raw_line.strip()
-            if not line_s:
-                continue
-            if "\t" in line_s:
-                cells = [c.strip() for c in line_s.split("\t") if c.strip()]
-            elif "|" in line_s:
-                cells = [c.strip() for c in line_s.split("|") if c.strip()]
-            elif "," in line_s:
-                cells = [c.strip() for c in line_s.split(",") if c.strip()]
-            else:
-                cells = [line_s]
-            if len(cells) >= 2:
-                pasted_rows.append(cells)
+        pasted_rows = _parse_inventory_file_bytes(pasted_text.encode("utf-8"), "pasted.txt")
         if pasted_rows:
             ing = _ingest_neworder_rows_into_db(pasted_rows, "הדבקה מ-BackOffice/מחשב")
             total_repairs_synced += ing["repairs_added"]
@@ -5308,9 +5797,18 @@ def pos_bridge_dashboard_page():
         "})();"
     )
 
-    last_sync = NEWORDER_SESSION_CACHE.get("last_bridge_sync") or "טרם בוצע סנכרון דפדפן"
+    last_sync = NEWORDER_SESSION_CACHE.get("last_bridge_sync") or "טרם בוצע סנכרון"
     menus_cnt = len(NEWORDER_SESSION_CACHE.get("menus_found", []))
     cookies_cnt = len(NEWORDER_SESSION_CACHE.get("cookies", {}))
+    db_items_cnt = 0
+    db_repairs_cnt = 0
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        db_items_cnt = conn.execute("SELECT COUNT(*) FROM pos_inventory").fetchone()[0]
+        db_repairs_cnt = conn.execute("SELECT COUNT(*) FROM lab_repairs").fetchone()[0]
+        conn.close()
+    except Exception:
+        pass
 
     html_page = f"""<!DOCTYPE html>
 <html lang="he" dir="rtl">
@@ -5339,11 +5837,21 @@ def pos_bridge_dashboard_page():
   <p>משום שבדף הכניסה (<code>login.aspx</code>) יש ריבוע <b>"אני לא רובוט" (CAPTCHA)</b>, בניתי לך עקיפה חכמה ב-0 ₪ שמתחברת <b>אחרי</b> שאתה נכנס לדפדפן ושומרת את החיבור חי 24/7!</p>
 
   <div class="status-box" id="statusBox">
-    📊 <b>סטטוס נוכחי בשרת:</b> סנכרון אחרון: <b>{last_sync}</b> | תפריטים שזוהו: <b>{menus_cnt}</b> | עוגיות סשן פעילות: <b>{cookies_cnt}</b>
+    📊 <b>סטטוס נוכחי בזיכרון הסוכן:</b> מוצרים טעונים במלאי: <b>{db_items_cnt}</b> | כרטיסי תיקון מעבדה: <b>{db_repairs_cnt}</b> | סנכרון אחרון: <b>{last_sync}</b>
+  </div>
+
+  <div class="card" style="border: 2px solid #0d9488; background: #f0fdfa;">
+    <h3>📂 דרך א' (הכי מהירה ומומלצת למלאי הקופה): העלאת קובץ אקסל / CSV מהקופה בלחיצה אחת</h3>
+    <p>ייצא מתוכנת הקופה / ה-BackOffice של NewOrder את טבלת הפריטים/מלאי לקובץ <b>Excel (<code>.xlsx</code> / <code>.xls</code>)</b> או <b>CSV</b>, ובחר אותו כאן — הסוכן יטען אוטומטית את כל המוצרים ומחירי המכירה לצרכן (ויסנן אוטומטית מחירי עלות וספקים!):</p>
+    <input type="file" id="posFileInput" accept=".xlsx,.xls,.csv,.tsv,.txt,.html" style="margin: 10px 0; font-size: 15px;" />
+    <br/>
+    <button class="action-btn" style="background:#0f766e;" onclick="uploadPosFile()">📤 טען קובץ מלאי לסוכן עכשיו</button>
+    <div id="fileUploadResult" style="margin-top:12px;font-weight:700;"></div>
+    <p style="font-size:13px;color:#475569;margin-top:8px;">💡 <b>טיפ מהיר:</b> אפשר גם פשוט לשלוח את קובץ האקסל/CSV של המלאי <b>ישירות כהודעת קובץ בווצאפ אל הסוכן</b>, והוא יטען אותו אוטומטית!</p>
   </div>
 
   <div class="card">
-    <h3>🚀 דרך א' (הכי קלה ואוטומטית): כפתור סימנייה בלחיצה אחת בדפדפן</h3>
+    <h3>🚀 דרך ב' (לסנכרון שוטף מהדפדפן): כפתור סימנייה בלחיצה אחת בדפדפן</h3>
     <ol>
       <li>גרור את הכפתור הירוק הבא אל <b>סרגל הסימניות (Bookmarks Bar)</b> בחלק העליון של דפדפן הכרום שלך:</li>
     </ol>
@@ -5370,6 +5878,41 @@ def pos_bridge_dashboard_page():
 </div>
 
 <script>
+async function uploadPosFile() {{
+  const fileInput = document.getElementById('posFileInput');
+  const resDiv = document.getElementById('fileUploadResult');
+  if (!fileInput.files || !fileInput.files.length) {{
+    resDiv.style.color = '#dc2626';
+    resDiv.innerText = '⚠️ אנא בחר קובץ אקסל (.xlsx / .xls) או CSV תחילה.';
+    return;
+  }}
+  const file = fileInput.files[0];
+  resDiv.style.color = '#0f766e';
+  resDiv.innerText = '⏳ קורא וטוען את קובץ המלאי (' + file.name + ')...';
+  const reader = new FileReader();
+  reader.onload = async function(evt) {{
+    try {{
+      const resp = await fetch('/api/pos/browser_bridge', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ file_b64: evt.target.result, file_name: file.name }})
+      }});
+      const data = await resp.json();
+      if (data.ok) {{
+        resDiv.style.color = '#15803d';
+        resDiv.innerText = '✅ קובץ המלאי נטען בהצלחה! נוספו/עודכנו ' + data.items_synced + ' מוצרים במלאי הסוכן (ותיקונים: ' + data.repairs_synced + '). מחירי עלות וספקים סוננו אוטומטית!';
+      }} else {{
+        resDiv.style.color = '#dc2626';
+        resDiv.innerText = '❌ שגיאה: ' + (data.error || 'לא ידוע');
+      }}
+    }} catch (err) {{
+      resDiv.style.color = '#dc2626';
+      resDiv.innerText = '❌ שגיאת תקשורת: ' + err;
+    }}
+  }};
+  reader.readAsDataURL(file);
+}}
+
 async function sendManualBridge() {{
   const pasted_text = document.getElementById('pastedText').value;
   const cookies_str = document.getElementById('cookieStr').value;
@@ -6011,6 +6554,9 @@ async def unified_whatsapp_webhook(req: Request):
     if not sender_phone:
         print(f"[Ignored] Missing sender_phone: typeMessage={type_msg}")
         return {"ok": True, "note": "Ignored missing sender"}
+    if not message_text and type_msg == "documentMessage":
+        doc_fn = str(message_data.get("fileMessageData", {}).get("fileName") or "inventory.xlsx")
+        message_text = f"[ADMIN_DOC_UPLOAD:{doc_fn}]"
     if not message_text and type_msg == "imageMessage":
         # Check if customer is awaiting Bit payment confirmation and sent a screenshot without caption
         try:
@@ -6085,64 +6631,120 @@ async def unified_whatsapp_webhook(req: Request):
     if sender_phone in admin_numbers_set and is_admin_bit_payment_directive(message_text):
         return handle_admin_bit_payment_directive(message_text, None, sender_phone, raw_chat_id)
 
-    # 0.D Live NewOrder POS & Lab Menu Diagnostic Command via WhatsApp ('בדיקת קופה', 'תפריטי קופה', 'בדיקת קופה: f21')
+    # 0.D1 Direct WhatsApp Inventory File Upload (Admin sends .xlsx / .xls / .csv / .txt directly in WhatsApp!)
+    if sender_phone in admin_numbers_set and type_msg == "documentMessage":
+        file_meta = message_data.get("fileMessageData", {}) if isinstance(message_data.get("fileMessageData"), dict) else {}
+        dl_url = str(file_meta.get("downloadUrl") or "").strip()
+        doc_fn = str(file_meta.get("fileName") or "inventory.xlsx").strip()
+        if dl_url:
+            try:
+                f_resp = http_session.get(dl_url, timeout=15.0)
+                if f_resp.status_code == 200 and f_resp.content:
+                    parsed_rows = _parse_inventory_file_bytes(f_resp.content, doc_fn)
+                    ing_res = _ingest_neworder_rows_into_db(parsed_rows, f"קובץ ווצאפ ({doc_fn})")
+                    conn = sqlite3.connect(DB_PATH)
+                    total_pos_now = conn.execute("SELECT COUNT(*) FROM pos_inventory").fetchone()[0]
+                    sample_pos = conn.execute("SELECT product_name, single_price FROM pos_inventory ORDER BY id DESC LIMIT 6").fetchall()
+                    conn.close()
+                    sample_str = "\n".join([f"• *{r[0]}*: סביב {r[1]} ₪" for r in sample_pos if r[0] and r[1]])
+                    msg_doc_ok = (
+                        f"✅ *קובץ המלאי ({doc_fn}) נקלט ונטען לסוכן בהצלחה!* 📦🎉\n"
+                        f"• *מוצרים שנוספו/עודכנו בקובץ זה:* {ing_res['items_added']}\n"
+                        f"• *סה\"כ מוצרים במלאי הסוכן כרגע:* {total_pos_now}\n"
+                        f"• *חומת אש:* מחירי עלות ושמות ספקים/יבואנים סוננו אוטומטית (נשמר אך ורק מחיר המכירה לצרכן!).\n\n"
+                        + (f"📋 *דגימת מוצרים שנטענו:*\n{sample_str}" if sample_str else "")
+                    )
+                    send_whatsapp_message(sender_phone, msg_doc_ok, raw_chat_id)
+                    return {"ok": True, "admin_action": "whatsapp_inventory_file_imported", "items_added": ing_res["items_added"], "total_pos_items": total_pos_now}
+            except Exception as e_doc:
+                send_whatsapp_message(sender_phone, f"⚠️ שגיאה בקריאת קובץ המלאי ({doc_fn}): {e_doc}", raw_chat_id)
+                return {"ok": False, "error": str(e_doc)}
+
+    # 0.D2 Direct WhatsApp Text Inventory Import ('עדכון מלאי:' / 'טעינת מלאי:' followed by lines of 'מוצר - מחיר')
+    if sender_phone in admin_numbers_set and re.match(r"^(?:עדכון\s+מלאי|טעינת\s+מלאי|הוספת\s+מלאי)\s*[:\-]\s*(.+)$", message_text.strip(), flags=re.IGNORECASE | re.DOTALL):
+        m_inv_txt = re.match(r"^(?:עדכון\s+מלאי|טעינת\s+מלאי|הוספת\s+מלאי)\s*[:\-]\s*(.+)$", message_text.strip(), flags=re.IGNORECASE | re.DOTALL)
+        inv_body = m_inv_txt.group(1).strip()
+        parsed_rows = _parse_inventory_file_bytes(inv_body.encode("utf-8"), "whatsapp_text.txt")
+        ing_res = _ingest_neworder_rows_into_db(parsed_rows, "עדכון מלאי בווצאפ")
+        conn = sqlite3.connect(DB_PATH)
+        total_pos_now = conn.execute("SELECT COUNT(*) FROM pos_inventory").fetchone()[0]
+        sample_pos = conn.execute("SELECT product_name, single_price FROM pos_inventory ORDER BY id DESC LIMIT 6").fetchall()
+        conn.close()
+        sample_str = "\n".join([f"• *{r[0]}*: סביב {r[1]} ₪" for r in sample_pos if r[0] and r[1]])
+        msg_txt_ok = (
+            f"✅ *המלאי עודכן בהצלחה בזיכרון הסוכן!* 📦\n"
+            f"• *מוצרים שנקלטו בהודעה זו:* {ing_res['items_added']}\n"
+            f"• *סה\"כ מוצרים במלאי הסוכן כרגע:* {total_pos_now}\n\n"
+            + (f"📋 *מוצרים אחרונים שנטענו:*\n{sample_str}" if sample_str else "")
+        )
+        send_whatsapp_message(sender_phone, msg_txt_ok, raw_chat_id)
+        return {"ok": True, "admin_action": "whatsapp_inventory_text_imported", "items_added": ing_res["items_added"], "total_pos_items": total_pos_now}
+
+    # 0.D3 Live NewOrder POS & Lab Menu Diagnostic Command via WhatsApp ('בדיקת קופה', 'מלאי קופה', 'תפריטי קופה', 'בדיקת קופה: f21')
     if sender_phone in admin_numbers_set and re.match(
-        r"^(?:בדיקת\s+קופה|תפריטי\s+קופה|בדיקת\s+חיבור\s+לקופה|סנכרון\s+קופה|בדיקת\s+ניו\s+אורדר|בדיקת\s+neworder)(?:\s*[:\-]\s*(.*))?$",
+        r"^(?:בדיקת\s+קופה|מלאי\s+קופה|תפריטי\s+קופה|בדיקת\s+חיבור\s+לקופה|סנכרון\s+קופה|בדיקת\s+ניו\s+אורדר|בדיקת\s+neworder)(?:\s*[:\-]\s*(.*))?$",
         message_text.strip(),
         flags=re.IGNORECASE,
     ):
         m_pos_cmd = re.match(
-            r"^(?:בדיקת\s+קופה|תפריטי\s+קופה|בדיקת\s+חיבור\s+לקופה|סנכרון\s+קופה|בדיקת\s+ניו\s+אורדר|בדיקת\s+neworder)(?:\s*[:\-]\s*(.*))?$",
+            r"^(?:בדיקת\s+קופה|מלאי\s+קופה|תפריטי\s+קופה|בדיקת\s+חיבור\s+לקופה|סנכרון\s+קופה|בדיקת\s+ניו\s+אורדר|בדיקת\s+neworder)(?:\s*[:\-]\s*(.*))?$",
             message_text.strip(),
             flags=re.IGNORECASE,
         )
         pos_q = (m_pos_cmd.group(1) or "").strip() if m_pos_cmd else ""
         exp_res = explore_neworder_menus_and_data(search_query=pos_q)
-        if not exp_res.get("ok"):
-            render_base = (RENDER_EXTERNAL_URL or "https://ns-whatsapp-agent-1.onrender.com").strip().rstrip("/")
+
+        # Always check actual SQLite pos_inventory & lab_repairs counts so we report 100% honest data!
+        db_items_cnt = 0
+        db_repairs_cnt = 0
+        db_samples = []
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            db_items_cnt = conn.execute("SELECT COUNT(*) FROM pos_inventory").fetchone()[0]
+            db_repairs_cnt = conn.execute("SELECT COUNT(*) FROM lab_repairs").fetchone()[0]
+            if pos_q:
+                pos_hit_test = lookup_live_pos_inventory(pos_q)
+                if pos_hit_test.get("matched"):
+                    db_samples.append(f"🎯 *התאמה במלאי הסוכן ל-'{pos_q}':* {pos_hit_test['item'].get('product_name')} ({pos_hit_test.get('estimated_price_str')})")
+            for r_s in conn.execute("SELECT product_name, single_price FROM pos_inventory ORDER BY id DESC LIMIT 6").fetchall():
+                if r_s[0] and r_s[1]:
+                    db_samples.append(f"• *{r_s[0]}*: סביב {r_s[1]} ₪")
+            conn.close()
+        except Exception:
+            pass
+
+        render_base = (RENDER_EXTERNAL_URL or "https://ns-whatsapp-agent-1.onrender.com").strip().rstrip("/")
+        db_samples_str = "\n".join(db_samples[:6]) if db_samples else "• ⚠️ טרם נטענו מוצרים לטבלת המלאי של הסוכן (`pos_inventory` ריק - 0 מוצרים)!"
+
+        if not exp_res.get("ok") and db_items_cnt == 0:
             msg_fail = (
-                "⚠️ *בדיקת חיבור ל-NewOrder Cellular:*\n"
-                "• *סטטוס:* ממתין לעקיפת 'אני לא רובוט' בדפדפן 🔗\n"
-                f"• *סיבה:* {exp_res.get('reason', 'חסרים פרטי התחברות')}\n\n"
-                "💡 *פתרון בחינם (0 ₪ במקום 150 ₪ + מע\"מ על API):*\n"
-                f"היכנס לקישור הבא במחשב החנות וחבר את הדפדפן בלחיצה אחת אחרי סימון 'אני לא רובוט':\n{render_base}/pos_bridge\n\n"
-                "🔧 *סטטוס משתנים ב-Render:*\n"
-                f"• שם חברה (`NEWORDER_COMPANY`): {'✅ מוגדר' if exp_res.get('company_configured') else '❌ חסר'}\n"
-                f"• שם משתמש (`NEWORDER_USERNAME`): {'✅ מוגדר' if exp_res.get('username_configured') else '❌ חסר'}\n"
-                f"• סיסמה (`NEWORDER_PASSWORD`): {'✅ מוגדר' if exp_res.get('password_configured') else '❌ חסר'}\n"
-                f"• גשר דפדפן / Cookie: {'✅ פעיל' if exp_res.get('cookie_configured') else '❌ טרם חובר'}"
+                "⚠️ *דו\"ח מצב אמת — חיבור קופה ומלאי הסוכן:*\n"
+                f"📦 *מוצרים טעונים במלאי הסוכן כרגע:* *{db_items_cnt} מוצרים* (זו הסיבה שהסוכן העביר אליך את השאלה!)\n"
+                f"🛠️ *כרטיסי תיקון מעבדה טעונים:* *{db_repairs_cnt}*\n"
+                f"🌐 *כניסה אוטומטית לאתר (`login.aspx`):* חסומה ע\"י ריבוע 'אני לא רובוט' בדף הכניסה.\n\n"
+                "🚀 *3 דרכים קלות לטעון את כל המלאי של הקופה לסוכן תוך 10 שניות (ב-0 ₪!):*\n"
+                "1️⃣ *ישירות כאן בווצאפ:* ייצא מהקופה/BackOffice קובץ אקסל (`.xlsx`/`.xls`) או CSV של המלאי **ושלח את הקובץ לכאן בווצאפ** — הסוכן יטען אוטומטית את כל המכשירים והמחירים!\n"
+                "2️⃣ *או בהודעת טקסט כאן בווצאפ:* כתוב `עדכון מלאי:` ומתחתיו שורות של `שם מכשיר - מחיר` (למשל: `נוקיה 215 - 380`).\n"
+                f"3️⃣ *או דרך דף הגשר בדפדפן:* היכנס ל-{render_base}/pos_bridge והעלה שם קובץ אקסל או לחץ על סימניית הכרום אחרי סימון 'אני לא רובוט'."
             )
             send_whatsapp_message(sender_phone, msg_fail, raw_chat_id)
-            return {"ok": False, "admin_action": "pos_diagnostic_failed", "details": exp_res}
+            return {"ok": False, "admin_action": "pos_diagnostic_empty", "db_items_cnt": db_items_cnt, "details": exp_res}
 
         menus_list = exp_res.get("menus_found", [])
-        menus_lines = [f"• *{m['title']}* ({m['category']})" for m in menus_list[:12]]
-        menus_block = "\n".join(menus_lines) if menus_lines else "• לא זוהו תפריטים נוספים בדף הבית"
-
-        samples_lines = []
-        for p_scan in exp_res.get("pages_scanned", [])[:4]:
-            if p_scan.get("sample_rows"):
-                samples_lines.append(f"📂 *{p_scan['menu_title']}* ({p_scan['total_rows']} שורות):\n  {p_scan['sample_rows'][0][:100]}")
-        samples_block = "\n".join(samples_lines) if samples_lines else "• מחובר לדף הבית (לא נמצאו טבלאות בדף הראשי)"
-
-        search_block = ""
-        if pos_q:
-            matches = exp_res.get("search_matches", [])
-            if matches:
-                m_lines = [f"• [{m['source']}]: {m['row'][:100]}" for m in matches[:5]]
-                search_block = f"\n\n🔎 *תוצאות חיפוש עבור '{pos_q}':*\n" + "\n".join(m_lines)
-            else:
-                search_block = f"\n\n🔎 לא נמצאו שורות התואמות ל-'{pos_q}' בתפריטים שנסרקו."
+        menus_lines = [f"• *{m['title']}* ({m['category']})" for m in menus_list[:10]]
+        menus_block = "\n".join(menus_lines) if menus_lines else "• לא נסרקו תפריטים חדשים מהאתר (דף הכניסה דורש סימון 'אני לא רובוט' בדפדפן)"
 
         msg_ok = (
-            "✅ *החיבור ל-NewOrder Cellular פעיל ומסונכרן!* 🖥️🔗\n"
-            f"📍 *דף נחיתה:* {exp_res.get('landing_url', POS_API_URL)}\n\n"
-            f"📋 *תפריטים שזוהו באתר ({len(menus_list)}):*\n{menus_block}\n\n"
-            f"📊 *דגימת נתונים חיה שנשלפה מהתפריטים:*\n{samples_block}"
-            f"{search_block}"
+            "📊 *דו\"ח מצב קופה ומלאי הסוכן (NewOrder):* 🖥️📦\n"
+            f"📦 *סה\"כ מוצרים טעונים במלאי הסוכן כרגע:* *{db_items_cnt} מוצרים*\n"
+            f"🛠️ *כרטיסי תיקון מעבדה טעונים:* *{db_repairs_cnt}*\n"
+            f"🌐 *סטטוס פורטל ווב:* {'✅ מחובר לדפים הפנימיים' if exp_res.get('ok') else '⚠️ ממתין לסימון אני לא רובוט בדפדפן'}\n\n"
+            f"📋 *מוצרים ומחירי מכירה משוערכים בזיכרון הסוכן:*\n{db_samples_str}\n\n"
+            f"🔗 *תפריטים שזוהו באתר ({len(menus_list)}):*\n{menus_block}\n\n"
+            f"💡 *להוספת מוצרים נוספים:* שלח לכאן בווצאפ קובץ אקסל/CSV של המלאי מהקופה, או כתוב `עדכון מלאי:` ורשימת מוצרים, או היכנס ל-{render_base}/pos_bridge"
         )
         send_whatsapp_message(sender_phone, msg_ok, raw_chat_id)
-        return {"ok": True, "admin_action": "pos_diagnostic_success", "details": exp_res}
+        return {"ok": True, "admin_action": "pos_diagnostic_success", "db_items_cnt": db_items_cnt, "details": exp_res}
 
     has_other_phone_pending_for_admin = False
     if sender_phone in admin_numbers_set and not has_explicit_admin_prefix:
@@ -7989,6 +8591,14 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", reply_pos)
 
+        if not pos_hit.get("requires_stock_check", True):
+            return {
+                "ok": True,
+                "reply": reply_pos,
+                "type": "pos_catalog_or_brand_list",
+                "escalated": False,
+            }
+
         pos_item = pos_hit.get("item") or {}
         prod_title = pos_item.get("product_name") or "מוצר מהקופה"
         est_price_str = pos_hit.get("estimated_price_str") or f"{pos_item.get('single_price') or ''} ₪"
@@ -8142,6 +8752,8 @@ async def unified_whatsapp_webhook(req: Request):
    • חומת אש והגנת מידע בקופה (NewOrder POS):
      - חל איסור מוחלט למסור ללקוח שום מידע פנימי מהקופה מעבר למחיר המכירה לצרכן! לעולם אל תחשוף מחירי עלות/קנייה, שמות ספקים או יבואנים, אחוזי רווח, כמות יחידות מדויקת בקופה או דוחות כספיים.
      - עבור מוצרים שנשלפים מהקופה (שאינם ברשימת המכשירים הקבועה לעיל), הצג ללקוח תמיד את המחיר כ"מחיר משוערך" (סביב X ₪, שכן ייתכנו מספר יבואנים בקופה) וציין שאתה בודק כעת מול ערן שהמוצר אכן קיים במלאי הפיזי בחנות ומה המחיר הסופי עבורו.
+   • מוצרים נוספים הטעונים כעת ממלאי הקופה (pos_inventory):
+{get_pos_inventory_prompt_context(message_text)}
 
 4. תיאום תורים, רכישת מכשירים בחנות, התקנות מרחוק ותיקוני מעבדה — הבחנה מדויקת בין השירותים, חובת אישור מנהל (ערן), בירור טלפון לחזרה ותזכורת 15 דקות:
    • חובה להבדיל בצורה מדויקת בין השירותים השונים שהחנות מציעה (לעולם אל תקרא לרכישת מכשיר בחנות "תיקון במעבדה"!):
