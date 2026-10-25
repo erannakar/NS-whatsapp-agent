@@ -302,6 +302,17 @@ PERMANENT_LEARNED_KB = [
             "המכשיר (שיאומי Qin F21 Pro) קיים אצלנו במלאי בצבע *שחור* ובצבע *לבן*. 🎨📱\n"
             "באיזה צבע תרצה לבחור (שחור או לבן) כדי שנשריין עבורך את המכשיר כעת? 😃"
         )
+    },
+    {
+        "keywords": "מגיני מסך, מגן מסך, מגן זכוכית, מגן לאייפון, מגן לגלקסי, סוגי מגינים, סוגי מגנים, איזה מגן יש, איזה סוגים של מגן",
+        "answer": (
+            "יש לנו במלאי מגוון מגיני מסך איכותיים לכל הדגמים (כולל אייפון, גלקסי ומכשירים כשרים): 🛡️📱\n"
+            "• *מגן זכוכית מחוסמת*\n"
+            "• *מגן פיברגלס* (עמיד במיוחד נגד שברים)\n"
+            "• *מגן סיליקון פרימיום* (גמיש ובעל ספיגת מכות גבוהה)\n"
+            "• *מגן פרטיות / מאט*\n\n"
+            "מה תרצה להזמין? 😃"
+        )
     }
 ]
 
@@ -947,6 +958,16 @@ def auto_fix_common_hebrew_typos(text: str) -> str:
         (r"\bוסליקון\b", "וסיליקון"),
         (r"\bסליקון\b", "סיליקון"),
         (r"\bסיליקן\b", "סיליקון"),
+        (r"\bהפרמיום\b", "הפרימיום"),
+        (r"\bבפרמיום\b", "בפרימיום"),
+        (r"\bלפרמיום\b", "לפרימיום"),
+        (r"\bפרמיום\b", "פרימיום"),
+        (r"\bהפייברגלס\b", "הפיברגלס"),
+        (r"\bפייברגלס\b", "פיברגלס"),
+        (r"\bהפיבר\s+גלס\b", "הפיברגלס"),
+        (r"\bפיבר\s+גלס\b", "פיברגלס"),
+        (r"\bפייבר\s+גלס\b", "פיברגלס"),
+        (r"\bאבני\s+בודק\b", "אני בודק"),
         (r"\bוישיש\b", "ויש"),
         (r"\bושיש\b", "ויש"),
         (r"\bישיש\b", "יש"),
@@ -988,6 +1009,7 @@ def detect_uncertain_admin_typos(text: str) -> dict:
         (r"\bמזגן\s+מסך\b", "מזגן מסך", "מגן מסך"),
         (r"\bמזגן\s+סיליקון\b", "מזגן סיליקון", "מגן סיליקון"),
         (r"\bמזגן\s+זכוכית\b", "מזגן זכוכית", "מגן זכוכית"),
+        (r"\bמזגן\s+פיברגלס\b", "מזגן פיברגלס", "מגן פיברגלס"),
         (r"\bאת\s+החלוק\b", "החלוק", "החלק"),
         (r"\bהחלוק\b", "החלוק", "החלק"),
         (r"\bהחלפת\s+סוליה\b", "סוליה", "סוללה"),
@@ -1038,104 +1060,308 @@ def detect_uncertain_admin_typos(text: str) -> dict:
     return {"uncertain": False}
 
 
+# Authoritative ordered catalog of store screen protectors & accessories (most specific first!)
+KNOWN_OPTION_CATALOG = [
+    ("מגן סיליקון פרימיום", [
+        "סיליקון פרימיום", "הסיליקון פרימיום", "מגן סיליקון פרימיום",
+        "סיליקון איכותי", "פרימיום"
+    ]),
+    ("מגן פיברגלס", [
+        "פיברגלס", "הפיברגלס", "מגן פיברגלס", "מגן הפיברגלס", "פיבר"
+    ]),
+    ("מגן זכוכית פרטיות", [
+        "זכוכית פרטיות", "מגן זכוכית פרטיות"
+    ]),
+    ("מגן פרטיות", [
+        "פרטיות", "הפרטיות", "מגן פרטיות", "אנטי מציצנות", "נגד הצצות", "משחיר"
+    ]),
+    ("מגן מאט", [
+        "מאט", "מט", "המאט", "המט", "מגן מאט", "מגן מט", "נגד השתקפות"
+    ]),
+    ("מגן הידרוג'ל", [
+        "הידרוג'ל", "הידרוגל", "ג'ל", "מגן ג'ל", "מגן הידרוג'ל", "מגן הידרוגל"
+    ]),
+    ("מגן ננו", [
+        "ננו", "הננו", "מגן ננו", "ננו גמיש"
+    ]),
+    ("מגן סיליקון", [
+        "סיליקון", "הסיליקון", "מגן סיליקון", "סיליקון גמיש", "סיליקון רגיל"
+    ]),
+    ("מגן זכוכית", [
+        "זכוכית", "הזכוכית", "מגן זכוכית", "זכוכית מחוסמת", "זכוכית רגיל", "זכוכית 9h"
+    ]),
+    ("מגן פשוט", [
+        "פשוט", "רגיל", "הפשוט", "מגן פשוט", "מגן רגיל"
+    ]),
+    ("מגן אחורי", [
+        "מגן אחורי", "כיסוי אחורי", "קייס", "כיסוי"
+    ]),
+]
+
+
 def is_screen_protector_or_accessory_context(text: str) -> bool:
     """
-    Returns True if the text is about screen protectors ('מגן מסך', 'מגיני מסך', 'מגן סיליקון', 'מגן זכוכית')
-    or store accessories, rather than a physical screen replacement lab repair ('החלפת מסך').
+    Returns True if the text is about screen protectors ('מגן מסך', 'מגיני מסך', 'מגן סיליקון', 'מגן זכוכית',
+    'מגן פיברגלס', 'סיליקון פרימיום', 'מגן לאייפון') or store accessories, rather than a physical screen replacement lab repair ('החלפת מסך').
     """
     clean = auto_fix_common_hebrew_typos((text or "").lower())
     protector_terms = [
         "מגן מסך", "מגיני מסך", "מגני מסך", "מגן למסך", "מדבקת מסך", "מדבקה למסך",
-        "מגן זכוכית", "מגן סיליקון", "מגן ג'ל", "מגן הידרוג'ל", "מגן מאט", "מגן פרטיות",
-        "איזה מגן", "מגינים", "מגנים"
+        "מגן זכוכית", "מגן סיליקון", "סיליקון פרימיום", "מגן פיברגלס", "פיברגלס",
+        "מגן ג'ל", "מגן הידרוג'ל", "מגן מאט", "מגן פרטיות", "מגן ננו",
+        "מגן לאייפון", "מגן לגלקסי", "מגן לשיאומי", "סוגי מגינים", "סוגי מגנים",
+        "איזה מגן", "איזה מגינים", "איזה מגנים", "מגינים", "מגנים"
     ]
     return any(t in clean for t in protector_terms)
+
+
+def is_screen_protector_variety_inquiry(text: str) -> bool:
+    """
+    Returns True when a customer is asking what types/variety of screen protectors exist in stock
+    (e.g. 'רוצה לבדוק מגן זכוכית לאייפון איזה סוגים יש', 'יש לכם מגיני מסך?', 'אילו סוגי מגנים יש?'),
+    as opposed to asking the price of one specific sub-type like 'מה מחיר מגן הפיברגלס'.
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip().lower())
+    if not clean or not is_screen_protector_or_accessory_context(clean):
+        return False
+    # If customer specifically mentions Fiberglass, Silicone Premium, Privacy, Matte, Hydrogel etc. AND asks its price, it's a specific option inquiry
+    specific_non_generic = ["פיברגלס", "סיליקון פרימיום", "פרטיות", "מאט", "הידרוג'ל", "ננו"]
+    if any(s in clean for s in specific_non_generic) and any(p in clean for p in ["מחיר", "כמה", "עולה", "עלות", "להזמין את", "רוצה את"]):
+        return False
+    variety_signals = [
+        "איזה סוגים", "אילו סוגים", "מה הסוגים", "איזה סוגי", "אילו סוגי",
+        "איזה מגיני", "איזה מגנים", "אילו מגיני", "אילו מגנים", "איזה מגן יש",
+        "יש לכם מגיני", "יש לכם מגן", "יש מגיני מסך", "יש מגן מסך", "מה המבחר", "איזה מבחר"
+    ]
+    if any(v in clean for v in variety_signals):
+        return True
+    # Also if the message is simply "מגיני מסך?" or "יש לכם מגיני מסך?"
+    if any(w in clean for w in ["מגיני מסך", "מגני מסך"]) and not any(s in clean for s in specific_non_generic + ["סיליקון"]):
+        return True
+    return False
+
+
+def detect_specific_option_name(text: str) -> str:
+    """
+    Identifies if a text refers to a specific option from KNOWN_OPTION_CATALOG
+    (e.g. 'מה מחיר מגן הפיברגלס' -> 'מגן פיברגלס', 'מגן סיליקון פרמיום' -> 'מגן סיליקון פרימיום').
+    Returns '' if the customer is asking for the general variety ('איזה סוגים יש').
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip().lower())
+    if not clean or is_screen_protector_variety_inquiry(clean):
+        return ""
+    for canon_name, kws in KNOWN_OPTION_CATALOG:
+        if any(re.search(rf"(?:^|\s|[ובלמה,.-]){re.escape(k)}(?:$|\s|[,.!?:])", clean) for k in kws):
+            return canon_name
+    return ""
+
+
+def is_price_or_comparison_question(text: str) -> bool:
+    """
+    Returns True if the customer is asking for the price/cost of an item or comparing prices
+    (with or without a question mark '?'), e.g.:
+    - 'מה מחיר מגן הפיברגלס'
+    - 'כמה עולה המגן סיליקון פרמיום'
+    - 'ומה לגבי הסיליקון פרימיום כדי להשוות מחירים'
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip().lower())
+    if not clean:
+        return False
+    price_q_terms = [
+        "מחיר", "המחיר", "מחירים", "כמה עולה", "כמה זה", "כמה הוא", "מה העלות", "עלות",
+        "להשוות", "בהשוואה", "לעומת", "ומה לגבי", "מה לגבי", "ומה עם", "מה עם"
+    ]
+    if any(t in clean for t in price_q_terms):
+        return True
+    if ("?" in clean or "؟" in clean) and detect_specific_option_name(clean):
+        return True
+    return False
+
+
+def get_known_option_price(option_name: str, open_action_taken: str = "", recent_history: str = "") -> str:
+    """
+    Looks up the price of a specific option (e.g. 'מגן פיברגלס', 'מגן סיליקון פרימיום', 'מגן זכוכית') across:
+    1. learned_item_prices table in SQLite
+    2. pos_inventory table in SQLite
+    3. open_action_taken ([OPTIONS_JSON:...], [LAST_QUOTED_ITEM:...], or text)
+    4. recent_history of current chat
+    5. learned_kb and ALL past customer_requests & conversation_history in SQLite!
+    """
+    if not option_name:
+        return ""
+    canon = detect_specific_option_name(option_name) or auto_fix_common_hebrew_typos(option_name).strip()
+    stems = [canon.lower()]
+    for c_name, kws in KNOWN_OPTION_CATALOG:
+        if c_name == canon:
+            stems = [k.lower() for k in kws]
+            break
+
+    # 1. Check learned_item_prices table first
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute(
+            "SELECT price_nis FROM learned_item_prices WHERE item_name = ? LIMIT 1",
+            (canon,)
+        ).fetchone()
+        if row and row[0]:
+            conn.close()
+            return str(row[0]).strip()
+        all_price_rows = conn.execute("SELECT item_name, price_nis FROM learned_item_prices").fetchall()
+        conn.close()
+        for r_name, r_price in all_price_rows:
+            if r_name and r_price and (r_name == canon or any(s in r_name.lower() for s in stems)):
+                return str(r_price).strip()
+    except Exception:
+        pass
+
+    # 2. Check [LAST_QUOTED_ITEM:...] [LAST_QUOTED_PRICE:...] in open_action_taken
+    if open_action_taken:
+        for m_lq in re.finditer(r"\[LAST_QUOTED_ITEM:([^\]]+)\]\s*\[LAST_QUOTED_PRICE:(\d{2,4})\]", open_action_taken):
+            if m_lq.group(1).strip() == canon:
+                return m_lq.group(2).strip()
+
+    # 3. Check options extracted from open_action_taken and recent_history
+    for src in [open_action_taken or "", recent_history or ""]:
+        if not src:
+            continue
+        for opt in extract_options_and_prices_from_text(src):
+            if opt["name"] == canon and opt.get("price"):
+                return str(opt["price"]).strip()
+
+    # 4. Scan learned_kb, customer_requests, and conversation_history across the entire database!
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        kb_rows = conn.execute("SELECT keywords, answer FROM learned_kb ORDER BY id DESC").fetchall()
+        req_rows = conn.execute("SELECT request_text, action_taken FROM customer_requests ORDER BY id DESC LIMIT 40").fetchall()
+        hist_rows = conn.execute("SELECT message FROM conversation_history WHERE role='agent' ORDER BY id DESC LIMIT 60").fetchall()
+        conn.close()
+
+        candidate_texts = []
+        for kw_s, ans_s in kb_rows:
+            candidate_texts.append(f"{kw_s or ''} : {ans_s or ''}")
+        for rq_s, ac_s in req_rows:
+            candidate_texts.append(f"{rq_s or ''} | {ac_s or ''}")
+        for (h_msg,) in hist_rows:
+            candidate_texts.append(h_msg or "")
+
+        for blob in candidate_texts:
+            blob_clean = auto_fix_common_hebrew_typos(blob).replace("052-4043644", " ").replace("0524043644", " ")
+            for opt in extract_options_and_prices_from_text(blob_clean):
+                if opt["name"] == canon and opt.get("price"):
+                    return str(opt["price"]).strip()
+            # Also check if a stem appears near a price on the same line
+            for st in stems:
+                if len(st) < 3:
+                    continue
+                m_near = (
+                    re.search(rf"{re.escape(st)}[^\n0-9,;]{{0,35}}?(\d{{2,4}})\s*(?:₪|ש\"ח|שח|שקל)", blob_clean, re.IGNORECASE)
+                    or re.search(rf"{re.escape(st)}\s*(?:הוא|עולה|במחיר|ב-?|[:=-])\s*\*?(\d{{2,4}})\b", blob_clean, re.IGNORECASE)
+                )
+                if m_near:
+                    val = int(m_near.group(1))
+                    if 15 <= val <= 2500:
+                        return str(val)
+    except Exception:
+        pass
+
+    return ""
 
 
 def extract_options_and_prices_from_text(text: str) -> list:
     """
     Extracts multiple product/accessory options and their prices from Admin replies, KB answers,
     or conversation history.
-    Examples handled:
-    - 'יש מגן זכוכית ב 40 שח, מגן סיליקון ב 60 שח ומגן פרטיות ב 80 שח'
-    - 'מגן זכוכית - 40 ₪\nמגן סיליקון - 60 ₪\nמגן מאט - 70 ₪'
-    - 'פשוט 30, סיליקון 60, זכוכית 50'
+    Handles both options with prices ('מגן זכוכית 40, מגן סיליקון פרימיום 100') AND option lists without prices
+    ('יש מגן זכוכית, מגן פיברגלס ומגן סיליקון פרימיום').
     Returns list of dicts: [{"name": str, "price": str, "keywords": list[str]}]
     """
     if not text:
         return []
     cleaned = auto_fix_common_hebrew_typos(text)
-    # Remove metadata tags before parsing
-    cleaned = re.sub(r"\[(?:OPTIONS_JSON|PRICE|GALUT_PRICE|YEMOT_PRICE|PROPOSED_TIME|COLOR):[^\]]*\]", " ", cleaned)
-    # Never treat Bit phone number as a price
-    cleaned = cleaned.replace("052-4043644", " ").replace("0524043644", " ").replace("055-3164770", " ")
-
-    # First check if [OPTIONS_JSON:...] is explicitly embedded in text
-    m_json = re.search(r"\[OPTIONS_JSON:(\[.*?\])\]", text)
-    if m_json:
-        try:
-            parsed = json.loads(m_json.group(1))
-            if isinstance(parsed, list) and parsed:
-                return parsed
-        except Exception:
-            pass
-
-    known_option_Catalog = [
-        ("מגן סיליקון", ["סיליקון", "הסיליקון", "מגן סיליקון", "סיליקון גמיש"]),
-        ("מגן זכוכית", ["זכוכית", "הזכוכית", "מגן זכוכית", "זכוכית מחוסמת"]),
-        ("מגן פרטיות", ["פרטיות", "הפרטיות", "מגן פרטיות", "אנטי מציצנות"]),
-        ("מגן מאט", ["מאט", "מט", "המאט", "מגן מאט", "נגד השתקפות"]),
-        ("מגן הידרוג'ל", ["הידרוג'ל", "הידרוגל", "ג'ל", "מגן ג'ל", "מגן הידרוג'ל"]),
-        ("מגן ננו", ["ננו", "הננו", "מגן ננו", "ננו גמיש"]),
-        ("מגן פשוט", ["פשוט", "רגיל", "הפשוט", "מגן פשוט", "מגן רגיל"]),
-        ("מגן אחורי", ["מגן אחורי", "כיסוי אחורי", "קייס"]),
-    ]
+    # Remove metadata tags before parsing text segments
+    cleaned_no_tags = re.sub(
+        r"\[(?:OPTIONS_JSON|PRICE|GALUT_PRICE|YEMOT_PRICE|PROPOSED_TIME|COLOR|TARGET_ITEM|LAST_QUOTED_ITEM|LAST_QUOTED_PRICE):[^\]]*\]",
+        " ",
+        cleaned
+    )
+    cleaned_no_tags = cleaned_no_tags.replace("052-4043644", " ").replace("0524043644", " ").replace("055-3164770", " ")
 
     options = []
     seen_names = set()
 
-    # Split into segments by newline, comma, semicolon, bullet, or ' ו-' / ' ויש '
-    raw_segments = re.split(r"[\n,;•●]|\s+ו(?=(?:מגן|יש|זכוכית|סיליקון|פרטיות|מאט|הידרוג|ננו|פשוט))", cleaned)
+    # 1. First merge any embedded [OPTIONS_JSON:...]
+    for m_json in re.finditer(r"\[OPTIONS_JSON:(\[.*?\])\]", text):
+        try:
+            parsed = json.loads(m_json.group(1))
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict) and item.get("name"):
+                        nm = auto_fix_common_hebrew_typos(item["name"])
+                        if nm not in seen_names:
+                            seen_names.add(nm)
+                            options.append({
+                                "name": nm,
+                                "price": str(item.get("price") or ""),
+                                "keywords": item.get("keywords") or [nm],
+                            })
+                        elif item.get("price"):
+                            for ex in options:
+                                if ex["name"] == nm and not ex.get("price"):
+                                    ex["price"] = str(item["price"])
+        except Exception:
+            pass
+
+    # 2. Split text into segments by newline, comma, semicolon, bullet, ' או ', or ' ו-'
+    raw_segments = re.split(
+        r"[\n,;•●]|\s+או\s+|\s+ו(?=(?:מגן|יש|זכוכית|סיליקון|פיברגלס|פרטיות|מאט|הידרוג|ננו|פשוט))",
+        cleaned_no_tags
+    )
     for seg in raw_segments:
         seg_s = seg.strip()
         if not seg_s:
             continue
-        # Skip Kosher warranty tracks (handled by kosher track logic)
         if any(w in seg_s for w in ["מסלול גלות", "ימות המשיח", "מסלול גאולה"]):
             continue
 
-        # Find price in segment (20 to 2500 NIS)
         m_pr = (
             re.search(r"\b(\d{2,4})\s*(?:₪|ש\"ח|ש''ח|שח|שקלים|שקל)\b", seg_s)
-            or re.search(r"(?:ב-|ב\s*|מחיר\s*|עולה\s*|עלות\s*|[-:])\s*(\d{2,4})\b", seg_s)
+            or re.search(r"(?:ב-|ב\s*|מחיר\s*|עולה\s*|עלות\s*|הוא\s*|[-:])\s*\*?(\d{2,4})\b", seg_s)
             or re.search(r"\b(\d{2,3})\b", seg_s)
         )
         price_val = ""
         if m_pr:
             cand_p = int(m_pr.group(1))
-            if 15 <= cand_p <= 3500 and cand_p not in (100,) or (cand_p == 100 and "100" in seg_s and "תוספת" not in seg_s):
+            if 15 <= cand_p <= 3500 and (cand_p != 100 or ("100" in seg_s and "תוספת" not in seg_s)):
                 price_val = str(cand_p)
 
         matched_canon = None
         matched_kws = []
-        for canon_name, kws in known_option_Catalog:
-            if any(re.search(rf"(?:^|\s|[ובלמה,.-]){re.escape(k)}(?:$|\s|[,.!?:])", seg_s.lower()) for k in kws):
+        for canon_name, kws in KNOWN_OPTION_CATALOG:
+            if any(re.search(rf"(?:^|\s|[ובלמה,.*-]){re.escape(k)}(?:$|\s|[,.!?:*])", seg_s.lower()) for k in kws):
                 matched_canon = canon_name
                 matched_kws = kws
                 break
 
-        if matched_canon and matched_canon not in seen_names:
-            seen_names.add(matched_canon)
-            options.append({
-                "name": matched_canon,
-                "price": price_val,
-                "keywords": matched_kws,
-            })
+        if matched_canon:
+            if matched_canon not in seen_names:
+                seen_names.add(matched_canon)
+                options.append({
+                    "name": matched_canon,
+                    "price": price_val,
+                    "keywords": matched_kws,
+                })
+            elif price_val:
+                for ex in options:
+                    if ex["name"] == matched_canon:
+                        ex["price"] = price_val
         elif price_val:
-            # Generic option line with a price (e.g. "סוג א 50 שח", "מקורי 120 שח", "חלופי 80 שח")
             label_clean = re.sub(r"\b\d{2,4}\s*(?:₪|ש\"ח|ש''ח|שח|שקלים|שקל)?\b", "", seg_s)
-            label_clean = re.sub(r"^(?:יש\s+לנו|יש|ויש|או|חזרתי\s+אליך\s+בנוגע\s+לפנייתך:?|ב-|ב|עולה|מחיר)\s*", "", label_clean.strip(" -•:.,")).strip(" -•:.,")
-            if 2 <= len(label_clean) <= 32 and not any(q in label_clean for q in ["מה תרצה", "האם תרצה", "נשארו יחידות"]):
+            label_clean = re.sub(
+                r"^(?:יש\s+לנו|יש|ויש|או|חזרתי\s+אליך\s+בנוגע\s+לפנייתך:?|המחיר\s+המדויק\s+הוא|המחיר\s+של|ב-|ב|עולה|מחיר|הוא)\s*",
+                "",
+                label_clean.strip(" -•:.,*")
+            ).strip(" -•:.,*")
+            if 2 <= len(label_clean) <= 32 and not any(q in label_clean for q in ["מה תרצה", "האם תרצה", "תרצה להזמין", "נשארו יחידות"]):
                 if label_clean not in seen_names:
                     seen_names.add(label_clean)
                     kws = [w for w in label_clean.split() if len(w) >= 2]
@@ -1145,26 +1371,30 @@ def extract_options_and_prices_from_text(text: str) -> list:
                         "keywords": [label_clean] + kws,
                     })
 
+    # 3. Fill in any missing prices from learned_item_prices table if available
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        price_map = dict(conn.execute("SELECT item_name, price_nis FROM learned_item_prices").fetchall())
+        conn.close()
+        for opt in options:
+            if not opt.get("price") and opt["name"] in price_map and price_map[opt["name"]]:
+                opt["price"] = str(price_map[opt["name"]])
+    except Exception:
+        pass
+
     return options
 
 
 def find_selected_option_and_price(customer_msg: str, open_action_taken: str = "", recent_history: str = "", open_req_text: str = "") -> dict:
     """
-    Checks if the customer is naming/selecting a specific option (e.g. 'אני רוצה להזמין את הסיליקון',
-    'תזמין לי סיליקון', 'את הזכוכית', 'הסיליקון') and looks up its price across:
-    1. open_action_taken ([OPTIONS_JSON:...] or text)
-    2. recent_history (all messages in the conversation!)
-    3. learned_kb
+    Checks if the customer is naming/selecting a specific option to ORDER (e.g. 'אני רוצה להזמין את הסיליקון',
+    'תזמין לי פיברגלס', 'את הזכוכית', 'הסיליקון פרימיום') and looks up its price across all sources.
+    IMPORTANT: Never triggers order selection when the customer is asking a price or comparison question
+    ('מה מחיר מגן הפיברגלס', 'כמה עולה הסיליקון פרמיום להשוות מחירים')!
     Returns {"matched": bool, "name": str, "price": str, "all_options": list}
     """
     clean_msg = auto_fix_common_hebrew_typos((customer_msg or "").strip().lower())
     if not clean_msg:
-        return {"matched": False, "all_options": []}
-
-    # Never treat a recommendation question ("על איזה מגן אתה ממליץ?", "מה ההבדל?") as an order selection!
-    if "?" in clean_msg or "؟" in clean_msg or any(q in clean_msg for q in [
-        "ממליץ", "מומלץ", "עדיף", "הבדל", "מה זה", "איזה מגן כדאי", "איזה סוגים יש", "אילו סוגים"
-    ]):
         return {"matched": False, "all_options": []}
 
     # Gather all options mentioned anywhere in open_action_taken, recent_history, open_req_text, or learned_kb
@@ -1174,7 +1404,7 @@ def find_selected_option_and_price(customer_msg: str, open_action_taken: str = "
         kb_rows = conn.execute("SELECT answer FROM learned_kb ORDER BY id DESC LIMIT 20").fetchall()
         conn.close()
         for r in kb_rows:
-            if r and r[0] and any(w in r[0] for w in ["מגן", "סיליקון", "זכוכית", "פרטיות", "מאט"]):
+            if r and r[0] and any(w in r[0] for w in ["מגן", "סיליקון", "זכוכית", "פיברגלס", "פרטיות", "מאט"]):
                 combined_sources.append(r[0])
     except Exception:
         pass
@@ -1190,50 +1420,36 @@ def find_selected_option_and_price(customer_msg: str, open_action_taken: str = "
 
     all_opts = list(merged_options.values())
 
-    # Also check direct regex scan in history if a known option name was mentioned with a price on the same line/clause
-    known_Direct = [
-        ("מגן סיליקון", ["סיליקון", "הסיליקון"]),
-        ("מגן זכוכית", ["זכוכית", "הזכוכית"]),
-        ("מגן פרטיות", ["פרטיות", "הפרטיות"]),
-        ("מגן מאט", ["מאט", "המאט"]),
-        ("מגן הידרוג'ל", ["הידרוג'ל", "הידרוגל", "ג'ל"]),
-        ("מגן ננו", ["ננו", "הננו"]),
-        ("מגן פשוט", ["פשוט", "הפשוט", "רגיל"]),
-    ]
-    full_hist_clean = auto_fix_common_hebrew_typos(f"{open_action_taken or ''}\n{recent_history or ''}")
+    # CRITICAL: Never treat a price question, comparison question, or recommendation question as an order command!
+    if is_price_or_comparison_question(clean_msg) or "?" in clean_msg or "؟" in clean_msg or any(q in clean_msg for q in [
+        "ממליץ", "מומלץ", "עדיף", "הבדל", "מה זה", "איזה מגן כדאי", "איזה סוגים יש", "אילו סוגים"
+    ]):
+        return {"matched": False, "all_options": all_opts}
 
-    for canon_name, stems in known_Direct:
-        if any(re.search(rf"(?:^|\s|[ובלמה,.-]){re.escape(s)}(?:$|\s|[,.!?:])", clean_msg) for s in stems):
-            # Customer explicitly named this option! Find its price from merged_options or regex scan in history
-            price_found = ""
-            if canon_name in merged_options and merged_options[canon_name].get("price"):
-                price_found = merged_options[canon_name]["price"]
-            if not price_found:
-                for st in stems:
-                    m_hist_p = (
-                        re.search(rf"{re.escape(st)}[^\n0-9,;]{{0,30}}(\d{{2,4}})", full_hist_clean)
-                        or re.search(rf"(\d{{2,4}})\s*(?:₪|ש\"ח|שח|שקל)?[^\n0-9,;]{{0,20}}{re.escape(st)}", full_hist_clean)
-                    )
-                    if m_hist_p:
-                        p_int = int(m_hist_p.group(1))
-                        if 15 <= p_int <= 2500:
-                            price_found = str(p_int)
-                            break
-            return {
-                "matched": True,
-                "name": canon_name,
-                "price": price_found,
-                "all_options": all_opts,
-            }
+    # Check if customer explicitly named an option from KNOWN_OPTION_CATALOG
+    chosen_canon = detect_specific_option_name(clean_msg)
+    if chosen_canon:
+        price_found = ""
+        if chosen_canon in merged_options and merged_options[chosen_canon].get("price"):
+            price_found = merged_options[chosen_canon]["price"]
+        if not price_found:
+            price_found = get_known_option_price(chosen_canon, open_action_taken, recent_history)
+        return {
+            "matched": True,
+            "name": chosen_canon,
+            "price": price_found,
+            "all_options": all_opts,
+        }
 
     # Check against any custom options extracted into all_opts
     for opt in all_opts:
         for kw in opt.get("keywords", []):
             if len(kw) >= 2 and re.search(rf"(?:^|\s|[ובלמה,.-]){re.escape(kw.lower())}(?:$|\s|[,.!?:])", clean_msg):
+                p_val = opt.get("price") or get_known_option_price(opt["name"], open_action_taken, recent_history)
                 return {
                     "matched": True,
                     "name": opt["name"],
-                    "price": opt.get("price", ""),
+                    "price": p_val,
                     "all_options": all_opts,
                 }
 
@@ -1443,6 +1659,15 @@ def extract_kb_keywords_from_request(request_text: str) -> str:
             kws.append(f"צבע {dev_tag}")
         return ", ".join(kws)
 
+    # Special high-precision keywords for screen protector variety vs. specific option price
+    if is_screen_protector_variety_inquiry(latest_q) or (is_screen_protector_variety_inquiry(full_q) and not detect_specific_option_name(latest_q)):
+        return "מגיני מסך, מגן מסך, מגן זכוכית, מגן לאייפון, מגן לגלקסי, איזה סוגים יש, סוגי מגינים, סוגי מגנים, איזה מגן יש"
+
+    spec_opt = detect_specific_option_name(latest_q)
+    if spec_opt:
+        short_opt = spec_opt.replace("מגן ", "").strip()
+        return f"מחיר {spec_opt}, {spec_opt}, מחיר {short_opt}, ה{short_opt}, {short_opt}"
+
     filler = {
         "יש", "אין", "האם", "איזה", "איזו", "אילו", "מה", "איך", "כמה", "מתי", "אפשר", "לדעת",
         "לכם", "אצלכם", "שלכם", "לי", "לו", "זה", "הזה", "הזאת", "אני", "רוצה", "צריך", "מבקש",
@@ -1621,7 +1846,7 @@ def is_in_progress_or_question(text: str) -> bool:
         "נזמין לך", "נזמין עבורך", "להזמין לך", "להזמין עבורך", "תרצה שנשמור",
         "נשארו יחידות אחרונות", "תרצה שנשריין", "תרצה לשריין", "באיזה מסלול אחריות",
         "באיזה צבע", "איזה צבע", "איזה מסלול", "מה אתה מעדיף", "מה דעתך",
-        "מה תרצה להזמין", "איזה מהם תרצה להזמין", "איזה מגן תרצה"
+        "מה תרצה להזמין", "איזה מהם תרצה להזמין", "איזה מגן תרצה", "תרצה להזמין אותו", "אבדוק לך"
     ]
     if any(stem in clean for stem in question_and_open_offer_stems):
         return True
@@ -1925,32 +2150,63 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "", recent_history: 
     adapted = re.sub(r"^אין\s+במלאי\s+אפשר\s+להזמין", "כרגע אין במלאי, אפשר להזמין", adapted)
 
     # =========================================================================
-    # LAYER 4: Automatic Sales Closing, Option Choice & Reservation CTA
+    # LAYER 4: Automatic Sales Closing, Option Choice, Comparison & Reservation CTA
     # =========================================================================
     detected_price = extract_price_nis(adapted)
     req_part_info = is_part_or_repair_price_inquiry(request_text)
+
+    # Check if customer asked about ONE specific option/item (e.g. "מה מחיר מגן הפיברגלס" or "[TARGET_ITEM:מגן פיברגלס]")
+    m_target_tags = re.findall(r"\[TARGET_ITEM:([^\]]+)\]", request_text or "")
+    specific_req_option = (
+        (m_target_tags[-1].strip() if m_target_tags else "")
+        or detect_specific_option_name(latest_q)
+        or detect_specific_option_name(adapted)
+    )
+
     if re.fullmatch(r"\d{2,4}", adapted.strip()) and detected_price:
-        adapted = f"המחיר המדויק הוא *{detected_price} ₪*"
+        if specific_req_option:
+            adapted = f"המחיר של *{specific_req_option}* הוא *{detected_price} ₪*"
+        else:
+            adapted = f"המחיר המדויק הוא *{detected_price} ₪*"
     elif detected_price and "₪" not in adapted and "שח" not in adapted and 'ש"ח' not in adapted and "שקל" not in adapted:
         adapted = re.sub(rf"\b{re.escape(detected_price)}\b", f"{detected_price} ₪", adapted, count=1)
+        if specific_req_option and specific_req_option not in adapted and len(adapted.split()) <= 4:
+            adapted = f"המחיר של *{specific_req_option}* הוא *{detected_price} ₪*"
 
     is_order_offer = any(w in adapted for w in ["אפשר להזמין", "ניתן להזמין", "להזמין לך", "להזמין עבורך", "נזמין לך", "נוכל להזמין"])
     is_conditional_choice = any(w in adapted for w in ["אם אתה רוצה", "אם תרצה", "אם אתה מעוניין", "אם זה מתאים לך", "אם נוח לך"])
 
     extracted_opts = extract_options_and_prices_from_text(adapted)
-    is_multi_option_or_accessory = len(extracted_opts) >= 2 or is_screen_protector_or_accessory_context(combined_ctx + " " + adapted)
-
-    is_price_approval_for_part = bool(
-        (detected_price or is_multi_option_or_accessory) and (
-            is_multi_option_or_accessory
-            or req_part_info.get("matched")
-            or is_repair_or_smartphone_context(combined_ctx)
-            or any(w in (request_text or "") for w in ["מסך", "סוללה", "שקע", "חלק", "להזמין", "מחיר מדויק", "בדיקת מחיר", "מגן", "מגיני"])
+    is_multi_option_list = len(extracted_opts) >= 2 or (
+        is_screen_protector_or_accessory_context(combined_ctx + " " + adapted)
+        and not specific_req_option
+        and not detected_price
+    )
+    is_single_specific_option_price = bool(
+        detected_price and len(extracted_opts) < 2 and (
+            bool(specific_req_option)
+            or is_screen_protector_or_accessory_context(combined_ctx + " " + adapted)
         )
     )
-    is_device_price_quote = bool(detected_price and not is_price_approval_for_part and not is_multi_option_or_accessory and not is_scheduling_request(request_text))
+
+    is_price_approval_for_part = bool(
+        detected_price and not is_multi_option_list and not is_single_specific_option_price and (
+            req_part_info.get("matched")
+            or is_repair_or_smartphone_context(combined_ctx)
+            or any(w in (request_text or "") for w in ["מסך", "סוללה", "שקע", "חלק", "להזמין", "מחיר מדויק", "בדיקת מחיר"])
+        )
+    )
+    is_device_price_quote = bool(
+        detected_price and not is_price_approval_for_part and not is_multi_option_list
+        and not is_single_specific_option_price and not is_scheduling_request(request_text)
+    )
     kosher_context_check = extract_kosher_device_track_prices(f"{adapted} {request_text}", recent_history)
-    is_in_active_device_sale = bool(kosher_context_check.get("matched") and not is_repair_or_smartphone_context(request_text) and not is_multi_option_or_accessory)
+    is_in_active_device_sale = bool(
+        kosher_context_check.get("matched")
+        and not is_repair_or_smartphone_context(request_text)
+        and not is_multi_option_list
+        and not is_single_specific_option_price
+    )
 
     if is_device_price_quote and "?" not in adapted:
         if is_in_active_device_sale or any(w in combined_ctx.lower() for w in ["כשר", "f21", "f22", "f25", "qin", "גלות", "ימות המשיח"]):
@@ -1965,12 +2221,50 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "", recent_history: 
                 + ".\n🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? 😃"
             )
         is_order_offer = True
-    elif (is_multi_option_or_accessory or is_price_approval_for_part) and not is_order_offer and "?" not in adapted:
+    elif is_single_specific_option_price and "?" not in adapted:
+        # Check if a DIFFERENT option price was already quoted earlier in this conversation (Comparison context!)
+        prev_q_item, prev_q_price = "", ""
+        m_prev_lq = re.findall(r"\[LAST_QUOTED_ITEM:([^\]]+)\]\s*\[LAST_QUOTED_PRICE:(\d{2,4})\]", f"{request_text or ''} {recent_history or ''}")
+        if m_prev_lq:
+            for p_it, p_pr in reversed(m_prev_lq):
+                if p_it.strip() != specific_req_option:
+                    prev_q_item, prev_q_price = p_it.strip(), p_pr.strip()
+                    break
+        if not prev_q_item and recent_history:
+            for opt_h in extract_options_and_prices_from_text(recent_history):
+                if opt_h.get("name") and opt_h.get("price") and opt_h["name"] != specific_req_option:
+                    prev_q_item, prev_q_price = opt_h["name"], opt_h["price"]
+                    break
+
+        if prev_q_item and prev_q_price and specific_req_option:
+            adapted = (
+                adapted.rstrip(".!, ")
+                + f" (לעומת *{prev_q_item}* שמחירו *{prev_q_price} ₪*). 🛡️✨\n"
+                + f"תרצה להזמין אותו כעת, או שאתה מעדיף את ה*{prev_q_item}*?\n"
+                + f"לצורך הזמנה ושריון מיד, ניתן להעביר את הסכום של המגן שתבחר בביט (Bit) למספר *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח) ולשלוח לנו כאן עדכון! 😃"
+            )
+        else:
+            adapted = (
+                adapted.rstrip(".!, ")
+                + ". 🛡️✨\n"
+                + "תרצה להזמין אותו כעת?\n"
+                + f"לצורך הזמנה ושריון מיד, ניתן להעביר כעת *{detected_price} ₪* בביט (Bit) למספר *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח) ולשלוח לנו כאן עדכון! 😃"
+            )
+        is_order_offer = True
+    elif is_multi_option_list and not is_order_offer and "?" not in adapted:
         adapted = adapted.rstrip(".!, ") + ".\nמה תרצה להזמין? 😃"
         is_order_offer = True
+    elif is_price_approval_for_part and not is_order_offer and "?" not in adapted:
+        adapted = (
+            adapted.rstrip(".!, ")
+            + ". 🛠️\nתרצה להזמין אותו כעת?"
+        )
+        is_order_offer = True
     elif (is_order_offer or is_conditional_choice) and "?" not in adapted:
-        if is_order_offer:
+        if is_order_offer and is_multi_option_list:
             adapted = adapted.rstrip(".!, ") + ".\nמה תרצה להזמין? 😃"
+        elif is_order_offer:
+            adapted = adapted.rstrip(".!, ") + ".\nתרצה להזמין אותו כעת? 😃"
         else:
             adapted = adapted.rstrip(".!, ") + " — האם זה מתאים לך? 😃"
     elif is_in_active_device_sale and "?" not in adapted and not is_scheduling_request(request_text):
@@ -1988,7 +2282,7 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "", recent_history: 
         adapted = apply_learned_style_rules(adapted)
     except Exception:
         pass
-    is_q = is_in_progress_or_question(adapted) or is_order_offer or is_conditional_choice or is_price_approval_for_part or is_device_price_quote or is_in_active_device_sale or is_multi_option_or_accessory
+    is_q = is_in_progress_or_question(adapted) or is_order_offer or is_conditional_choice or is_price_approval_for_part or is_device_price_quote or is_in_active_device_sale or is_multi_option_list or is_single_specific_option_price
     return adapted, is_q
 
 
@@ -2381,6 +2675,96 @@ BACKUP_POS_JSON_PATH = os.path.join(
     os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
     "pos_inventory_cache.json"
 )
+BACKUP_ITEM_PRICES_JSON_PATH = os.path.join(
+    os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
+    "learned_item_prices_cache.json"
+)
+
+def sync_item_prices_to_json():
+    """Exports learned_item_prices to local JSON cache for durability across restarts."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT item_name, price_nis, updated_at FROM learned_item_prices ORDER BY item_name ASC").fetchall()
+        conn.close()
+        data = [{"item_name": r[0], "price_nis": r[1], "updated_at": r[2]} for r in rows if r[0] and r[1]]
+        with open(BACKUP_ITEM_PRICES_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def save_learned_item_price(item_name: str, price_nis: str):
+    """
+    Permanently saves a learned option/accessory price (e.g. 'מגן פיברגלס' -> '80', 'מגן סיליקון פרימיום' -> '100')
+    into learned_item_prices AND learned_kb so the bot never asks Admin for the same price again!
+    """
+    canon = detect_specific_option_name(item_name) or auto_fix_common_hebrew_typos(item_name or "").strip()
+    pr = str(price_nis or "").strip()
+    if not canon or not pr or not re.fullmatch(r"\d{2,4}", pr):
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10.0)
+        conn.execute(
+            "INSERT INTO learned_item_prices (item_name, price_nis, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(item_name) DO UPDATE SET price_nis=excluded.price_nis, updated_at=excluded.updated_at",
+            (canon, pr, datetime.now().isoformat())
+        )
+        short_opt = canon.replace("מגן ", "").strip()
+        kw_str = f"מחיר {canon}, {canon}, מחיר {short_opt}, ה{short_opt}, {short_opt}"
+        ans_str = (
+            f"המחיר של *{canon}* הוא *{pr} ₪*. 🛡️✨\n"
+            f"תרצה להזמין אותו כעת?\n"
+            f"לצורך הזמנה ושריון מיד, ניתן להעביר כעת *{pr} ₪* בביט (Bit) למספר *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח) ולשלוח לנו כאן עדכון! 😃"
+        )
+        conn.execute("DELETE FROM learned_kb WHERE keywords = ?", (kw_str,))
+        conn.execute(
+            "INSERT INTO learned_kb (keywords, answer, created_at) VALUES (?, ?, ?)",
+            (kw_str, ans_str, datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+        sync_item_prices_to_json()
+        sync_learned_kb_to_json()
+    except Exception as e:
+        print(f"[Save Learned Item Price Notice]: {e}")
+
+def build_specific_option_price_reply(option_name: str, price_nis: str, open_action_taken: str = "", recent_history: str = "") -> str:
+    """
+    Builds a context-aware, sales-driven reply when a customer asks the price of a specific option
+    (e.g. 'מגן פיברגלס' or 'מגן סיליקון פרימיום').
+    If another option's price was already quoted in this conversation, naturally compares the two prices,
+    drives toward the sale, and ends with Bit payment details!
+    """
+    canon = detect_specific_option_name(option_name) or auto_fix_common_hebrew_typos(option_name).strip()
+    prev_q_item, prev_q_price = "", ""
+    combined_prev = f"{open_action_taken or ''}\n{recent_history or ''}"
+    m_prev_lq = re.findall(r"\[LAST_QUOTED_ITEM:([^\]]+)\]\s*\[LAST_QUOTED_PRICE:(\d{2,4})\]", combined_prev)
+    if m_prev_lq:
+        for p_it, p_pr in reversed(m_prev_lq):
+            if p_it.strip() != canon:
+                prev_q_item, prev_q_price = p_it.strip(), p_pr.strip()
+                break
+    if not prev_q_item and recent_history:
+        for opt_h in reversed(extract_options_and_prices_from_text(recent_history)):
+            if opt_h.get("name") and opt_h.get("price") and opt_h["name"] != canon:
+                prev_q_item, prev_q_price = opt_h["name"], opt_h["price"]
+                break
+
+    if prev_q_item and prev_q_price:
+        return (
+            f"המחיר של *{canon}* הוא *{price_nis} ₪* (לעומת *{prev_q_item}* שמחירו *{prev_q_price} ₪*). 🛡️✨\n"
+            f"תרצה להזמין אותו כעת, או שאתה מעדיף את ה*{prev_q_item}*?\n"
+            f"לצורך הזמנה ושריון מיד, ניתן להעביר כעת את הסכום של המגן שתבחר בביט (Bit) למספר:\n"
+            f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n"
+            f"ולשלוח לנו כאן עדכון או צילום מסך! 😃"
+        )
+    return (
+        f"המחיר של *{canon}* הוא *{price_nis} ₪*. 🛡️✨\n"
+        f"תרצה להזמין אותו כעת?\n"
+        f"לצורך הזמנה ושריון מיד, ניתן להעביר כעת *{price_nis} ₪* בביט (Bit) למספר:\n"
+        f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n"
+        f"ולשלוח לנו כאן עדכון או צילום מסך! 😃"
+    )
+
 BACKUP_STYLE_JSON_PATH = os.path.join(
     os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
     "learned_style_rules_cache.json"
@@ -2609,11 +2993,35 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
     if pos_hit.get("matched") and pos_hit.get("answer"):
         return pos_hit["answer"]
 
-    clean = (message_text or "").lower().strip()
+    clean = auto_fix_common_hebrew_typos((message_text or "").lower().strip())
     clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
     clean_words = set(clean_no_punct.split())
-    ctx_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in f"{clean} {(recent_history or '').lower()}"])
+    ctx_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in f"{clean} {auto_fix_common_hebrew_typos((recent_history or '').lower())}"])
     ctx_words = set(ctx_clean.split())
+
+    # 0.5A If customer is asking for the price of a specific option (e.g. "מה מחיר מגן הפיברגלס" or "מגן סיליקון פרמיום"), check known option prices first!
+    queried_spec_opt = detect_specific_option_name(clean)
+    if queried_spec_opt and is_price_or_comparison_question(clean):
+        known_opt_p = get_known_option_price(queried_spec_opt, "", recent_history)
+        if known_opt_p:
+            return build_specific_option_price_reply(queried_spec_opt, known_opt_p, "", recent_history)
+        # If we don't know the price of this specific option yet, do NOT return a generic variety list! Let it escalate to ask Admin for the price.
+        return ""
+
+    # 0.5B If customer is asking what types/variety of screen protectors exist (e.g. "רוצה לבדוק מגן זכוכית לאייפון איזה סוגים יש")
+    if is_screen_protector_variety_inquiry(clean):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            kb_rows = conn.execute("SELECT keywords, answer FROM learned_kb ORDER BY id DESC").fetchall()
+            conn.close()
+            for kw_s, ans_s in kb_rows:
+                if not kw_s or not ans_s or is_admin_meta_or_error_correction(ans_s):
+                    continue
+                # Find the latest learned KB entry that lists multiple screen protector options (not a single option price quote)
+                if any(k in kw_s.lower() for k in ["מגיני מסך", "סוגי מגינים", "איזה סוגים"]) or len(extract_options_and_prices_from_text(ans_s)) >= 2:
+                    return apply_learned_style_rules(sanitize_admin_leakage(ans_s))
+        except Exception:
+            pass
 
     STOP_KEYWORDS = {
         "חנות", "בעל", "בית", "איך", "מה", "זה", "שלי", "שלך", "הוא", "היא",
@@ -2622,7 +3030,7 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
     }
     MODEL_TOKENS = {"f21", "f21p", "f21pro", "f22", "f22p", "f22pro", "f25", "f25p", "f25pro", "qin", "a14", "a17", "s24"}
     is_asking_color = any(w in clean for w in ["צבע", "צבעים", "באיזה צבע"])
-    is_asking_repair = any(w in clean for w in ["מסך", "סוללה", "שקע"])
+    is_asking_repair = any(w in clean for w in ["מסך", "סוללה", "שקע"]) and not is_screen_protector_or_accessory_context(clean)
 
     # 1. Check dynamic database learned knowledge FIRST for specific follow-up answers (e.g. colors, stock details, specific rules taught by Admin)
     try:
@@ -2876,6 +3284,27 @@ def init_db():
                                 INSERT OR IGNORE INTO learned_kb (keywords, answer, created_at)
                                 VALUES (?, ?, datetime('now'))
                             """, (item["keywords"], sanitize_admin_leakage(ans_s)))
+            except Exception:
+                pass
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS learned_item_prices (
+                item_name TEXT PRIMARY KEY,
+                price_nis TEXT,
+                updated_at TEXT
+            )
+        """)
+        if os.path.exists(BACKUP_ITEM_PRICES_JSON_PATH):
+            try:
+                with open(BACKUP_ITEM_PRICES_JSON_PATH, "r", encoding="utf-8") as f:
+                    ip_cached = json.load(f)
+                if isinstance(ip_cached, list):
+                    for ip_item in ip_cached:
+                        if isinstance(ip_item, dict) and ip_item.get("item_name") and ip_item.get("price_nis"):
+                            c.execute(
+                                "INSERT OR REPLACE INTO learned_item_prices (item_name, price_nis, updated_at) VALUES (?, ?, ?)",
+                                (ip_item["item_name"], str(ip_item["price_nis"]), ip_item.get("updated_at") or datetime.now().isoformat())
+                            )
             except Exception:
                 pass
 
@@ -4111,6 +4540,7 @@ async def unified_whatsapp_webhook(req: Request):
                         "INSERT INTO learned_kb (keywords, answer, created_at) VALUES (?, ?, ?)",
                         (keywords, adapted_admin_ans, datetime.now().isoformat())
                     )
+                    conn.commit()
                     sync_learned_kb_to_json()
 
             customer_dest = "אין לקוח ממתין (נשמר ישירות למאגר)"
@@ -4318,13 +4748,41 @@ async def unified_whatsapp_webhook(req: Request):
                         send_whatsapp_message(target_cust_phone, cust_reply_msg)
                         save_chat_message(target_cust_phone, "agent", cust_reply_msg)
                     else:
-                        cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count, recent_cust_text)
+                        # Persist any learned item prices permanently!
+                        conn.commit()
+                        m_t_items = re.findall(r"\[TARGET_ITEM:([^\]]+)\]", req_text) or re.findall(r"\[TARGET_ITEM:([^\]]+)\]", prev_action_str)
+                        spec_target_opt = (
+                            (m_t_items[-1].strip() if m_t_items else "")
+                            or detect_specific_option_name(extract_latest_customer_question(req_text))
+                            or detect_specific_option_name(admin_answer)
+                        )
+                        for _opt_pair in extract_options_and_prices_from_text(adapted_admin_ans):
+                            if _opt_pair.get("name") and _opt_pair.get("price"):
+                                save_learned_item_price(_opt_pair["name"], _opt_pair["price"])
+                        if spec_target_opt and adm_price and len(extract_options_and_prices_from_text(adapted_admin_ans)) < 2:
+                            save_learned_item_price(spec_target_opt, adm_price)
+
+                        prev_meta_tags = " ".join(re.findall(r"\[(?:LAST_QUOTED_ITEM|LAST_QUOTED_PRICE|TARGET_ITEM|PRICE|GALUT_PRICE|YEMOT_PRICE):[^\]]+\]", prev_action_str))
+                        cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, f"{req_text} {prev_meta_tags}".strip(), target_cust_name, target_msg_count, recent_cust_text)
                         action_with_price = adapted_admin_ans
                         extracted_adm_opts = extract_options_and_prices_from_text(adapted_admin_ans)
                         prev_opts = extract_options_and_prices_from_text(prev_action_str + "\n" + recent_cust_text)
-                        merged_adm_opts = extracted_adm_opts if extracted_adm_opts else prev_opts
+                        # Merge prev_opts and extracted_adm_opts so newly learned prices enrich the existing options list!
+                        opts_by_name = {o["name"]: o for o in prev_opts}
+                        for o in extracted_adm_opts:
+                            if o["name"] not in opts_by_name or o.get("price"):
+                                opts_by_name[o["name"]] = o
+                        if spec_target_opt and adm_price:
+                            opts_by_name[spec_target_opt] = {"name": spec_target_opt, "price": adm_price, "keywords": [spec_target_opt]}
+                        merged_adm_opts = list(opts_by_name.values())
                         if merged_adm_opts:
                             action_with_price += f" [OPTIONS_JSON:{json.dumps(merged_adm_opts, ensure_ascii=False)}]"
+                        # Preserve previous LAST_QUOTED_ITEM tags so multi-turn price comparisons work seamlessly
+                        prev_lq_tags = " ".join(re.findall(r"\[LAST_QUOTED_ITEM:[^\]]+\]\s*\[LAST_QUOTED_PRICE:\d{2,4}\]", prev_action_str))
+                        if prev_lq_tags:
+                            action_with_price += f" {prev_lq_tags}"
+                        if spec_target_opt and adm_price and len(extracted_adm_opts) < 2:
+                            action_with_price += f" [LAST_QUOTED_ITEM:{spec_target_opt}] [LAST_QUOTED_PRICE:{adm_price}]"
                         if kosher_tracks_adm.get("matched"):
                             action_with_price += f" [GALUT_PRICE:{kosher_tracks_adm['galut_price']}] [YEMOT_PRICE:{kosher_tracks_adm['yemot_price']}]"
                         elif adm_price and len(extracted_adm_opts) < 2:
@@ -4954,23 +5412,92 @@ async def unified_whatsapp_webhook(req: Request):
         selected_opt_info = find_selected_option_and_price(message_text, open_action_taken, full_recent_history, open_req_text)
         all_conv_options = selected_opt_info.get("all_options", [])
 
+        # (0.6.38) Check if Customer is asking for the PRICE of a specific option (e.g. "מה מחיר מגן הפיברגלס" or "ומה מחיר המגן סיליקון פרמיום להשוות מחירים")
+        queried_opt_name = detect_specific_option_name(message_text)
+        if queried_opt_name and is_price_or_comparison_question(message_text):
+            known_opt_price = get_known_option_price(queried_opt_name, open_action_taken, full_recent_history)
+            if known_opt_price:
+                reply_spec_p = build_specific_option_price_reply(queried_opt_name, known_opt_price, open_action_taken, full_recent_history)
+                updated_act_sp = f"{open_action_taken or ''} [LAST_QUOTED_ITEM:{queried_opt_name}] [LAST_QUOTED_PRICE:{known_opt_price}] [PRICE:{known_opt_price}]".strip()
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute(
+                        "UPDATE customer_requests SET status='awaiting_customer_reply', action_taken=? WHERE id=?",
+                        (updated_act_sp, open_req_id)
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                send_whatsapp_message(sender_phone, reply_spec_p, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_spec_p)
+                return {
+                    "ok": True,
+                    "reply": reply_spec_p,
+                    "type": "answered_specific_option_price",
+                    "item": queried_opt_name,
+                    "price": known_opt_price,
+                    "escalated": False,
+                }
+            else:
+                # Price of this specific option is not yet in memory -> Ask Admin and tell customer: "אבדוק לך את המחיר העדכני..."
+                clean_open_req_sp = re.sub(r"\s*\[TARGET_ITEM:[^\]]+\]", "", open_req_text or "").strip()
+                clean_open_act_sp = re.sub(r"\s*\[TARGET_ITEM:[^\]]+\]", "", open_action_taken or "").strip()
+                updated_req_sp = f"{clean_open_req_sp} | שאלת המשך: {message_text} [TARGET_ITEM:{queried_opt_name}]"
+                preserved_act_sp = f"ממתין למחיר עבור {queried_opt_name} [TARGET_ITEM:{queried_opt_name}] | {clean_open_act_sp}".strip(" |")
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute(
+                        "UPDATE customer_requests SET status='pending', request_text=?, action_taken=? WHERE id=?",
+                        (updated_req_sp, preserved_act_sp, open_req_id)
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                reply_chk_sp = f"אבדוק לך את המחיר העדכני עבור *{queried_opt_name}* וכבר אחזור אליך עם תשובה מדויקת! 😃"
+                send_whatsapp_message(sender_phone, reply_chk_sp, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_chk_sp)
+                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                for adm in target_admins:
+                    send_whatsapp_message(
+                        adm,
+                        f"❓ *בדיקת מחיר עבור {queried_opt_name}* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                        f"📌 *פנייה מקורית:* {open_req_text}\n"
+                        f"💬 *שאלת הלקוח כעת:* \"{message_text}\"\n\n"
+                        f"💬 *למענה מהיר: כתוב כאן את המחיר של {queried_opt_name} (למשל: '80') והסוכן ישמור אותו בזיכרון הקבוע, ימסור ללקוח ויחתור להזמנה ותשלום בביט!*"
+                    )
+                return {
+                    "ok": True,
+                    "reply": reply_chk_sp,
+                    "type": "escalated_specific_option_price",
+                    "item": queried_opt_name,
+                    "escalated": True,
+                }
+
         is_order_context = (
             bool(selected_opt_info.get("matched"))
             or len(all_conv_options) >= 2
-            or any(w in (open_action_taken or "") for w in ["להזמין", "נזמין", "הזמנה", "לשריין", "שריון", "יחידות אחרונות", "באיזה צבע", "[PRICE:", "[GALUT_PRICE:", "[OPTIONS_JSON:"])
+            or any(w in (open_action_taken or "") for w in ["להזמין", "נזמין", "הזמנה", "לשריין", "שריון", "יחידות אחרונות", "באיזה צבע", "[PRICE:", "[GALUT_PRICE:", "[OPTIONS_JSON:", "[LAST_QUOTED_ITEM:"])
         )
         is_followup_q = (
             not selected_opt_info.get("matched") and (
                 "?" in message_text
                 or "؟" in message_text
-                or any(q in cust_clean for q in ["כמה עולה", "מה המחיר", "כמה זה", "תוך כמה זמן", "מתי יגיע", "מתי זה מגיע", "איזה", "האם", "ממליץ", "מומלץ", "עדיף"])
+                or is_price_or_comparison_question(message_text)
+                or any(q in cust_clean for q in [
+                    "כמה עולה", "מה המחיר", "מה מחיר", "כמה זה", "תוך כמה זמן", "מתי יגיע", "מתי זה מגיע",
+                    "איזה", "האם", "ממליץ", "מומלץ", "עדיף", "מה ההבדל"
+                ])
             )
         )
 
-        # (0.6.4) Customer explicitly selected or asked to order a specific option from the conversation (e.g. "אני רוצה להזמין את הסיליקון", "תזמין לי סיליקון")
+        # (0.6.4) Customer explicitly selected or asked to order a specific option from the conversation (e.g. "אני רוצה להזמין את הסיליקון", "תזמין לי פיברגלס")
         if selected_opt_info.get("matched") and not cust_has_neg:
             chosen_item_name = selected_opt_info["name"]
-            chosen_item_price = selected_opt_info.get("price", "")
+            chosen_item_price = selected_opt_info.get("price", "") or get_known_option_price(chosen_item_name, open_action_taken, full_recent_history)
             if chosen_item_price:
                 try:
                     conn = sqlite3.connect(DB_PATH)
@@ -5010,6 +5537,40 @@ async def unified_whatsapp_webhook(req: Request):
                     "bit_phone": BIT_PAYMENT_PHONE,
                     "escalated": False,
                 }
+            else:
+                # Customer chose a specific option to order whose price hasn't been stated yet -> ask Admin for exact price for Bit payment
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute(
+                        "UPDATE customer_requests SET status='pending', request_text=?, action_taken=? WHERE id=?",
+                        (f"{open_req_text} | בחירת לקוח: {chosen_item_name} [TARGET_ITEM:{chosen_item_name}]", f"ממתין למחיר מערן לשליחת ביט עבור {chosen_item_name} [TARGET_ITEM:{chosen_item_name}] | {open_action_taken or ''}", open_req_id)
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                reply_opt_wait = (
+                    f"מעולה! רשמתי לפניי שבחרת ב*{chosen_item_name}*. 🛠️\n"
+                    f"אבדוק לך כעת את המחיר העדכני להעברה בביט (*{BIT_PAYMENT_PHONE}*) ומיד אעדכן אותך כאן! 😃"
+                )
+                send_whatsapp_message(sender_phone, reply_opt_wait, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_opt_wait)
+                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                for adm in target_admins:
+                    send_whatsapp_message(
+                        adm,
+                        f"📦 *הלקוח בחר להזמין: {chosen_item_name}!* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                        f"💬 *הודעת הלקוח:* \"{message_text}\"\n\n"
+                        f"💳 *כתוב כאן את המחיר של {chosen_item_name} (למשל: '80') כדי שהסוכן ישלח ללקוח בקשת תשלום בביט ל-{BIT_PAYMENT_PHONE}!*"
+                    )
+                return {
+                    "ok": True,
+                    "reply": reply_opt_wait,
+                    "type": "customer_selected_option_awaiting_price",
+                    "item": chosen_item_name,
+                    "escalated": True,
+                }
 
         # (A) Customer asks a follow-up question before deciding (e.g. "על איזה מגן אתה ממליץ?", "איזה צבעים יש?")
         if is_followup_q:
@@ -5030,7 +5591,10 @@ async def unified_whatsapp_webhook(req: Request):
                 conn.close()
             except Exception:
                 pass
-            reply_fq = "תודה! אני בודק כעת את הפרטים מול ערן וכבר חוזר אליך עם תשובה מדויקת. 😃"
+            if is_price_or_comparison_question(message_text):
+                reply_fq = "אבדוק לך את המחיר העדכני וכבר אחזור אליך עם תשובה מדויקת! 😃"
+            else:
+                reply_fq = "אבדוק לך כעת את הפרטים וכבר אחזור אליך עם תשובה מדויקת! 😃"
             send_whatsapp_message(sender_phone, reply_fq, raw_chat_id)
             save_chat_message(sender_phone, "customer", message_text)
             save_chat_message(sender_phone, "agent", reply_fq)
@@ -5049,9 +5613,53 @@ async def unified_whatsapp_webhook(req: Request):
         if is_order_context:
             wants_to_order = not cust_has_neg and (
                 is_satisfaction_yes(message_text)
-                or any(w in cust_clean for w in ["כן", "רוצה", "תזמין", "תזמינו", "תשריין", "לשריין", "שריין", "בטח", "ודאי", "אשמח", "מעוניין", "סבבה", "בסדר", "מעולה", "בבקשה", "להזמין"])
+                or any(w in cust_clean for w in [
+                    "כן", "רוצה", "תזמין", "תזמינו", "תשריין", "לשריין", "שריין", "בטח", "ודאי",
+                    "אשמח", "מעוניין", "סבבה", "בסדר", "מעולה", "בבקשה", "להזמין", "אותו", "אני לוקח"
+                ])
             )
             if wants_to_order:
+                # Check if the last agent turn just quoted a specific single option ("[LAST_QUOTED_ITEM:X] [LAST_QUOTED_PRICE:Y]") and asked "תרצה להזמין אותו?"
+                m_last_q = re.findall(r"\[LAST_QUOTED_ITEM:([^\]]+)\]\s*\[LAST_QUOTED_PRICE:(\d{2,4})\]", open_action_taken or "")
+                if m_last_q:
+                    lq_item, lq_price = m_last_q[-1][0].strip(), m_last_q[-1][1].strip()
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        conn.execute(
+                            "UPDATE customer_requests SET status='awaiting_bit_payment', action_taken=? WHERE id=?",
+                            (f"הלקוח אישר הזמנת {lq_item} - נשלחו פרטי תשלום בביט על סך {lq_price} ₪ ל-{BIT_PAYMENT_PHONE} [PRICE:{lq_price}]", open_req_id)
+                        )
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        pass
+                    reply_lq_ord = (
+                        f"מעולה! לצורך הזמנת *{lq_item}* שמחירו *{lq_price} ₪*, אנא העבר כעת *{lq_price} ₪* בביט (Bit) למספר:\n"
+                        f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n\n"
+                        f"לאחר ההעברה, שלח לנו כאן עדכון או צילום מסך, ועדכנתי כבר עכשיו את ערן להזמין ולשמור עבורך את ה{lq_item}! 😃"
+                    )
+                    send_whatsapp_message(sender_phone, reply_lq_ord, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reply_lq_ord)
+                    target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                    for adm in target_admins:
+                        send_whatsapp_message(
+                            adm,
+                            f"📦 *הלקוח אישר הזמנה: {lq_item}!* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                            f"🛍️ *פריט שנבחר:* {lq_item}\n"
+                            f"💰 *סכום לתשלום בביט:* {lq_price} ₪ (נשלחו ללקוח פרטי העברה בביט למספר {BIT_PAYMENT_PHONE})\n"
+                            f"💬 *תשובת הלקוח:* \"{message_text}\"\n"
+                            f"📞 *טלפון הלקוח:* {cust_phone_fmt}"
+                        )
+                    return {
+                        "ok": True,
+                        "reply": reply_lq_ord,
+                        "type": "customer_confirmed_specific_item_bit_sent",
+                        "item": lq_item,
+                        "amount": lq_price,
+                        "bit_phone": BIT_PAYMENT_PHONE,
+                    }
+
                 # CRITICAL MULTI-OPTION GUARD: If multiple options were presented (e.g. screen protectors) and the customer
                 # only said "כן" / "אני רוצה להזמין" without choosing which option, ask them which option they want instead of taking line 1!
                 if len(all_conv_options) >= 2 and not selected_opt_info.get("matched"):
@@ -5146,8 +5754,8 @@ async def unified_whatsapp_webhook(req: Request):
                             f"💳 *כתוב כאן את הסכום המדויק לתשלום (למשל: '280') כדי שהסוכן ישלח ללקוח את הסכום להעברה בביט ל-{BIT_PAYMENT_PHONE}!*"
                         )
                     return {"ok": True, "reply": reply_ord, "type": "customer_confirmed_order_awaiting_amount", "bit_phone": BIT_PAYMENT_PHONE}
-            else:
-                # Customer declined the order or finished their remarks ("לא תודה", "לא כרגע", "אסתדר")
+            elif cust_has_neg:
+                # ONLY when customer explicitly declines ("לא תודה", "לא כרגע", "אסתדר", "מוותר")!
                 try:
                     conn = sqlite3.connect(DB_PATH)
                     conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"הלקוח ויתר על הזמנה: {message_text}", open_req_id))
@@ -5825,7 +6433,7 @@ async def unified_whatsapp_webhook(req: Request):
 
     # 2. Only actual active checking phrases in reply text indicate real escalation
     checking_phrases = [
-        "אני בודק כעת", "בודק כעת", "אבדוק כעת", "אבדוק זאת",
+        "אני בודק כעת", "בודק כעת", "אבדוק כעת", "אבדוק זאת", "אבדוק לך",
         "אברר כעת", "נברר עבורך", "אחזור אליך עם תשובה", "נחזור אליך עם תשובה",
         "חוזר אליך עם תשובה מדויקת", "אברר ואחזור"
     ]
