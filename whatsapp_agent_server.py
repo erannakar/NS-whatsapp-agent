@@ -3006,34 +3006,49 @@ def sync_pos_inventory_to_json():
     except Exception:
         pass
 
-def format_pos_item_answer(item: dict) -> str:
-    """Formats a live POS inventory record into a persuasive customer WhatsApp response."""
+def format_pos_item_answer(item: dict, all_sale_prices: list[int] | None = None) -> str:
+    """
+    Formats a live POS inventory record into a customer WhatsApp response:
+    - Exposes ONLY the Customer Sale Price (NEVER cost price, supplier/importer names, or internal counts).
+    - Presents the price as an Estimated Price (מחיר משוערך) across importers (e.g. 'סביב 380–420 ₪' or 'סביב 390 ₪').
+    - States clearly that the agent is checking physical stock availability in the store right now.
+    """
     name = item.get("product_name") or "המוצר"
     cat = (item.get("category") or "").lower()
     galut_p = item.get("price_galut")
     yemot_p = item.get("price_yemot")
     single_p = item.get("single_price")
-    stock_qty = item.get("stock_qty")
     colors = (item.get("colors") or "").strip()
 
-    if stock_qty is not None and int(stock_qty) <= 0:
-        price_str = f" בעלות של *{single_p or galut_p} ₪*" if (single_p or galut_p) else ""
-        return f"כרגע *{name}* אזל זמנית מהמלאי בחנות, אך ניתן להזמין אותו עבורך{price_str}. האם תרצה שנזמין ונשריין עבורך? 😃"
+    prices = sorted(set(int(p) for p in (all_sale_prices or []) if p and int(p) > 0))
+    if not prices:
+        for p_cand in (single_p, galut_p, yemot_p):
+            if p_cand and int(p_cand) > 0:
+                prices.append(int(p_cand))
+        prices = sorted(set(prices))
 
-    color_line = f"\n🎨 *צבעים במלאי:* {colors}" if colors else ""
+    if not prices:
+        return ""
+
+    if len(prices) >= 2 and not (galut_p and yemot_p):
+        est_price_str = f"{prices[0]}–{prices[-1]} ₪"
+    else:
+        est_price_str = f"{prices[0]} ₪"
+
+    color_line = f"\n🎨 *צבעים שמופיעים במערכת:* {colors}" if colors else ""
     if galut_p and yemot_p and ("כשר" in cat or "מכשיר" in cat or not is_repair_or_smartphone_context(name)):
         return (
-            f"כן, מכשיר *{name}* זמין אצלנו במלאי ב-2 מסלולי אחריות לבחירתך: 📱{color_line}\n"
-            f"• מסלול גלות (אחריות יבואן רשמי בלבד): {galut_p} ₪\n"
-            f"• ⭐ מסלול ימות המשיח (המסלול המומלץ והמשתלם ביותר שלנו!): {yemot_p} ₪ — בתוספת קטנה אתה מקבל שקט נפשי מלא עם תיקון אקספרס במעבדה שלנו בחדרה תוך שעתיים (במקום להמתין 3 שבועות ליבואן!), מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n\n"
-            f"🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+            f"המחיר המשוערך עבור מכשיר *{name}* אצלנו הוא: 📱{color_line}\n"
+            f"• מסלול גלות (אחריות יבואן רשמי): סביב *{galut_p} ₪*\n"
+            f"• ⭐ מסלול ימות המשיח (אחריות מעבדה מקומית בחדרה — המומלץ!): סביב *{yemot_p} ₪*\n\n"
+            f"אני בודק כעת מול ערן שהמכשיר אכן זמין במלאי הפיזי בחנות ומה המחיר הסופי עבורך, וכבר חוזר אליך עם תשובה מדויקת! 😃"
         )
-    price_val = single_p or galut_p or yemot_p
-    if price_val:
-        if is_repair_or_smartphone_context(name) or "תיקון" in cat or "מעבדה" in cat or "חלק" in cat:
-            return f"*{name}* זמין אצלנו במלאי במחיר *{price_val} ₪*. 🛠️{color_line}\nהאם תרצה שנקבע או נשריין עבורך? 😃"
-        return f"כן, *{name}* זמין אצלנו במלאי במחיר *{price_val} ₪*. 📱{color_line}\n🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך כעת כדי שלא תיתקע בלי? 😃"
-    return ""
+
+    icon = "🛠️" if (is_repair_or_smartphone_context(name) or "תיקון" in cat or "מעבדה" in cat or "חלק" in cat) else "📱"
+    return (
+        f"המחיר המשוערך עבור *{name}* הוא סביב *{est_price_str}* (בהתאם ליבואן ולדגם שבמלאי). {icon}{color_line}\n"
+        f"אני בודק כעת מול ערן שהפריט אכן קיים במלאי הפיזי בחנות ומה המחיר המדויק עבורך, וכבר חוזר אליך! 😃"
+    )
 
 def _parse_aspnet_form_inputs(html_text: str) -> dict:
     """
@@ -3514,18 +3529,157 @@ def _extract_html_menus_and_links(html_text: str, base_url: str = "") -> list[di
     return menus
 
 
+def is_confidential_pos_inquiry(text: str) -> bool:
+    """
+    Blocks any customer attempt to ask for confidential store/POS data:
+    - Cost price / dealer purchase price (מחיר עלות, מחיר קנייה, כמה עולה לך מהיבואן)
+    - Supplier / Importer identity (מי הספק, מאיזה יבואן אתם מביאים, מי היבואנים שלכם)
+    - Store profit / margin / revenue reports (כמה רווח, אחוז רווח, דוח מכירות, מחזור קופה)
+    - Exact internal stock counts across the store (כמה יחידות בדיוק רשום בקופה)
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip().lower())
+    if not clean:
+        return False
+    confidential_patterns = [
+        r"מחיר\s+(?:ה?עלות|ה?קנייה|ה?קניה|ספק|יבואן|סיטונאי)",
+        r"כמה\s+(?:זה\s+)?עולה\s+(?:לך|לכם|לחנות|למעבדה)\b",
+        r"בכמה\s+(?:אתה\s+|אתם\s+)?(?:קונה|קונים|מביא|מביאים)",
+        r"(?:מי|איזה)\s+(?:ה?ספק|ה?ספקים|ה?יבואן|ה?יבואנים)",
+        r"מאיזה\s+(?:ספק|יבואן)\s+(?:אתה|אתם)",
+        r"כמה\s+(?:אתה\s+|אתם\s+)?(?:מרוויח|מרוויחים|רווח)",
+        r"(?:אחוז\s+רווח|דוח\s+קופה|דוחות\s+קופה|מחזור\s+מכירות)",
+        r"כמה\s+יחידות\s+(?:בדיוק\s+)?(?:רשום|יש\s+בקופה)",
+        r"רשום\s+(?:לך\s+|לכם\s+)?בקופה",
+    ]
+    return any(re.search(p, clean) for p in confidential_patterns)
+
+
+def get_confidential_pos_block_reply() -> str:
+    """Polite customer-facing refusal when asked for confidential POS data (cost price, suppliers, margins, etc.)."""
+    return (
+        "אנו מוסרים מידע אך ורק לגבי מחירי המכירה לצרכן וזמינות המוצרים עבורך בחנות. 😊📱\n"
+        "באיזה מכשיר או מוצר תרצה להתעניין כדי שאבדוק עבורך מחיר משוערך וזמינות במלאי?"
+    )
+
+
+def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) -> tuple[str, str, str]:
+    """
+    Extracts ONLY (sku, clean_product_name, sale_price_nis) from a POS table row,
+    while STRICTLY blocking and discarding:
+    - Cost / Purchase price columns (מחיר עלות / מחיר קנייה / עלות ספק)
+    - Supplier / Importer columns (שם ספק / יבואן)
+    - Profit / Margin columns (רווח / אחוז רווח)
+    - Stock quantity numbers (כמות במלאי)
+    If both Cost Price and Sale Price appear in a row without headers, always selects the higher Retail Sale Price!
+    """
+    if not cells:
+        return "", "", ""
+    col_map = col_map or {}
+    cost_cols = col_map.get("cost_cols", set())
+    supplier_cols = col_map.get("supplier_cols", set())
+    qty_cols = col_map.get("qty_cols", set())
+    sale_col = col_map.get("sale_col")
+    name_col = col_map.get("name_col")
+    sku_col = col_map.get("sku_col")
+
+    cost_cell_markers = ["עלות", "קנייה", "קניה", "ספק", "יבואן", "רווח", "סיטונאי", "cost", "buy", "margin", "supplier"]
+    sale_cell_markers = ["מכירה", "לצרכן", "מחירון", "ללקוח", "sale", "retail"]
+
+    # 1. Determine SKU
+    sku_val = ""
+    if sku_col is not None and sku_col < len(cells):
+        sku_val = str(cells[sku_col]).strip()[:40]
+    elif cells:
+        sku_val = str(cells[0]).strip()[:40]
+
+    # 2. Determine Clean Product Name (never include supplier, cost, or pure numbers)
+    prod_name = ""
+    if name_col is not None and name_col < len(cells):
+        prod_name = str(cells[name_col]).strip()
+    else:
+        for idx, c in enumerate(cells):
+            if idx in cost_cols or idx in supplier_cols or idx in qty_cols or idx == sale_col:
+                continue
+            c_str = str(c).strip()
+            if not c_str or c_str.isdigit() or re.fullmatch(r"[\d.,₪ש\"ח\s\-]+", c_str):
+                continue
+            if idx == 0 and re.match(r"^(?:sku|מקט|מק\"ט|ברקוד|\d{2,})", c_str, re.IGNORECASE) and len(cells) > 1:
+                continue
+            if any(m in c_str.lower() for m in ["עלות:", "ספק:", "יבואן:", "רווח:"]):
+                continue
+            prod_name = c_str
+            break
+
+    # Strip any inline confidential annotations from prod_name (e.g. "(יבואן: X)" or "עלות 200")
+    prod_name = re.sub(r"\([^)]*(?:יבואן|ספק|עלות|קנייה|קניה|רווח)[^)]*\)", "", prod_name, flags=re.IGNORECASE)
+    prod_name = re.sub(r"\b(?:יבואן|ספק|עלות|מחיר\s+עלות|קנייה|קניה)\s*[:\-]?\s*[^\s|,]+", "", prod_name, flags=re.IGNORECASE).strip(" -|,:")
+
+    # 3. Extract Customer Sale Price ONLY (never Cost Price!)
+    sale_price_val = ""
+    if sale_col is not None and sale_col < len(cells):
+        sale_price_val = extract_price_nis(str(cells[sale_col]))
+
+    if not sale_price_val:
+        explicit_sale_candidates = []
+        general_price_candidates = []
+        for idx, c in enumerate(cells):
+            if idx in cost_cols or idx in supplier_cols or idx in qty_cols or idx == sku_col:
+                continue
+            if idx == 0 and len(cells) > 2:
+                continue
+            c_str = str(c).strip()
+            c_low = c_str.lower()
+            # Strictly skip any cell that mentions cost/buy/supplier/margin
+            if any(cm in c_low for cm in cost_cell_markers):
+                continue
+            p_nis = extract_price_nis(c_str)
+            if p_nis and p_nis.isdigit():
+                val_i = int(p_nis)
+                if 20 <= val_i <= 8500:
+                    if any(sm in c_low for sm in sale_cell_markers):
+                        explicit_sale_candidates.append(val_i)
+                    else:
+                        general_price_candidates.append(val_i)
+
+        if explicit_sale_candidates:
+            sale_price_val = str(max(explicit_sale_candidates))
+        elif general_price_candidates:
+            # CRITICAL SAFETY: If a headerless row has both Cost Price (lower) and Sale Price (higher),
+            # e.g. [SKU, Name, Cost=210, Sale=380], max() guarantees we take the Customer Sale Price (380) and NEVER the Cost Price (210)!
+            sale_price_val = str(max(general_price_candidates))
+
+    return sku_val, prod_name[:80], sale_price_val
+
+
 def _ingest_neworder_rows_into_db(rows: list[list[str]], source_label: str = "") -> dict:
     """
     Automatically classifies and imports table rows scraped or bridged from NewOrder Cellular / BackOffice
     into SQLite (`lab_repairs` for repair tickets and `pos_inventory` for products/prices).
+    ENFORCES STRICT POS CONFIDENTIALITY:
+    - Maps table headers to separate Customer Sale Price (מחיר מכירה / לצרכן) from Store Cost Price (מחיר עלות / קנייה).
+    - Discards Cost Prices, Supplier/Importer names, Profit margins, and exact stock counts.
+    - Stores ONLY clean product names and Customer Sale Prices in `pos_inventory`.
     """
     repairs_added = 0
     items_added = 0
     if not rows:
         return {"repairs_added": 0, "items_added": 0}
 
+    # Never ingest rows from financial/supplier/cost report menus into customer-facing inventory
+    if any(b in (source_label or "").lower() for b in ["דוח", "רווח", "ספקים", "עלות", "כספים", "הנהלת חשבונות"]):
+        return {"repairs_added": 0, "items_added": 0}
+
     repair_status_words = ["מוכן לאיסוף", "מוכן", "בבדיקה", "בתיקון", "ממתין לחלק", "ממתין לאישור", "הושלם", "בטיפול", "נמסר", "פתוח"]
-    header_skip_words = ["מספר קריאה", "שם לקוח", "טלפון", "סטטוס", "תיאור פריט", "מק\"ט", "מקט", "מחיר", "כמות במלאי"]
+    header_keywords = ["מספר קריאה", "שם לקוח", "טלפון", "סטטוס", "תיאור פריט", "שם פריט", "שם מוצר", "מק\"ט", "מקט", "מחיר", "עלות", "מכירה", "כמות", "ספק", "יבואן"]
+
+    col_map = {
+        "sale_col": None,
+        "cost_cols": set(),
+        "supplier_cols": set(),
+        "qty_cols": set(),
+        "name_col": None,
+        "sku_col": None,
+    }
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -3536,8 +3690,24 @@ def _ingest_neworder_rows_into_db(rows: list[list[str]], source_label: str = "")
             row_joined = " | ".join(clean_cells)
             row_low = row_joined.lower()
 
-            # Skip table header rows
-            if sum(1 for hw in header_skip_words if hw in row_low) >= 2:
+            # Detect & map table header row
+            if sum(1 for hw in header_keywords if hw in row_low) >= 2 and not re.search(r"\b05[0-9]-?[0-9]{7}\b", row_joined):
+                for idx, h_cell in enumerate(clean_cells):
+                    hl = h_cell.lower()
+                    if any(w in hl for w in ["עלות", "קנייה", "קניה", "סיטונאי", "רווח", "cost", "buy", "margin"]):
+                        col_map["cost_cols"].add(idx)
+                    elif any(w in hl for w in ["ספק", "יבואן", "supplier", "vendor", "importer"]):
+                        col_map["supplier_cols"].add(idx)
+                    elif any(w in hl for w in ["כמות", "יתרה", "מלאי", "qty", "stock", "quantity"]):
+                        col_map["qty_cols"].add(idx)
+                    elif any(w in hl for w in ["מכירה", "לצרכן", "מחירון", "ללקוח", "sale", "retail"]) or ("מחיר" in hl and "עלות" not in hl and "קני" not in hl):
+                        col_map["sale_col"] = idx
+                    elif any(w in hl for w in ["שם פריט", "תיאור פריט", "שם מוצר", "תיאור", "פריט", "מוצר", "דגם"]):
+                        if col_map["name_col"] is None:
+                            col_map["name_col"] = idx
+                    elif any(w in hl for w in ["מק\"ט", "מקט", "ברקוד", "קוד פריט", "sku", "barcode"]):
+                        if col_map["sku_col"] is None:
+                            col_map["sku_col"] = idx
                 continue
 
             # 1. Check if row is a Lab Repair Ticket (contains a phone number or repair status keyword)
@@ -3548,10 +3718,11 @@ def _ingest_neworder_rows_into_db(rows: list[list[str]], source_label: str = "")
                 m_tid = re.search(r"\b(\d{3,7})\b", clean_cells[0])
                 ticket_id = m_tid.group(1) if m_tid else (f"NO-{phone_norm[-4:]}" if phone_norm else f"NO-{ abs(hash(row_joined)) % 10000 }")
                 status_label = matched_status or "בטיפול במעבדה"
-                price_val = extract_price_nis(row_joined)
+                _, _, rep_sale_price = _extract_sale_price_only_from_cells(clean_cells, col_map)
+                price_val = rep_sale_price or extract_price_nis(row_joined)
                 cust_name = clean_cells[1] if len(clean_cells) > 1 and not re.search(r"\d{4,}", clean_cells[1]) else ""
                 dev_model = clean_cells[2] if len(clean_cells) > 2 else ""
-                fault_desc = clean_cells[3] if len(clean_cells) > 3 else row_joined[:120]
+                fault_desc = clean_cells[3] if len(clean_cells) > 3 else ""
                 conn.execute(
                     """
                     INSERT INTO lab_repairs (ticket_id, phone, customer_name, device_model, fault_desc, status_label, price_nis, notes, updated_at)
@@ -3570,25 +3741,26 @@ def _ingest_neworder_rows_into_db(rows: list[list[str]], source_label: str = "")
                 repairs_added += 1
                 continue
 
-            # 2. Check if row is an Inventory / Price Item
-            price_val = extract_price_nis(row_joined)
-            if price_val:
-                sku_cand = clean_cells[0][:40]
-                prod_name = clean_cells[1] if len(clean_cells) > 1 and not clean_cells[1].isdigit() else clean_cells[0]
-                if len(prod_name) >= 2 and not prod_name.isdigit():
-                    conn.execute(
-                        """
-                        INSERT INTO pos_inventory (sku, product_name, keywords, category, single_price, stock_qty, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(sku) DO UPDATE SET
-                            product_name=excluded.product_name,
-                            keywords=excluded.keywords,
-                            single_price=excluded.single_price,
-                            updated_at=excluded.updated_at
-                        """,
-                        (sku_cand, prod_name[:80], row_joined[:200], source_label or "NewOrder", int(price_val), 5, datetime.now().isoformat())
-                    )
-                    items_added += 1
+            # 2. Check if row is an Inventory / Price Item -> Extract ONLY Sale Price and Clean Product Name!
+            sku_cand, prod_name, sale_price_val = _extract_sale_price_only_from_cells(clean_cells, col_map)
+            if sale_price_val and prod_name and len(prod_name) >= 2 and not prod_name.isdigit():
+                if not sku_cand or sku_cand == prod_name:
+                    # Include hash of row so multiple importers for the same product name don't overwrite each other's price range!
+                    sku_cand = f"{prod_name[:30]}-{abs(hash(row_joined)) % 1000}"
+                # CONFIDENTIALITY FIREWALL: Store ONLY clean prod_name in keywords (NEVER store raw row_joined with supplier/cost!)
+                conn.execute(
+                    """
+                    INSERT INTO pos_inventory (sku, product_name, keywords, category, single_price, stock_qty, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(sku) DO UPDATE SET
+                        product_name=excluded.product_name,
+                        keywords=excluded.keywords,
+                        single_price=excluded.single_price,
+                        updated_at=excluded.updated_at
+                    """,
+                    (sku_cand[:50], prod_name[:80], prod_name[:120], source_label or "NewOrder", int(sale_price_val), 5, datetime.now().isoformat())
+                )
+                items_added += 1
         conn.commit()
         conn.close()
         if repairs_added > 0:
@@ -3767,20 +3939,26 @@ def explore_neworder_menus_and_data(
 
 def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> dict:
     """
-    Checks live POS / Cash Register inventory:
-    1. First via synced SQLite pos_inventory table
-    2. Second via live authenticated pull from NewOrder (https://cellular.neworder.co.il/heb/ or Cloud API)
-    Returns {"matched": bool, "answer": str, "item": dict}
+    Checks live POS / Cash Register inventory with strict POS Data Firewall & Multi-Importer Price Aggregation:
+    1. First checks synced SQLite pos_inventory table, aggregating ALL matching product rows across different importers.
+    2. Second performs a live authenticated pull from NewOrder (https://cellular.neworder.co.il/heb/), extracting ONLY Customer Sale Prices (never Cost Prices or Supplier/Importer names).
+    3. Returns an Estimated Price (מחיר משוערך) across importers + triggers a physical stock verification check with Eran (`requires_stock_check: True`).
     """
-    clean = (message_text or "").lower().strip()
+    clean = auto_fix_common_hebrew_typos((message_text or "").lower().strip())
     clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
-    if not clean_no_punct or is_scheduling_request(message_text) or is_price_dispute_or_challenge(message_text, recent_history):
+    if (
+        not clean_no_punct
+        or is_scheduling_request(message_text)
+        or is_price_dispute_or_challenge(message_text, recent_history)
+        or is_confidential_pos_inquiry(message_text)
+    ):
         return {"matched": False}
 
-    is_asking_color = any(w in clean for w in ["צבע", "צבעים", "באיזה צבע"])
-    is_asking_repair = any(w in clean for w in ["מסך", "סוללה", "שקע"])
+    is_asking_repair = any(w in clean for w in ["מסך", "סוללה", "שקע"]) and not is_screen_protector_or_accessory_context(clean)
+    matched_items = []
+    sale_prices_found = []
 
-    # 1. Check local SQLite pos_inventory (synced live from NewOrder)
+    # 1. Check local SQLite pos_inventory (synced live from NewOrder, already sanitized of cost/supplier columns)
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
@@ -3789,7 +3967,12 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
         conn.close()
         for r in rows:
             sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r
-            search_terms = [k.strip().lower() for k in f"{prod_name or ''},{kw_str or ''},{sku or ''}".split(",") if k.strip() and len(k.strip()) >= 2]
+            search_terms = [
+                k.strip().lower()
+                for k in f"{prod_name or ''},{kw_str or ''},{sku or ''}".split(",")
+                if k.strip() and len(k.strip()) >= 2
+            ]
+            row_matched = False
             for kw in search_terms:
                 kw_clean = "".join([c if c.isalnum() or c.isspace() else " " for c in kw]).strip()
                 if not kw_clean or len(kw_clean) < 2:
@@ -3797,25 +3980,29 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                 if "מסך" not in kw_clean and "תיקון" not in kw_clean and is_asking_repair:
                     continue
                 if re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct):
-                    item_dict = {
-                        "sku": sku, "product_name": prod_name, "keywords": kw_str, "category": cat,
-                        "price_galut": p_galut, "price_yemot": p_yemot, "single_price": p_single,
-                        "stock_qty": qty, "colors": colors
-                    }
-                    if is_asking_color and colors:
-                        ans = (
-                            f"המכשיר (*{prod_name}*) קיים אצלנו במלאי בצבעים: *{colors}*. 🎨📱\n"
-                            f"באיזה צבע תרצה לבחור כדי שנשריין עבורך את המכשיר כעת? 😃"
-                        )
-                        return {"matched": True, "answer": ans, "item": item_dict}
-                    ans = format_pos_item_answer(item_dict)
-                    if ans:
-                        return {"matched": True, "answer": ans, "item": item_dict}
+                    row_matched = True
+                    break
+            if row_matched:
+                item_dict = {
+                    "sku": sku,
+                    "product_name": prod_name,
+                    "keywords": prod_name,
+                    "category": cat,
+                    "price_galut": p_galut,
+                    "price_yemot": p_yemot,
+                    "single_price": p_single,
+                    "stock_qty": qty,
+                    "colors": colors,
+                }
+                matched_items.append(item_dict)
+                for p_val in (p_single, p_galut):
+                    if p_val and int(p_val) > 0:
+                        sale_prices_found.append(int(p_val))
     except Exception:
         pass
 
-    # 2. Live HTTP Pull from NewOrder (if credentials or API Key are configured)
-    if (NEWORDER_USERNAME and NEWORDER_PASSWORD) or POS_API_KEY or NEWORDER_COOKIE or NEWORDER_SESSION_CACHE.get('cookies'):
+    # 2. Live HTTP Pull from NewOrder (if not yet matched locally and credentials/session are configured)
+    if not matched_items and ((NEWORDER_USERNAME and NEWORDER_PASSWORD) or POS_API_KEY or NEWORDER_COOKIE or NEWORDER_SESSION_CACHE.get("cookies")):
         try:
             headers, cookies = build_neworder_auth_headers_and_cookies()
             if cookies or "Authorization" in headers:
@@ -3852,46 +4039,74 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                                 p_name = str(item.get("product_name") or item.get("itemName") or item.get("name") or item.get("description") or "").strip()
                                 if not p_name:
                                     continue
-                                p_price = item.get("price") or item.get("salePrice") or item.get("single_price")
-                                item_dict = {
-                                    "sku": str(item.get("sku") or item.get("barcode") or p_name),
-                                    "product_name": p_name,
-                                    "keywords": p_name,
-                                    "category": str(item.get("category") or ""),
-                                    "price_galut": item.get("price_galut") or p_price,
-                                    "price_yemot": item.get("price_yemot"),
-                                    "single_price": p_price,
-                                    "stock_qty": item.get("stock_qty", item.get("quantity", 5)),
-                                    "colors": str(item.get("colors") or ""),
-                                }
+                                # STRICT FIREWALL: Read ONLY salePrice / consumerPrice / price, NEVER costPrice / buyPrice / supplier!
+                                p_sale = item.get("salePrice") or item.get("consumerPrice") or item.get("retailPrice") or item.get("price") or item.get("single_price")
+                                try:
+                                    p_sale_int = int(float(str(p_sale))) if p_sale is not None else None
+                                except Exception:
+                                    p_sale_int = None
+                                if not p_sale_int or p_sale_int <= 0:
+                                    continue
                                 if any(w in p_name.lower() for w in clean_no_punct.split() if len(w) >= 2):
-                                    ans = format_pos_item_answer(item_dict)
-                                    if ans:
-                                        return {"matched": True, "answer": ans, "item": item_dict}
+                                    matched_items.append({
+                                        "sku": str(item.get("sku") or item.get("barcode") or p_name),
+                                        "product_name": p_name,
+                                        "keywords": p_name,
+                                        "category": str(item.get("category") or ""),
+                                        "price_galut": item.get("price_galut") or p_sale_int,
+                                        "price_yemot": item.get("price_yemot"),
+                                        "single_price": p_sale_int,
+                                        "stock_qty": 1,
+                                        "colors": str(item.get("colors") or ""),
+                                    })
+                                    sale_prices_found.append(p_sale_int)
                         else:
-                            for cells in _extract_html_table_rows(resp.text):
-                                row_joined = " | ".join(cells)
-                                if any(w in row_joined.lower() for w in clean_no_punct.split() if len(w) >= 3):
-                                    row_price = extract_price_nis(row_joined)
-                                    if row_price:
-                                        item_dict = {
-                                            "sku": cells[0] if cells else "ITEM",
-                                            "product_name": cells[1] if len(cells) > 1 else cells[0],
-                                            "keywords": row_joined,
-                                            "category": "",
-                                            "price_galut": None,
-                                            "price_yemot": None,
-                                            "single_price": row_price,
-                                            "stock_qty": 5,
-                                            "colors": "",
-                                        }
-                                        ans = format_pos_item_answer(item_dict)
-                                        if ans:
-                                            return {"matched": True, "answer": ans, "item": item_dict}
+                            table_rows = _extract_html_table_rows(resp.text)
+                            if table_rows:
+                                # Ingest through the strict firewall so cost/supplier columns are stripped
+                                _ingest_neworder_rows_into_db(table_rows, "LivePOS")
+                                # Re-check local DB after sanitized ingestion
+                                conn = sqlite3.connect(DB_PATH)
+                                rows2 = conn.execute(
+                                    "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors FROM pos_inventory ORDER BY id DESC"
+                                ).fetchall()
+                                conn.close()
+                                for r in rows2:
+                                    sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r
+                                    if prod_name and any(w in prod_name.lower() for w in clean_no_punct.split() if len(w) >= 3):
+                                        matched_items.append({
+                                            "sku": sku,
+                                            "product_name": prod_name,
+                                            "keywords": prod_name,
+                                            "category": cat,
+                                            "price_galut": p_galut,
+                                            "price_yemot": p_yemot,
+                                            "single_price": p_single,
+                                            "stock_qty": qty,
+                                            "colors": colors,
+                                        })
+                                        if p_single and int(p_single) > 0:
+                                            sale_prices_found.append(int(p_single))
                     except Exception:
                         continue
         except Exception as e_pos:
             print(f"[NewOrder Live Inventory Pull Notice]: {e_pos}")
+
+    if matched_items and sale_prices_found:
+        primary_item = matched_items[0]
+        unique_prices = sorted(set(sale_prices_found))
+        est_str = f"{unique_prices[0]}–{unique_prices[-1]} ₪" if len(unique_prices) >= 2 else f"{unique_prices[0]} ₪"
+        ans = format_pos_item_answer(primary_item, unique_prices)
+        if ans:
+            return {
+                "matched": True,
+                "requires_stock_check": True,
+                "answer": ans,
+                "item": primary_item,
+                "estimated_price_str": est_str,
+                "all_sale_prices": unique_prices,
+                "importers_count": len(matched_items),
+            }
 
     return {"matched": False}
 
@@ -4075,13 +4290,8 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
     Uses whole-word, phrase, and conversation-context matching, preventing spurious matches on stopwords.
     Never returns canned KB answers when the customer is disputing/challenging a price or scheduling!
     """
-    if is_scheduling_request(message_text) or is_price_dispute_or_challenge(message_text, recent_history):
+    if is_scheduling_request(message_text) or is_price_dispute_or_challenge(message_text, recent_history) or is_confidential_pos_inquiry(message_text):
         return ""
-
-    # 0. Check Live POS / Cash Register Inventory FIRST!
-    pos_hit = lookup_live_pos_inventory(message_text, recent_history)
-    if pos_hit.get("matched") and pos_hit.get("answer"):
-        return pos_hit["answer"]
 
     clean = auto_fix_common_hebrew_typos((message_text or "").lower().strip())
     clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
@@ -7520,6 +7730,14 @@ async def unified_whatsapp_webhook(req: Request):
         save_chat_message(sender_phone, "agent", owner_reply)
         return {"ok": True, "reply": owner_reply, "type": "store_owner_info"}
 
+    # 2.55 FAST DETERMINISTIC FIREWALL: Block Confidential POS Inquiries (Cost Price, Suppliers/Importers, Margins, POS Reports)
+    if is_confidential_pos_inquiry(message_text):
+        conf_reply = get_confidential_pos_block_reply()
+        send_whatsapp_message(sender_phone, conf_reply, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", conf_reply)
+        return {"ok": True, "reply": conf_reply, "type": "confidential_pos_blocked", "escalated": False}
+
     # 2.6 FAST DETERMINISTIC PATH: NewOrder Cellular Repair Status Lookup ("מה מצב התיקון שלי?", "האם המכשיר מוכן?")
     if is_repair_status_inquiry(message_text):
         rep_lookup = lookup_cellular_repair_status(sender_phone, message_text)
@@ -7762,6 +7980,64 @@ async def unified_whatsapp_webhook(req: Request):
             
         return {"ok": True, "reply": reply_kb, "type": "learned_kb_direct", "escalated": False, "open_sale": is_open_kb_sale}
 
+    # 3.55 FAST DETERMINISTIC PATH: Live POS Inventory (Multi-Importer Estimated Sale Price + Physical Stock Check with Eran)
+    pos_hit = lookup_live_pos_inventory(message_text, recent_history)
+    if pos_hit.get("matched") and pos_hit.get("answer"):
+        salutation = f"שלום {customer_name}, מה שלומך? " if (customer_name and msg_count <= 1 and not already_greeted) else ""
+        reply_pos = f"{salutation}{pos_hit['answer']}"
+        send_whatsapp_message(sender_phone, reply_pos, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", reply_pos)
+
+        pos_item = pos_hit.get("item") or {}
+        prod_title = pos_item.get("product_name") or "מוצר מהקופה"
+        est_price_str = pos_hit.get("estimated_price_str") or f"{pos_item.get('single_price') or ''} ₪"
+        importers_cnt = pos_hit.get("importers_count", 1)
+        cust_phone_fmt = format_phone_display(sender_phone)
+
+        saved_pos_req_id = None
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sender_phone,
+                    "נעם שיח - קופה ומלאי",
+                    message_text,
+                    f"נמסר ללקוח מחיר מכירה משוערך מהקופה ({est_price_str} עבור {prod_title}) ונשלחה בדיקת מלאי פיזי לערן",
+                    "",
+                    "pending",
+                    datetime.now().isoformat(),
+                ),
+            )
+            saved_pos_req_id = cur.lastrowid
+            conn.commit()
+            conn.close()
+        except Exception as e_pr:
+            print(f"[POS Request Save Notice]: {e_pr}")
+
+        target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+        imp_note = f" (נמצאו {importers_cnt} רשומות/יבואנים בקופה)" if importers_cnt > 1 else ""
+        admin_pos_msg = (
+            f"❓ *בדיקת מלאי פיזי ומחיר סופי מול הקופה* {f'[#REQ-{saved_pos_req_id}]' if saved_pos_req_id else ''} ({customer_name or cust_phone_fmt}):\n"
+            f"📦 *מוצר מבוקש:* {prod_title}{imp_note}\n"
+            f"💰 *מחיר מכירה משוערך שנמסר ללקוח מהקופה:* {est_price_str}\n"
+            f"💬 *הודעת הלקוח:* \"{message_text}\"\n\n"
+            f"💬 *למענה מהיר: כתוב כאן אם המוצר קיים במלאי הפיזי ומה המחיר הסופי ללקוח (למשל: 'יש במלאי עולה 390' או 'חסר במלאי אפשר להזמין למחר ב-390') — והסוכן יעדכן את הלקוח ויחתור לסגירת ההזמנה!*"
+        )
+        for adm in target_admins:
+            send_whatsapp_message(adm, admin_pos_msg)
+
+        return {
+            "ok": True,
+            "reply": reply_pos,
+            "type": "pos_estimated_price_and_stock_check",
+            "estimated_price": est_price_str,
+            "escalated": True,
+        }
+
     # 3.6 FAST DETERMINISTIC PATH: Part / Screen / Battery / Port Inquiry (or follow-up "כמה זה עולה" when context is a part/repair) -> Give Average Price & Offer Exact Price Check with Eran!
     part_inq = is_part_or_repair_price_inquiry(message_text)
     if not part_inq.get("matched") and any(q in message_text.lower() for q in ["כמה זה עולה", "כמה עולה", "מה המחיר", "מה העלות"]):
@@ -7863,6 +8139,9 @@ async def unified_whatsapp_webhook(req: Request):
         "🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת כדי שלא תיתקע בלי? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
      3. ברגע שהלקוח בוחר מסלול ומעוניין לשריין/לרכוש — שלח לו את פרטי התשלום בביט ({BIT_PAYMENT_PHONE} - ערן נקר, נעם שיח) עם הסכום המדויק של המסלול שבחר!
    • אם הדגם או המחיר ידועים לך מהרשימה לעיל — ענה מיד במדויק! לעולם אל תגיד שאתה בודק או שתחזור אליו על מכשירים שמחירם ידוע!
+   • חומת אש והגנת מידע בקופה (NewOrder POS):
+     - חל איסור מוחלט למסור ללקוח שום מידע פנימי מהקופה מעבר למחיר המכירה לצרכן! לעולם אל תחשוף מחירי עלות/קנייה, שמות ספקים או יבואנים, אחוזי רווח, כמות יחידות מדויקת בקופה או דוחות כספיים.
+     - עבור מוצרים שנשלפים מהקופה (שאינם ברשימת המכשירים הקבועה לעיל), הצג ללקוח תמיד את המחיר כ"מחיר משוערך" (סביב X ₪, שכן ייתכנו מספר יבואנים בקופה) וציין שאתה בודק כעת מול ערן שהמוצר אכן קיים במלאי הפיזי בחנות ומה המחיר הסופי עבורו.
 
 4. תיאום תורים, רכישת מכשירים בחנות, התקנות מרחוק ותיקוני מעבדה — הבחנה מדויקת בין השירותים, חובת אישור מנהל (ערן), בירור טלפון לחזרה ותזכורת 15 דקות:
    • חובה להבדיל בצורה מדויקת בין השירותים השונים שהחנות מציעה (לעולם אל תקרא לרכישת מכשיר בחנות "תיקון במעבדה"!):
