@@ -69,6 +69,10 @@ DEFAULT_ADMIN_PHONE = "972524043644"
 _raw_admin = os.getenv("ADMIN_WHATSAPP_PHONE", DEFAULT_ADMIN_PHONE).strip().strip('"').strip("'")
 ADMIN_WHATSAPP_PHONE = DEFAULT_ADMIN_PHONE if (not _raw_admin or _raw_admin == "972500000000") else _raw_admin
 
+# Bit Payment Configuration (until a direct payment terminal is connected)
+BIT_PAYMENT_PHONE = os.getenv("BIT_PAYMENT_PHONE", "052-4043644").strip().strip('"').strip("'")
+BIT_PAYMENT_PHONE_DIGITS = "0524043644" 
+
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "").strip().strip('"').strip("'")
 PORT = os.getenv("PORT", "8000")
 
@@ -732,6 +736,118 @@ def generate_google_calendar_link(title: str, start_iso: str, end_iso: str, deta
     }
     return f"{base}&{urllib.parse.urlencode(params)}"
 
+def extract_price_nis(text: str) -> str:
+    """
+    Extracts an explicit price in NIS (₪) from Admin or request text.
+    Ignores phone numbers, model numbers (like A14, A54, S24, F21, F22, F25, 15, 16), and request IDs.
+    """
+    if not text:
+        return ""
+    clean = re.sub(r"\[#?req-?\d+\]|#req-?\d+|#\d+", " ", text, flags=re.IGNORECASE)
+    # Strip Israeli phone numbers
+    clean = re.sub(r"\b(?:05[0-9]-?[0-9]{7}|0[23489]-?[0-9]{7}|9725[0-9]{8})\b", " ", clean)
+    # Strip device model numbers like A14, A24, S23, F21, Note 10, iPhone 15, etc.
+    clean = re.sub(
+        r"\b(?:[aAsSmMfFqQ]\s*-?\s*\d{1,3}|(?:גלקסי|galaxy|אייפון|iphone|שיאומי|xiaomi|redmi|רדמי|note|נוט|qin)\s*\d{1,3})\b",
+        " ",
+        clean,
+        flags=re.IGNORECASE
+    )
+    # Strip time formats HH:MM
+    clean = re.sub(r"\b[0-2]?[0-9]:[0-5][0-9]\b", " ", clean)
+
+    # 1. Explicit currency match (e.g. "280 שח", "280 ₪", "280 ש\"ח", "280 שקל")
+    m_cur = re.search(r"\b(\d{2,4})\s*(?:₪|ש\"ח|ש''ח|שח|שקלים|שקל)\b", clean)
+    if m_cur:
+        return m_cur.group(1)
+
+    # 2. Price context match (e.g. "מחיר 280", "עולה 280", "ב-280", "ב 280", "המחיר הוא 280")
+    m_ctx = re.search(r"(?:מחיר|עולה|עלות|בסך|סכום|לתשלום|להזמין\s+ב|ב-|ב\s+)\s*(\d{2,4})\b", clean)
+    if m_ctx:
+        val = int(m_ctx.group(1))
+        if 30 <= val <= 9000:
+            return str(val)
+
+    # 3. Standalone number in a short admin price reply (e.g. "280" or "280 אין במלאי אפשר להזמין")
+    for m_num in re.finditer(r"\b(\d{2,4})\b", clean):
+        val = int(m_num.group(1))
+        if 40 <= val <= 6000:
+            return str(val)
+
+    return ""
+
+def is_part_or_repair_price_inquiry(text: str) -> dict:
+    """
+    Detects when a customer is asking about the availability or price of a repair/part
+    (e.g., screen, battery, charging port) that is NOT already a fixed item in PERMANENT_LEARNED_KB (like Qin F21 screen).
+    Returns a dict with average price range, part label, and device description so the bot can:
+    1. Give the customer an average price range immediately.
+    2. Offer to check the exact price and availability with Eran.
+    """
+    clean = (text or "").strip().lower()
+    if not clean or is_scheduling_request(clean):
+        return {"matched": False}
+
+    # Skip if it's already a known fixed-price item in PERMANENT_LEARNED_KB (e.g. F21 screen or F21/F22/F25 purchase)
+    if any(k in clean for k in ["f21", "f22", "f25"]):
+        return {"matched": False}
+
+    is_screen = any(w in clean for w in ["מסך", "למסך", "המסך"])
+    is_battery = any(w in clean for w in ["סוללה", "בטריה", "הסוללה", "הבטריה"])
+    is_port = any(w in clean for w in ["שקע טעינה", "שקע", "טעינה"])
+
+    if not (is_screen or is_battery or is_port):
+        return {"matched": False}
+
+    # Ensure it's an inquiry about availability/price/repair/ordering
+    inquiry_signals = [
+        "יש", "כמה", "מחיר", "עולה", "עלות", "להחליף", "החלפת", "תיקון", "לתקן",
+        "להזמין", "במלאי", "נשבר", "הלך", "לא עובד", "?"
+    ]
+    has_device_mention = any(d in clean for d in [
+        "גלקסי", "galaxy", "סמסונג", "samsung", "אייפון", "iphone", "שיאומי", "xiaomi",
+        "רדמי", "redmi", "פוקו", "poco", "נוקיה", "nokia", "מכשיר", "טלפון", "פלאפון"
+    ]) or bool(re.search(r"\b[aAsSmM]\d{1,2}\b", clean))
+
+    if not (has_device_mention or any(s in clean for s in inquiry_signals)):
+        return {"matched": False}
+
+    if is_screen:
+        part_name = "החלפת מסך"
+        if any(w in clean for w in ["אייפון", "iphone"]):
+            avg_range = "350–650 ₪"
+        elif re.search(r"\b(?:a0|a1|a2|a3|m1|m2|m3|redmi|רדמי)", clean):
+            avg_range = "220–320 ₪"
+        elif any(w in clean for w in ["גלקסי", "galaxy", "סמסונג", "samsung"]):
+            avg_range = "250–450 ₪"
+        else:
+            avg_range = "220–400 ₪"
+    elif is_battery:
+        part_name = "החלפת סוללה"
+        avg_range = "150–250 ₪"
+    else:
+        part_name = "תיקון שקע טעינה"
+        avg_range = "150–220 ₪"
+
+    return {
+        "matched": True,
+        "part_name": part_name,
+        "avg_range": avg_range,
+    }
+
+def is_payment_confirmation_message(text: str, type_msg: str = "") -> bool:
+    """
+    Detects when a customer confirms they transferred payment via Bit (or sends a payment screenshot).
+    """
+    clean = (text or "").strip().lower()
+    if type_msg == "imageMessage" and any(w in clean for w in ["ביט", "bit", "שילמתי", "העברתי", "תשלום", "אישור", "אסמכתא", ""]):
+        return True
+    pay_signals = [
+        "שילמתי", "העברתי", "שלחתי בביט", "העברתי בביט", "שילמתי בביט", "ביצעתי העברה",
+        "בוצעה העברה", "שלחתי תשלום", "העברתי לך", "העברתי כסף", "שולם בביט", "שולם"
+    ]
+    return any(sig in clean for sig in pay_signals)
+
 def is_in_progress_or_question(text: str) -> bool:
     """
     Checks if a message is an open question, diagnostic inquiry, conditional offer (e.g. ordering a part/device
@@ -911,17 +1027,36 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "") -> tuple[str, bo
     adapted = re.sub(r"^אין\s+במלאי\s+ואפשר\s+להזמין", "כרגע אין במלאי, אך אפשר להזמין", adapted)
     adapted = re.sub(r"^אין\s+במלאי\s+אפשר\s+להזמין", "כרגע אין במלאי, אפשר להזמין", adapted)
 
+    # Check if Admin replied with a bare number/price (e.g. "280") or price for a part/repair inquiry
+    detected_price = extract_price_nis(adapted)
+    req_part_info = is_part_or_repair_price_inquiry(request_text)
+    if re.fullmatch(r"\d{2,4}", adapted.strip()) and detected_price:
+        adapted = f"המחיר המדויק הוא {detected_price} ₪"
+    elif detected_price and "₪" not in adapted and "שח" not in adapted and 'ש"ח' not in adapted and "שקל" not in adapted:
+        adapted = re.sub(rf"\b{re.escape(detected_price)}\b", f"{detected_price} ₪", adapted, count=1)
+
     # Check if this message is an open offer / ordering option or question awaiting the customer's response
     is_order_offer = any(w in adapted for w in ["אפשר להזמין", "ניתן להזמין", "להזמין לך", "להזמין עבורך", "נזמין לך"])
     is_conditional_choice = any(w in adapted for w in ["אם אתה רוצה", "אם תרצה", "אם אתה מעוניין", "אם זה מתאים לך", "אם נוח לך"])
 
-    if (is_order_offer or is_conditional_choice) and "?" not in adapted:
+    # If the original customer request was about a part/screen/repair (or checking exact price) and Admin provided/approved a price:
+    is_price_approval_for_part = bool(
+        detected_price and (
+            req_part_info.get("matched")
+            or any(w in (request_text or "") for w in ["מסך", "סוללה", "שקע", "חלק", "להזמין", "מחיר מדויק", "בדיקת מחיר"])
+        )
+    )
+
+    if is_price_approval_for_part and not is_order_offer and "?" not in adapted:
+        adapted = adapted.rstrip(".!, ") + ". האם תרצה שנזמין עבורך את החלק? 😃"
+        is_order_offer = True
+    elif (is_order_offer or is_conditional_choice) and "?" not in adapted:
         if is_order_offer:
             adapted = adapted.rstrip(".!, ") + ". האם תרצה שנזמין עבורך? 😃"
         else:
             adapted = adapted.rstrip(".!, ") + " — האם זה מתאים לך? 😃"
 
-    is_q = is_in_progress_or_question(adapted) or is_order_offer or is_conditional_choice
+    is_q = is_in_progress_or_question(adapted) or is_order_offer or is_conditional_choice or is_price_approval_for_part
     return adapted, is_q
 
 def format_admin_answer_for_customer(target_phone: str, admin_answer: str, request_text: str = "", customer_name: str = "", msg_count: int = 2) -> str:
@@ -2082,7 +2217,23 @@ async def unified_whatsapp_webhook(req: Request):
         )
     message_text = (message_text or "").strip()
 
-    if not sender_phone or not message_text:
+    if not sender_phone:
+        print(f"[Ignored] Missing sender_phone: typeMessage={type_msg}")
+        return {"ok": True, "note": "Ignored missing sender"}
+    if not message_text and type_msg == "imageMessage":
+        # Check if customer is awaiting Bit payment confirmation and sent a screenshot without caption
+        try:
+            _c_img = sqlite3.connect(DB_PATH)
+            _r_img = _c_img.execute(
+                "SELECT id FROM customer_requests WHERE (phone = ? OR phone LIKE ?) AND status = 'awaiting_bit_payment' LIMIT 1",
+                (sender_phone, f"%{sender_phone[-9:]}%")
+            ).fetchone()
+            _c_img.close()
+            if _r_img:
+                message_text = "שילמתי בביט (צילום מסך)"
+        except Exception:
+            pass
+    if not message_text:
         print(f"[Ignored] Non-message webhook event: sender={sender_phone}, typeMessage={type_msg}")
         return {"ok": True, "note": "Ignored non-text or system event"}
 
@@ -2393,19 +2544,40 @@ async def unified_whatsapp_webhook(req: Request):
                         conn.close()
                         return {"ok": True, "admin_action": "alternative_day_requested", "customer": target_cust_phone}
                 else:
-                    cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count)
-                    if is_admin_ans_in_prog or is_in_progress_or_question(cust_reply_msg):
-                        conn.execute(
-                            "UPDATE customer_requests SET status='awaiting_customer_reply', action_taken=? WHERE id=?",
-                            (adapted_admin_ans, target_pending[0])
+                    adm_price = extract_price_nis(admin_answer)
+                    # Check if customer had ALREADY agreed to order and was just waiting for Eran's exact price
+                    prev_action = conn.execute("SELECT action_taken FROM customer_requests WHERE id=?", (target_pending[0],)).fetchone()
+                    prev_action_str = (prev_action[0] if prev_action else "") or ""
+                    if adm_price and "ממתין למחיר מערן לשליחת ביט" in prev_action_str:
+                        name_str = f" {target_cust_name}" if (target_cust_name and target_cust_name not in COMMON_NON_NAMES and target_msg_count <= 1) else ""
+                        cust_reply_msg = (
+                            f"שלום{name_str}, חזרתי אליך בנוגע לפנייתך:\n"
+                            f"המחיר המדויק להזמנת החלק הוא *{adm_price} ₪*. 🛠️\n"
+                            f"כדי שנזמין עבורך את החלק מיד, ניתן להעביר כעת *{adm_price} ₪* בביט (Bit) למספר:\n"
+                            f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n\n"
+                            f"לאחר ההעברה, שלח לנו כאן עדכון או צילום מסך ונדאג להזמין לך את החלק באופן מיידי! 😃"
                         )
+                        conn.execute(
+                            "UPDATE customer_requests SET status='awaiting_bit_payment', action_taken=? WHERE id=?",
+                            (f"נשלחו פרטי תשלום בביט ({adm_price} ₪ ל-{BIT_PAYMENT_PHONE})", target_pending[0])
+                        )
+                        send_whatsapp_message(target_cust_phone, cust_reply_msg)
+                        save_chat_message(target_cust_phone, "agent", cust_reply_msg)
                     else:
-                        conn.execute(
-                            "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
-                            ("נענה על ידי מנהל", target_pending[0])
-                        )
-                    send_whatsapp_message(target_cust_phone, cust_reply_msg)
-                    save_chat_message(target_cust_phone, "agent", cust_reply_msg)
+                        cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, req_text, target_cust_name, target_msg_count)
+                        action_with_price = f"{adapted_admin_ans} [PRICE:{adm_price}]" if adm_price else adapted_admin_ans
+                        if is_admin_ans_in_prog or is_in_progress_or_question(cust_reply_msg):
+                            conn.execute(
+                                "UPDATE customer_requests SET status='awaiting_customer_reply', action_taken=? WHERE id=?",
+                                (action_with_price, target_pending[0])
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
+                                ("נענה על ידי מנהל", target_pending[0])
+                            )
+                        send_whatsapp_message(target_cust_phone, cust_reply_msg)
+                        save_chat_message(target_cust_phone, "agent", cust_reply_msg)
                 
                 # Start 35s timer for satisfaction closing check ONLY if not an in-progress question/step
                 if ("האם הצלחתי לעזור לך ולתת לך מענה לפנייתך" in cust_reply_msg or "האם אוכל לעזור לך במשהו נוסף" in cust_reply_msg) and not is_in_progress_or_question(cust_reply_msg):
@@ -2580,11 +2752,11 @@ async def unified_whatsapp_webhook(req: Request):
                 )
             return {"ok": True, "reply": reply_cb, "type": "callback_phone_confirmed", "callback_phone": cb_detected}
 
-    # 0.6 CHECK IF CUSTOMER HAS AN ACTIVE OPEN DIALOGUE / ORDER OFFER (status == 'awaiting_customer_reply')
+    # 0.6 CHECK IF CUSTOMER HAS AN ACTIVE OPEN DIALOGUE / ORDER OFFER / BIT PAYMENT (status IN ('awaiting_customer_reply', 'awaiting_price_check_consent', 'awaiting_bit_payment'))
     try:
         conn = sqlite3.connect(DB_PATH)
         active_open_row = conn.execute(
-            "SELECT id, request_text, action_taken FROM customer_requests WHERE (phone = ? OR phone LIKE ?) AND status = 'awaiting_customer_reply' ORDER BY id DESC LIMIT 1",
+            "SELECT id, request_text, action_taken, status FROM customer_requests WHERE (phone = ? OR phone LIKE ?) AND status IN ('awaiting_customer_reply', 'awaiting_price_check_consent', 'awaiting_bit_payment') ORDER BY id DESC LIMIT 1",
             (sender_phone, f"%{sender_phone[-9:]}%")
         ).fetchone()
         conn.close()
@@ -2592,11 +2764,99 @@ async def unified_whatsapp_webhook(req: Request):
         active_open_row = None
 
     if active_open_row and not is_scheduling_request(message_text):
-        open_req_id, open_req_text, open_action_taken = active_open_row
+        open_req_id, open_req_text, open_action_taken, open_status = active_open_row
         cust_clean = message_text.strip().lower()
         cust_phone_fmt = format_phone_display(sender_phone)
-        is_order_context = any(w in (open_action_taken or "") for w in ["להזמין", "נזמין", "הזמנה"])
         cust_has_neg = bool(re.search(r"\b(?:לא|אין\s+צורך|לא\s+צריך|לא\s+רוצה|לא\s+כרגע|מוותר|אסתדר)\b", cust_clean))
+
+        # (0.6.1) Customer is in 'awaiting_bit_payment' and confirms they paid via Bit (or sends screenshot)
+        if open_status == "awaiting_bit_payment":
+            if is_payment_confirmation_message(message_text, type_msg):
+                m_pr = re.search(r"(\d{2,4})\s*₪", open_action_taken or "")
+                paid_amount_str = f" בסך *{m_pr.group(1)} ₪*" if m_pr else ""
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"הלקוח עדכן שביצע העברה בביט: {message_text}", open_req_id))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                reply_paid = (
+                    f"תודה רבה! קיבלתי את העדכון על התשלום בביט{paid_amount_str} ועדכנתי את ערן להזמין עבורך את החלק מיד. 🛠️\n"
+                    f"נעדכן אותך ברגע שהחלק יגיע למעבדה!\n\n"
+                    f"האם אוכל לעזור לך במשהו נוסף? 😃"
+                )
+                send_whatsapp_message(sender_phone, reply_paid, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_paid)
+
+                ts = std_time.time()
+                PENDING_SATISFACTION_CHECKS[sender_phone] = ts
+                asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
+
+                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                for adm in target_admins:
+                    send_whatsapp_message(
+                        adm,
+                        f"💳 *אישור תשלום בביט והזמנת חלק!* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                        f"הלקוח עדכן שביצע העברה בביט{paid_amount_str} עבור: *{open_req_text}*\n"
+                        f"💬 *הודעת הלקוח:* \"{message_text}\"\n"
+                        f"📞 *טלפון הלקוח:* {cust_phone_fmt}\n"
+                        f"🛠️ *נא להזמין עבורו את החלק!*"
+                    )
+                return {"ok": True, "reply": reply_paid, "type": "bit_payment_confirmed"}
+
+        # (0.6.2) Customer was offered to check the exact price with Eran ('awaiting_price_check_consent')
+        if open_status == "awaiting_price_check_consent":
+            wants_exact_check = not cust_has_neg and (
+                is_satisfaction_yes(message_text)
+                or any(w in cust_clean for w in ["כן", "תבדוק", "בדוק", "אשמח", "בטח", "ודאי", "רוצה", "מעוניין", "סבבה", "בסדר", "מעולה", "בבקשה", "להזמין", "תברר"])
+            )
+            if wants_exact_check:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute(
+                        "UPDATE customer_requests SET status='pending', action_taken=? WHERE id=?",
+                        ("ממתין לאישור מחיר מדויק מערן", open_req_id)
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                reply_chk = "מעולה! אני בודק כעת מול ערן את הזמינות והמחיר המדויק וכבר חוזר אליך עם תשובה. 😃"
+                send_whatsapp_message(sender_phone, reply_chk, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_chk)
+
+                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                for adm in target_admins:
+                    send_whatsapp_message(
+                        adm,
+                        f"❓ *בדיקת מחיר מדויק ומלאי עבור לקוח* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                        f"📌 *פניית הלקוח:* \"{open_req_text}\"\n"
+                        f"💬 *הערה:* נתתי ללקוח הערכת מחיר ממוצעת ({open_action_taken}) והוא מבקש כעת לבדוק מולך מחיר מדויק וזמינות להזמנה.\n\n"
+                        f"💬 *למענה מהיר: כתוב כאן את המחיר המדויק (למשל: 'אין במלאי אפשר להזמין ב 280' או פשוט '280') והסוכן יציע ללקוח להזמין ולשלם בביט!*"
+                    )
+                return {"ok": True, "reply": reply_chk, "type": "escalated_exact_price_check", "escalated": True}
+            elif cust_has_neg:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", ("הלקוח ויתר על בדיקת מחיר מדויק", open_req_id))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                reply_no_chk = "בסדר גמור, בשמחה!\n\nהאם אוכל לעזור לך במשהו נוסף? 😃"
+                send_whatsapp_message(sender_phone, reply_no_chk, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_no_chk)
+
+                ts = std_time.time()
+                PENDING_SATISFACTION_CHECKS[sender_phone] = ts
+                asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
+                return {"ok": True, "reply": reply_no_chk, "type": "declined_exact_price_check"}
+
+        is_order_context = any(w in (open_action_taken or "") for w in ["להזמין", "נזמין", "הזמנה", "[PRICE:"])
         is_followup_q = (
             "?" in message_text
             or "؟" in message_text
@@ -2628,42 +2888,79 @@ async def unified_whatsapp_webhook(req: Request):
                 )
             return {"ok": True, "reply": reply_fq, "type": "open_dialogue_followup_question", "escalated": True}
 
-        # (B) Open dialogue was an Order Offer (e.g. "כרגע אין במלאי, אך אפשר להזמין אם אתה רוצה. האם תרצה שנזמין עבורך?")
+        # (B) Open dialogue was an Order Offer (e.g. after Eran approved the price or offered to order the part)
         if is_order_context:
             wants_to_order = not cust_has_neg and (
                 is_satisfaction_yes(message_text)
                 or any(w in cust_clean for w in ["כן", "רוצה", "תזמין", "תזמינו", "בטח", "ודאי", "אשמח", "מעוניין", "סבבה", "בסדר", "מעולה", "בבקשה", "להזמין"])
             )
             if wants_to_order:
-                try:
-                    conn = sqlite3.connect(DB_PATH)
-                    conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"הלקוח ביקש להזמין: {message_text}", open_req_id))
-                    conn.commit()
-                    conn.close()
-                except Exception:
-                    pass
-                reply_ord = (
-                    "מעולה! העברתי כעת לערן את הבקשה להזמין עבורך, ונעדכן אותך ברגע שיגיע למלאי. 🛠️\n\n"
-                    "האם אוכל לעזור לך במשהו נוסף? 😃"
-                )
-                send_whatsapp_message(sender_phone, reply_ord, raw_chat_id)
-                save_chat_message(sender_phone, "customer", message_text)
-                save_chat_message(sender_phone, "agent", reply_ord)
+                # Extract approved price from open_action_taken or open_req_text
+                m_saved_price = re.search(r"\[PRICE:(\d{2,4})\]", open_action_taken or "")
+                approved_price = m_saved_price.group(1) if m_saved_price else (extract_price_nis(open_action_taken or "") or extract_price_nis(open_req_text or ""))
 
-                ts = std_time.time()
-                PENDING_SATISFACTION_CHECKS[sender_phone] = ts
-                asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
-
-                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
-                for adm in target_admins:
-                    send_whatsapp_message(
-                        adm,
-                        f"📦 *אישור הזמנה מלקוח* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
-                        f"הלקוח ביקש להזמין! (בהמשך לפנייה: \"{open_req_text}\")\n"
-                        f"💬 *תשובת הלקוח:* \"{message_text}\"\n"
-                        f"📞 *טלפון הלקוח:* {cust_phone_fmt}"
+                if approved_price:
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        conn.execute(
+                            "UPDATE customer_requests SET status='awaiting_bit_payment', action_taken=? WHERE id=?",
+                            (f"הלקוח אישר הזמנה - נשלחו פרטי תשלום בביט על סך {approved_price} ₪ ל-{BIT_PAYMENT_PHONE}", open_req_id)
+                        )
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        pass
+                    reply_ord = (
+                        f"מעולה! כדי שנזמין עבורך את החלק מיד, אנא העבר כעת *{approved_price} ₪* בביט (Bit) למספר:\n"
+                        f"📱 *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח)\n\n"
+                        f"לאחר ההעברה, שלח לנו כאן עדכון או צילום מסך, ועדכנתי כבר עכשיו את ערן להזמין עבורך את החלק! 🛠️😃"
                     )
-                return {"ok": True, "reply": reply_ord, "type": "customer_confirmed_order"}
+                    send_whatsapp_message(sender_phone, reply_ord, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reply_ord)
+
+                    target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                    for adm in target_admins:
+                        send_whatsapp_message(
+                            adm,
+                            f"📦 *הלקוח אישר הזמנה! נא להזמין את החלק* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                            f"📌 *עבור:* {open_req_text}\n"
+                            f"💰 *סכום לתשלום בביט:* {approved_price} ₪ (נשלחו ללקוח פרטי העברה בביט למספר {BIT_PAYMENT_PHONE})\n"
+                            f"💬 *תשובת הלקוח:* \"{message_text}\"\n"
+                            f"📞 *טלפון הלקוח:* {cust_phone_fmt}"
+                        )
+                    return {"ok": True, "reply": reply_ord, "type": "customer_confirmed_order_bit_sent", "amount": approved_price, "bit_phone": BIT_PAYMENT_PHONE}
+                else:
+                    # Customer wants to order, and Eran hasn't stated the exact price yet -> send Bit number + ask Eran for exact amount & tell Eran to order the part!
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        conn.execute(
+                            "UPDATE customer_requests SET status='pending', action_taken=? WHERE id=?",
+                            (f"הלקוח ביקש להזמין - ממתין למחיר מערן לשליחת ביט", open_req_id)
+                        )
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        pass
+                    reply_ord = (
+                        f"מעולה! העברתי כעת לערן הודעה להזמין עבורך את החלק. 🛠️\n"
+                        f"התשלום עבור ההזמנה מתבצע בביט (Bit) למספר *{BIT_PAYMENT_PHONE}* — אני מוודא כעת מול ערן את הסכום המדויק להעברה ומיד מעדכן אותך כאן! 😃"
+                    )
+                    send_whatsapp_message(sender_phone, reply_ord, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reply_ord)
+
+                    target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                    for adm in target_admins:
+                        send_whatsapp_message(
+                            adm,
+                            f"📦 *הלקוח אישר הזמנה! נא להזמין את החלק* [#REQ-{open_req_id}] ({customer_name or cust_phone_fmt}):\n"
+                            f"📌 *עבור:* {open_req_text}\n"
+                            f"💬 *תשובת הלקוח:* \"{message_text}\"\n"
+                            f"📞 *טלפון הלקוח:* {cust_phone_fmt}\n\n"
+                            f"💳 *כתוב כאן את הסכום המדויק לתשלום (למשל: '280') כדי שהסוכן ישלח ללקוח את הסכום להעברה בביט ל-{BIT_PAYMENT_PHONE}!*"
+                        )
+                    return {"ok": True, "reply": reply_ord, "type": "customer_confirmed_order_awaiting_amount", "bit_phone": BIT_PAYMENT_PHONE}
             else:
                 # Customer declined the order or finished their remarks ("לא תודה", "לא כרגע", "אסתדר")
                 try:
@@ -2952,6 +3249,46 @@ async def unified_whatsapp_webhook(req: Request):
             
         return {"ok": True, "reply": reply_kb, "type": "learned_kb_direct", "escalated": False}
 
+    # 3.6 FAST DETERMINISTIC PATH: Part / Screen / Battery / Port Inquiry -> Give Average Price & Offer Exact Price Check with Eran!
+    part_inq = is_part_or_repair_price_inquiry(message_text)
+    if part_inq.get("matched"):
+        salutation = f"שלום {customer_name}, מה שלומך? " if (customer_name and msg_count <= 1 and not already_greeted) else ""
+        reply_avg = (
+            f"{salutation}המחיר הממוצע עבור {part_inq['part_name']} נע בדרך כלל סביב *{part_inq['avg_range']}* (בהתאם לדגם המדויק ולזמינות החלק). 🛠️\n\n"
+            f"האם תרצה שאבדוק כעת מול ערן את הזמינות במלאי ואת המחיר המדויק עבורך? 😃"
+        )
+        send_whatsapp_message(sender_phone, reply_avg, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", reply_avg)
+
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute(
+                "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sender_phone,
+                    "נעם שיח - מעבדה וחלפים",
+                    message_text,
+                    f"נמסר מחיר ממוצע ({part_inq['avg_range']}) והוצע לבדוק מחיר מדויק מול ערן",
+                    "",
+                    "awaiting_price_check_consent",
+                    datetime.now().isoformat()
+                )
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e_pi:
+            print(f"[Part Inquiry Save Notice]: {e_pi}")
+
+        return {
+            "ok": True,
+            "reply": reply_avg,
+            "type": "part_average_price_offered",
+            "avg_range": part_inq["avg_range"],
+            "escalated": False
+        }
+
     # 4. LLM Generation (Strictly ONLY 3.8 & 3.5 Flash models with full token headroom)
     reply_text = None
     used_model = None
@@ -3059,9 +3396,10 @@ async def unified_whatsapp_webhook(req: Request):
          (לעולם אל תגיד לו להגיע למעבדה, ולעולם אל תשאל "האם הצלחתי לעזור" באמצע תהליך דיאגנוסטיקה או בירור!)
      - שלב ג' (הנחיות לביצוע וציפייה לתשובה):
        כאשר מתקבלות ההנחיות מהמנהל, העבר אותן ללקוח ובקש ממנו לבצע ולעדכן אותך אם זה הסתדר.
-   • אם המחיר, עלות התיקון, או אפשרויות הטיפול בתקלות חומרה אינם ידועים לך בוודאות:
-     ענה ללקוח שאתה בודק כעת את הפרטים והמחיר העדכני וכבר חוזר אליו עם תשובה מדויקת (לעולם אל תגיד שתבדוק מחר, ולעולם אל תגיד "מול המעבדה").
-     חובה לתגית הסלמה מפורטת [ESCALATE: ...].
+   • בירור מחיר והזמנת חלקים / מסכים / תיקוני חומרה ותשלום בביט (Bit):
+     1. כאשר לקוח שואל על מסך או חלק חילוף שאינו במחירון הקבוע: ציין תחילה את המחיר הממוצע והצע ללקוח לבדוק מול ערן את הזמינות במלאי ואת המחיר המדויק ("האם תרצה שאבדוק כעת מול ערן את הזמינות במלאי ואת המחיר המדויק עבורך?").
+     2. לאחר שערן מאשר את המחיר המדויק: הצע ללקוח להזמין את החלק בשפה ישירה בגוף שני ("האם תרצה שנזמין עבורך?").
+     3. אם הלקוח מסכים להזמין: שלח ללקוח את מספר הטלפון להעברה בביט ({BIT_PAYMENT_PHONE}) ואת הסכום המדויק לתשלום, ועדכן את ערן להזמין את החלק.
    • נזקי מים / מכשיר שנפל למים / תקלות חומרה דחופות:
      - הנחיות מיידיות ומצילות מכשיר ללקוח: לכבות את המכשיר מיד, לא לחבר בשום אופן למטען, לא לנסות להדליק, ולהוציא סים ומגש כרטיס אם אפשר.
      - שים לב לשעת פעילות החנות כעת ({store_status['status_msg']}):
