@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 import base64
+import zlib
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -291,6 +292,10 @@ async def verify_green_api_on_startup():
         print("[Green-API Check] WHATSAPP_API_URL not configured or custom gateway in use.")
         return
     try:
+        await asyncio.to_thread(restore_inventory_and_rules_from_green_api)
+    except Exception as e_ar:
+        print(f"[Startup Auto-Restore Notice]: {e_ar}")
+    try:
         async with httpx.AsyncClient(timeout=10) as aclient:
             state_resp = await aclient.get(f"{base}/getStateInstance/{token}")
             print(f"[Green-API State]: {state_resp.status_code} - {state_resp.text[:120]}")
@@ -432,6 +437,71 @@ PERMANENT_LEARNED_KB = [
         )
     }
 ]
+
+# ----------------- Permanent POS Inventory Seed (Survives Code Updates Until Next Excel Upload) -----------------
+PERMANENT_POS_INVENTORY_SEED = [
+    {
+        "sku": "SEED-QLYX-Q8-AV",
+        "product_name": "qlyx q8 א.ו",
+        "keywords": "qlyx q8 א.ו | QLYX Q8 | q8 | קליקס q8 | קיו 8",
+        "category": "מכשיר כשר (קבוע)",
+        "price_galut": None,
+        "price_yemot": None,
+        "price_geula": None,
+        "single_price": 350,
+        "stock_qty": 5,
+        "colors": "שחור",
+    },
+    {
+        "sku": "SEED-QLYX-Q8-YS",
+        "product_name": "qlyx q8 י.ש",
+        "keywords": "qlyx q8 י.ש | QLYX Q8 | q8 | קליקס q8 | קיו 8",
+        "category": "מכשיר כשר (קבוע)",
+        "price_galut": None,
+        "price_yemot": None,
+        "price_geula": None,
+        "single_price": 370,
+        "stock_qty": 5,
+        "colors": "שחור",
+    },
+    {
+        "sku": "SEED-NOKIA-215",
+        "product_name": "נוקיה 215 4G כשר",
+        "keywords": "נוקיה 215 | nokia 215 | 215",
+        "category": "מכשיר כשר (קבוע)",
+        "price_galut": None,
+        "price_yemot": None,
+        "price_geula": None,
+        "single_price": 380,
+        "stock_qty": 5,
+        "colors": "שחור",
+    },
+    {
+        "sku": "SEED-NOKIA-225",
+        "product_name": "נוקיה 225 4G כשר",
+        "keywords": "נוקיה 225 | nokia 225 | 225",
+        "category": "מכשיר כשר (קבוע)",
+        "price_galut": None,
+        "price_yemot": None,
+        "price_geula": None,
+        "single_price": 420,
+        "stock_qty": 5,
+        "colors": "שחור, כחול",
+    },
+    {
+        "sku": "SEED-ESKOLS-4X4",
+        "product_name": "אסקולס 4X4 כשר",
+        "keywords": "אסקולס 4x4 | eskols 4x4 | 4x4",
+        "category": "מכשיר כשר (קבוע)",
+        "price_galut": None,
+        "price_yemot": None,
+        "price_geula": None,
+        "single_price": 450,
+        "stock_qty": 5,
+        "colors": "שחור",
+    },
+]
+
 
 
 # ----------------- Inactivity & Satisfaction Timers -----------------
@@ -3266,6 +3336,256 @@ def sync_pos_inventory_to_json():
         pass
 
 
+_WHATSAPP_HISTORY_RESTORE_ATTEMPTED = False
+
+def encode_pos_inventory_snapshot_b64(max_items: int = 250) -> str:
+    """
+    Compresses the current pos_inventory table into a compact zlib+base64 string
+    so it can be embedded in WhatsApp admin confirmation messages and recovered forever
+    across Render container rebuilds/redeploys!
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT product_name, single_price, price_galut, price_yemot, price_geula, colors FROM pos_inventory WHERE category != 'מכשיר כשר (קבוע)' ORDER BY id DESC LIMIT ?",
+            (max_items,)
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return ""
+        compact = [
+            [r[0], r[1], r[2], r[3], r[4], r[5] or ""]
+            for r in rows if r[0] and (r[1] or r[2] or r[3])
+        ]
+        if not compact:
+            return ""
+        raw_json = json.dumps(compact, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        compressed = zlib.compress(raw_json, level=9)
+        return base64.b64encode(compressed).decode("ascii")
+    except Exception:
+        return ""
+
+
+def decode_and_restore_pos_snapshot_b64(b64_str: str) -> int:
+    """Restores pos_inventory rows from a `[POS_SNAPSHOT_B64:...]` tag in WhatsApp chat history."""
+    if not b64_str:
+        return 0
+    try:
+        compressed = base64.b64decode(b64_str.strip())
+        raw_json = zlib.decompress(compressed).decode("utf-8")
+        compact = json.loads(raw_json)
+        if not isinstance(compact, list) or not compact:
+            return 0
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM pos_inventory WHERE category = 'מכשיר כשר (קבוע)'")
+        restored = 0
+        now_iso = datetime.now().isoformat()
+        for entry in compact:
+            if not isinstance(entry, list) or len(entry) < 2:
+                continue
+            p_name = str(entry[0] or "").strip()
+            p_single = entry[1]
+            p_galut = entry[2] if len(entry) > 2 else None
+            p_yemot = entry[3] if len(entry) > 3 else None
+            p_geula = entry[4] if len(entry) > 4 else None
+            p_colors = str(entry[5] or "") if len(entry) > 5 else ""
+            if not p_name:
+                continue
+            clean_disp = clean_pos_product_display_name(p_name)
+            sku_key = f"SNAP-{clean_disp[:24]}-{abs(hash(f'{p_name}-{p_single}-{p_galut}')) % 10000:04d}"
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO pos_inventory
+                (sku, product_name, keywords, category, price_galut, price_yemot, price_geula, single_price, stock_qty, colors, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    sku_key, p_name, f"{p_name} | {clean_disp}", "שוחזר מגיבוי ווצאפ",
+                    int(p_galut) if p_galut else None,
+                    int(p_yemot) if p_yemot else None,
+                    int(p_geula) if p_geula else None,
+                    int(p_single) if p_single else None,
+                    5, p_colors, now_iso
+                )
+            )
+            restored += 1
+        conn.commit()
+        conn.close()
+        if restored > 0:
+            sync_pos_inventory_to_json()
+        return restored
+    except Exception as e_dec:
+        print(f"[POS Snapshot Decode Notice]: {e_dec}")
+        return 0
+
+
+def _apply_silent_master_rule_from_history(text: str):
+    """Silently replays a 22015473: / 22015743: command from WhatsApp history without sending outgoing messages."""
+    orig_send = globals().get("send_whatsapp_message")
+    try:
+        globals()["send_whatsapp_message"] = lambda *a, **kw: True
+        handle_master_override_code_command(text, "972553164770", "972553164770@c.us")
+    except Exception:
+        pass
+    finally:
+        if orig_send is not None:
+            globals()["send_whatsapp_message"] = orig_send
+
+
+def restore_inventory_and_rules_from_green_api(force: bool = False) -> dict:
+    """
+    Automatic Cloud Self-Healing across Render code updates / redeploys!
+    Queries Green-API for the admin WhatsApp chat history and recent messages to automatically recover:
+    1. The latest Excel/CSV file (`documentMessage`) sent by Eran in WhatsApp (using `downloadUrl` or `POST /downloadFile/`).
+    2. Any embedded `[POS_SNAPSHOT_B64:...]` compressed inventory snapshot or `• *MODEL*: כ-PRICE ₪` lines in bot confirmation messages.
+    3. Any `עדכון מלאי:` text inventory messages.
+    4. Any `22015473:` / `22015743:` master override commands (phrasing updates & product prices) sent by Eran.
+    """
+    global _WHATSAPP_HISTORY_RESTORE_ATTEMPTED
+    if _WHATSAPP_HISTORY_RESTORE_ATTEMPTED and not force:
+        return {"ok": True, "skipped": True}
+    _WHATSAPP_HISTORY_RESTORE_ATTEMPTED = True
+
+    base, token, _ = parse_green_api_credentials()
+    if not base or not token:
+        return {"ok": False, "reason": "no_green_api_credentials"}
+
+    restored_items = 0
+    restored_rules = 0
+    excel_restored = False
+
+    try:
+        all_msgs = []
+        # 1. Fetch chat history for both of Eran's admin numbers
+        for adm_ph in ("972553164770", "972524043644"):
+            try:
+                resp_h = http_session.post(
+                    f"{base}/getChatHistory/{token}",
+                    json={"chatId": f"{adm_ph}@c.us", "count": 100},
+                    timeout=8.0
+                )
+                if resp_h.status_code == 200 and isinstance(resp_h.json(), list):
+                    all_msgs.extend(resp_h.json())
+            except Exception:
+                pass
+
+        # 2. Also fetch lastIncomingMessages & lastOutgoingMessages (up to 30 days)
+        for ep_name in ("lastIncomingMessages", "lastOutgoingMessages"):
+            try:
+                resp_l = http_session.get(
+                    f"{base}/{ep_name}/{token}",
+                    params={"minutes": 43200},
+                    timeout=8.0
+                )
+                if resp_l.status_code == 200 and isinstance(resp_l.json(), list):
+                    all_msgs.extend(resp_l.json())
+            except Exception:
+                pass
+
+        if not all_msgs:
+            return {"ok": False, "reason": "empty_history"}
+
+        # Deduplicate messages by idMessage and sort chronologically by timestamp (oldest -> newest)
+        by_id = {}
+        for idx_m, m in enumerate(all_msgs):
+            if not isinstance(m, dict):
+                continue
+            mid = str(m.get("idMessage") or f"idx-{idx_m}")
+            by_id[mid] = m
+        sorted_msgs = sorted(by_id.values(), key=lambda x: int(x.get("timestamp") or 0))
+
+        # A. Find the NEWEST documentMessage (.xlsx / .xls / .csv / .txt) or [POS_SNAPSHOT_B64:...]
+        for m in reversed(sorted_msgs):
+            t_msg = str(m.get("typeMessage") or "")
+            txt_m = str(m.get("textMessage") or m.get("extendedTextMessageData", {}).get("text") or m.get("caption") or "")
+
+            # Check for embedded compressed snapshot first if present in a newer message
+            m_snap = re.search(r"\[POS_SNAPSHOT_B64:([A-Za-z0-9+/=]+)\]", txt_m)
+            if m_snap and not excel_restored:
+                cnt_s = decode_and_restore_pos_snapshot_b64(m_snap.group(1))
+                if cnt_s > 0:
+                    restored_items += cnt_s
+                    excel_restored = True
+                    print(f"[Cloud Auto-Restore] Restored {cnt_s} POS items from WhatsApp [POS_SNAPSHOT_B64]!")
+                    break
+
+            if t_msg == "documentMessage" and not excel_restored:
+                doc_fn = str(m.get("fileName") or m.get("fileMessageData", {}).get("fileName") or "inventory.xlsx")
+                if any(doc_fn.lower().endswith(ext) for ext in (".xlsx", ".xls", ".csv", ".tsv", ".txt")):
+                    dl_url = str(m.get("downloadUrl") or m.get("fileMessageData", {}).get("downloadUrl") or "").strip()
+                    chat_id_m = str(m.get("chatId") or "972553164770@c.us")
+                    id_msg_m = str(m.get("idMessage") or "")
+                    file_bytes = b""
+                    if dl_url:
+                        try:
+                            fr = http_session.get(dl_url, timeout=12.0)
+                            if fr.status_code == 200 and fr.content:
+                                file_bytes = fr.content
+                        except Exception:
+                            pass
+                    # If downloadUrl expired or was empty, request a fresh downloadUrl from Green-API downloadFile!
+                    if not file_bytes and id_msg_m and chat_id_m:
+                        try:
+                            df_resp = http_session.post(
+                                f"{base}/downloadFile/{token}",
+                                json={"chatId": chat_id_m, "idMessage": id_msg_m},
+                                timeout=10.0
+                            )
+                            if df_resp.status_code == 200 and isinstance(df_resp.json(), dict):
+                                fresh_url = str(df_resp.json().get("downloadUrl") or "").strip()
+                                if fresh_url:
+                                    fr2 = http_session.get(fresh_url, timeout=12.0)
+                                    if fr2.status_code == 200 and fr2.content:
+                                        file_bytes = fr2.content
+                        except Exception:
+                            pass
+                    if file_bytes:
+                        parsed_rows = _parse_inventory_file_bytes(file_bytes, doc_fn)
+                        if parsed_rows:
+                            ing = _ingest_neworder_rows_into_db(parsed_rows, f"שחזור אוטומטי מווצאפ ({doc_fn})", clear_existing=True)
+                            if ing.get("items_added", 0) > 0:
+                                restored_items += ing["items_added"]
+                                excel_restored = True
+                                print(f"[Cloud Auto-Restore] Downloaded & restored {ing['items_added']} Excel items from '{doc_fn}'!")
+                                break
+
+        # B. Also scan outgoing bot messages for any quoted POS items ('• *MODEL*: כ-PRICE ₪' or '📦 *מוצר מבוקש:* *MODEL* ... 💰 *מחיר שנמסר ללקוח אוטומטית:* *PRICE*')
+        for m in sorted_msgs:
+            txt_m = str(m.get("textMessage") or m.get("extendedTextMessageData", {}).get("text") or "").strip()
+            if not txt_m:
+                continue
+            # 1. Sample lines in Excel confirmation message: "• *QLYX Q8*: כ-360 ₪"
+            for m_sl in re.finditer(r"•\s*\*([^*]+)\*:\s*(?:כ-|סביב\s*)?(\d{2,4})\s*₪", txt_m):
+                p_nm_s, p_pr_s = m_sl.group(1).strip(), int(m_sl.group(2))
+                if not any(w in p_nm_s for w in ["מסלול", "גלות", "ימות", "גאולה"]):
+                    save_learned_pos_product_prices(p_nm_s, single_price=p_pr_s)
+                    restored_items += 1
+            # 2. Automatic POS notification to Admin: "📦 *מוצר מבוקש:* *QLYX Q8* ... 💰 *מחיר שנמסר ללקוח אוטומטית:* *360 ₪*"
+            m_pos_notif = re.search(
+                r"מוצר\s+מבוקש:\*?\s*\*([^\*\n]+)\*.*?מחיר\s+שנמסר\s+ללקוח\s+אוטומטית:\*?\s*\*(\d{2,4})\s*₪",
+                txt_m,
+                flags=re.DOTALL
+            )
+            if m_pos_notif:
+                save_learned_pos_product_prices(m_pos_notif.group(1).strip(), single_price=int(m_pos_notif.group(2)))
+                restored_items += 1
+
+            # 3. Replay master override commands (22015473: / 22015743:) in chronological order
+            if is_master_override_code_command(txt_m):
+                _apply_silent_master_rule_from_history(txt_m)
+                restored_rules += 1
+
+    except Exception as e_rest:
+        print(f"[Cloud Auto-Restore Notice]: {e_rest}")
+
+    return {
+        "ok": True,
+        "excel_restored": excel_restored,
+        "restored_items": restored_items,
+        "restored_rules": restored_rules,
+    }
+
+
 def save_learned_pos_product_prices(
     product_name: str,
     single_price: int | None = None,
@@ -3477,8 +3797,23 @@ def format_pos_item_answer(
             f"אני מוודא כעת מול ערן שהמכשיר אכן זמין במלאי הפיזי בחנות — תרצה שנשריין עבורך יחידה כעת? באיזה מסלול אחריות תרצה לבחור ({choice_hint})? 😃"
         )
 
-    icon = "🛠️" if (_has_pos_accessory_or_part_word(clean_name) or is_repair_or_smartphone_context(clean_name) or "תיקון" in cat or "מעבדה" in cat or "חלק" in cat) else "📱"
+    is_acc_or_part = _has_pos_accessory_or_part_word(clean_name) or "תיקון" in cat or "מעבדה" in cat or "חלק" in cat
+    is_smartphone = is_repair_or_smartphone_context(clean_name) and not any(k in clean_name.lower() for k in ["f21", "f22", "f25", "qin", "qlyx", "q8"])
+    icon = "🛠️" if is_acc_or_part else "📱"
     multi_imp_note = " (מחיר ממוצע בין היבואנים במערכת)" if (importers_count > 1 or len(unique_prices) > 1) else ""
+
+    # If this is a kosher/store phone (like QLYX Q8, Nokia 215, Eskols 4X4) with a single/average POS price,
+    # always display the dynamic מסלול גלות description and the option to upgrade to מסלול ימות המשיח ⭐!
+    if not is_acc_or_part and not is_smartphone:
+        galut_desc = get_track_short_desc("galut")
+        yemot_desc = get_track_short_desc("yemot")
+        return (
+            f"המחיר המשוערך עבור מכשיר *{clean_name}* הוא כ-*{avg_price} ₪*{multi_imp_note}: 📱{color_line}\n"
+            f"• *מסלול גלות* ({galut_desc}): כ-*{avg_price} ₪*\n"
+            f"• ⭐ *מסלול ימות המשיח* ({yemot_desc}): ניתן לשדרג בתוספת 100 ₪ בלבד ({avg_price + 100} ₪)!\n\n"
+            f"אני מוודא כעת מול ערן שהמכשיר זמין במלאי הפיזי בחנות ומה המחיר הסופי עבורך — תרצה שנשריין עבורך יחידה כעת? באיזה מסלול אחריות תרצה לבחור (ימות המשיח ⭐ המומלץ או גלות)? 😃"
+        )
+
     return (
         f"המחיר המשוערך עבור *{clean_name}* הוא כ-*{avg_price} ₪*{multi_imp_note}. {icon}{color_line}\n"
         f"אני מוודא כעת מול ערן שהמוצר זמין במלאי הפיזי בחנות ומה המחיר הסופי עבורך — תרצה שנשריין ונזמין עבורך כעת? 😃"
@@ -5405,6 +5740,13 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
             return []
 
     rows = _fetch_all_pos_rows()
+    non_seed_rows = [r for r in rows if r[3] != "מכשיר כשר (קבוע)"]
+    if not non_seed_rows and not _WHATSAPP_HISTORY_RESTORE_ATTEMPTED:
+        try:
+            restore_inventory_and_rules_from_green_api()
+            rows = _fetch_all_pos_rows()
+        except Exception:
+            pass
 
     if not rows and ((NEWORDER_USERNAME and NEWORDER_PASSWORD) or POS_API_KEY or NEWORDER_COOKIE or NEWORDER_SESSION_CACHE.get("cookies")):
         try:
@@ -6138,6 +6480,24 @@ def init_db():
             c.execute("ALTER TABLE pos_inventory ADD COLUMN price_geula INTEGER")
         except Exception:
             pass
+        # Seed baseline POS products (including QLYX Q8, Nokia 215/225, Eskols 4X4) so pos_inventory is never empty after a code deploy
+        for seed_pi in PERMANENT_POS_INVENTORY_SEED:
+            c.execute("""
+                INSERT OR IGNORE INTO pos_inventory
+                (sku, product_name, keywords, category, price_galut, price_yemot, price_geula, single_price, stock_qty, colors, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (
+                seed_pi["sku"],
+                seed_pi["product_name"],
+                seed_pi["keywords"],
+                seed_pi["category"],
+                seed_pi["price_galut"],
+                seed_pi["price_yemot"],
+                seed_pi["price_geula"],
+                seed_pi["single_price"],
+                seed_pi["stock_qty"],
+                seed_pi["colors"],
+            ))
         if os.path.exists(BACKUP_POS_JSON_PATH):
             try:
                 with open(BACKUP_POS_JSON_PATH, "r", encoding="utf-8") as f:
@@ -8291,6 +8651,13 @@ async def unified_whatsapp_webhook(req: Request):
                         + (f"📋 *דגימת מוצרים ומחיר ממוצע שנטענו מהדוח:*\n{sample_str}" if sample_str else "")
                     )
                     send_whatsapp_message(sender_phone, msg_doc_ok, raw_chat_id)
+                    snap_b64 = encode_pos_inventory_snapshot_b64()
+                    if snap_b64 and len(snap_b64) < 6000:
+                        send_whatsapp_message(
+                            sender_phone,
+                            f"🔒 *גיבוי ענן אוטומטי של טבלת האקסל נשמר בהיסטוריית הווצאפ (חיוני לשחזור אוטומטי לאחר עדכוני קוד ב-Render):*\n[POS_SNAPSHOT_B64:{snap_b64}]",
+                            raw_chat_id
+                        )
                     return {"ok": True, "admin_action": "whatsapp_inventory_file_imported", "items_added": ing_res["items_added"], "total_pos_items": total_pos_now}
             except Exception as e_doc:
                 send_whatsapp_message(sender_phone, f"⚠️ שגיאה בקריאת קובץ המלאי ({doc_fn}): {e_doc}", raw_chat_id)
@@ -10326,6 +10693,9 @@ async def unified_whatsapp_webhook(req: Request):
         galut_p_num = pos_hit.get("galut_price") or pos_item.get("price_galut")
         yemot_p_num = pos_hit.get("yemot_price") or pos_item.get("price_yemot")
         geula_p_num = pos_hit.get("geula_price") or pos_item.get("price_geula")
+        if avg_p_num and not galut_p_num and not _has_pos_accessory_or_part_word(clean_title):
+            galut_p_num = int(avg_p_num)
+            yemot_p_num = int(avg_p_num) + 100
 
         pos_action_tags = f"נמסר ללקוח מחיר מהקופה ({est_price_str} עבור {clean_title}) [LAST_QUOTED_ITEM:{clean_title}]"
         if avg_p_num:
@@ -10358,7 +10728,8 @@ async def unified_whatsapp_webhook(req: Request):
         except Exception as e_pr:
             print(f"[POS Request Save Notice]: {e_pr}")
 
-        target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+        # Only send the background info notification to Admin when an external customer asks (not when Admin is testing from his own phone!)
+        target_admins = [] if (sender_phone in admin_numbers_set) else [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
         imp_note = f" (ממוצע של {importers_cnt} יבואנים/רשומות בדוח)" if importers_cnt > 1 else ""
         admin_pos_msg = (
             f"ℹ️ *עדכון אוטומטי מהקופה — הסוכן ענה ללקוח!* {f'[#REQ-{saved_pos_req_id}]' if saved_pos_req_id else ''} ({customer_name or cust_phone_fmt}):\n"
