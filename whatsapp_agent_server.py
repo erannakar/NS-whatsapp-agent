@@ -937,17 +937,89 @@ def extract_price_nis(text: str) -> str:
     return ""
 
 
+def extract_multi_track_prices_from_text(text: str) -> dict:
+    """
+    Extracts explicit warranty track prices (גלות, ימות המשיח, גאולה) from any Excel cell, product row, or Admin reply!
+    Examples supported:
+    - 'גלות 550 ימות המשיח 650 גאולה 750'
+    - 'בגלות 500, בימות המשיח 600, בגאולה 700'
+    - '550 גלות / 650 ימות המשיח / 750 גאולה'
+    - 'גלות: 450 | ימות המשיח: 550'
+    Returns {"galut": int|None, "yemot": int|None, "geula": int|None}
+    """
+    res = {"galut": None, "yemot": None, "geula": None}
+    if not text:
+        return res
+    s = auto_fix_common_hebrew_typos(str(text).lower())
+    # Remove phone numbers & tags
+    s = re.sub(r"\b(?:05[0-9]-?[0-9]{7}|0[23489]-?[0-9]{7}|9725[0-9]{8})\b", " ", s)
+    s = re.sub(r"\[#?req-?\d+\]", " ", s, flags=re.IGNORECASE)
+
+    # 1. Explicit [GALUT_PRICE:...], [YEMOT_PRICE:...], [GEULA_PRICE:...] tags
+    mg_tag = re.search(r"\[galut_price:(\d{2,4})\]", s, re.IGNORECASE)
+    my_tag = re.search(r"\[yemot_price:(\d{2,4})\]", s, re.IGNORECASE)
+    mge_tag = re.search(r"\[geula_price:(\d{2,4})\]", s, re.IGNORECASE)
+    if mg_tag:
+        res["galut"] = int(mg_tag.group(1))
+    if my_tag:
+        res["yemot"] = int(my_tag.group(1))
+    if mge_tag:
+        res["geula"] = int(mge_tag.group(1))
+
+    # 2. Track name followed by price OR price followed by track name (stripping markdown asterisks first!)
+    s_no_md = s.replace("*", " ")
+    # Galut
+    if not res["galut"]:
+        m_g = (
+            re.search(r"(?:מסלול\s+|ב-?|ב\s+)?גלות(?:\s*\([^)]*\))?\s*(?:הוא|עולה|במחיר|כ-|[:=\-])*\s*(\d{2,4})(?:\.\d+)?\b", s_no_md)
+            or re.search(r"\b(\d{2,4})(?:\.\d+)?\s*(?:₪|ש\"ח|ש''ח|שח|שקל|שקלים)?\s*(?:\([^)]*\)\s*)?(?:במסלול\s+|מסלול\s+|ב-?|ב\s+)?גלות\b", s_no_md)
+        )
+        if m_g and 40 <= int(m_g.group(1)) <= 9000:
+            res["galut"] = int(m_g.group(1))
+
+    # Yemot HaMashiach
+    if not res["yemot"]:
+        m_y = (
+            re.search(r"(?:מסלול\s+|ב-?|ב\s+)?ימות\s+המשיח(?:\s*\([^)]*\))?(?:\s*⭐)?\s*(?:הוא|עולה|במחיר|כ-|[:=\-])*\s*(\d{2,4})(?:\.\d+)?\b", s_no_md)
+            or re.search(r"\b(\d{2,4})(?:\.\d+)?\s*(?:₪|ש\"ח|ש''ח|שח|שקל|שקלים)?\s*(?:\([^)]*\)\s*)?(?:במסלול\s+|מסלול\s+|ב-?|ב\s+)?ימות\s+המשיח\b", s_no_md)
+        )
+        if m_y and 40 <= int(m_y.group(1)) <= 9000:
+            res["yemot"] = int(m_y.group(1))
+
+    # Geula
+    if not res["geula"]:
+        m_ge = (
+            re.search(r"(?:מסלול\s+|ב-?|ב\s+)?גאולה(?:\s*\([^)]*\))?(?:\s*🛡️)?\s*(?:הוא|עולה|במחיר|כ-|[:=\-])*\s*(\d{2,4})(?:\.\d+)?\b", s_no_md)
+            or re.search(r"\b(\d{2,4})(?:\.\d+)?\s*(?:₪|ש\"ח|ש''ח|שח|שקל|שקלים)?\s*(?:\([^)]*\)\s*)?(?:במסלול\s+|מסלול\s+|ב-?|ב\s+)?גאולה\b", s_no_md)
+        )
+        if m_ge and 40 <= int(m_ge.group(1)) <= 9000:
+            res["geula"] = int(m_ge.group(1))
+
+    # 3. Slash-separated 3-track shorthand in a price cell (e.g. '550 / 650 / 750' or '550/650/750')
+    if not any(res.values()):
+        m_slash3 = re.fullmatch(r"\s*(\d{3,4})\s*[/|]\s*(\d{3,4})\s*[/|]\s*(\d{3,4})\s*", s)
+        if m_slash3:
+            p_vals = sorted([int(m_slash3.group(1)), int(m_slash3.group(2)), int(m_slash3.group(3))])
+            if p_vals[0] < p_vals[1] < p_vals[2]:
+                res["galut"], res["yemot"], res["geula"] = p_vals[0], p_vals[1], p_vals[2]
+
+    return res
+
+
 def extract_kosher_device_track_prices(text: str, recent_history: str = "") -> dict:
     """
-    Identifies if a conversation or message involves a Kosher / Half-Touch device with 2 warranty tracks
-    (מסלול גלות and מסלול ימות המשיח ⭐), returning:
-    {"matched": bool, "device_label": str, "galut_price": str, "yemot_price": str}
+    Identifies if a conversation or message involves a Kosher / Half-Touch device with 2 or 3 warranty tracks
+    (מסלול גלות, מסלול ימות המשיח ⭐, and optionally מסלול גאולה 🛡️), returning:
+    {"matched": bool, "device_label": str, "galut_price": str, "yemot_price": str, "geula_price": str}
     """
     combined = f"{text or ''} {recent_history or ''}".lower()
-    # 1. Explicit tags [GALUT_PRICE:550] [YEMOT_PRICE:650]
-    m_g = re.search(r"\[galut_price:(\d{2,4})\]", combined, re.IGNORECASE)
-    m_y = re.search(r"\[yemot_price:(\d{2,4})\]", combined, re.IGNORECASE)
-    dev_label = "המכשיר"
+    m_item_tag = re.search(r"\[LAST_QUOTED_ITEM:([^\]]+)\]", f"{text or ''} {recent_history or ''}")
+    m_bold_dev = re.search(r"מכשיר\s*\*([^*]+)\*\s*(?:זמין|מופיע)", f"{text or ''} {recent_history or ''}")
+    dev_label = (
+        m_item_tag.group(1).strip()
+        if m_item_tag
+        else (m_bold_dev.group(1).strip() if m_bold_dev else "המכשיר")
+    )
     if any(k in combined for k in ["f21p", "f21 p", "f21 pro", "f21pro", "f21"]):
         dev_label = "שיאומי Qin F21 Pro"
     elif any(k in combined for k in ["f22p", "f22 p", "f22 pro", "f22pro", "f22"]):
@@ -955,58 +1027,52 @@ def extract_kosher_device_track_prices(text: str, recent_history: str = "") -> d
     elif any(k in combined for k in ["f25p", "f25 p", "f25 pro", "f25pro", "f25"]):
         dev_label = "F25 Pro"
 
-    if m_g and m_y:
-        return {
-            "matched": True,
-            "device_label": dev_label,
-            "galut_price": m_g.group(1),
-            "yemot_price": m_y.group(1)
-        }
-
-    # 2. Explicit prices next to גלות and ימות המשיח in text
-    m_galut_txt = (
-        re.search(r"(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?\s*(?:\([^)]*\)\s*)?(?:במסלול\s+|מסלול\s+|ב-?|ב\s+)?גלות", combined)
-        or re.search(r"גלות(?:\s*\([^)]*\))?\s*[:=-]?\s*(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?", combined)
-    )
-    m_yemot_txt = (
-        re.search(r"(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?\s*(?:\([^)]*\)\s*)?(?:במסלול\s+|מסלול\s+|ב-?|ב\s+)?ימות\s+המשיח", combined)
-        or re.search(r"ימות\s+המשיח(?:\s*\([^)]*\))?\s*[:=-]?\s*(\d{3,4})\s*(?:₪|ש\"ח|שח|שקל)?", combined)
-    )
-    if m_galut_txt and m_yemot_txt:
-        p1, p2 = int(m_galut_txt.group(1)), int(m_yemot_txt.group(1))
-        if p1 != p2:
+    # 1. Check explicit tags or inline text track prices in `text` first, then `combined`
+    for src_txt in [text or "", combined]:
+        parsed_tr = extract_multi_track_prices_from_text(src_txt)
+        pg, py, pge = parsed_tr.get("galut"), parsed_tr.get("yemot"), parsed_tr.get("geula")
+        if (pg and py) or (pg and pge) or (py and pge):
             return {
                 "matched": True,
                 "device_label": dev_label,
-                "galut_price": str(min(p1, p2)),
-                "yemot_price": str(max(p1, p2))
+                "galut_price": str(pg or ""),
+                "yemot_price": str(py or (pg + 100 if pg else "")),
+                "geula_price": str(pge or ""),
             }
 
-    # 2.5 Check live POS inventory table for custom synced device track prices
+    # 2. Check live POS inventory table for custom synced device track prices
     if not is_repair_or_smartphone_context(combined):
         try:
             conn = sqlite3.connect(DB_PATH)
             pos_rows = conn.execute(
-                "SELECT product_name, keywords, price_galut, price_yemot FROM pos_inventory WHERE price_galut IS NOT NULL AND price_yemot IS NOT NULL"
+                "SELECT product_name, keywords, price_galut, price_yemot, price_geula FROM pos_inventory "
+                "WHERE (price_galut IS NOT NULL AND price_yemot IS NOT NULL) OR price_geula IS NOT NULL"
             ).fetchall()
             conn.close()
-            for p_name, p_kws, pg, py in pos_rows:
-                terms = [t.strip().lower() for t in f"{p_name or ''},{p_kws or ''}".split(",") if len(t.strip()) >= 3]
+            for p_name, p_kws, pg, py, pge in pos_rows:
+                cl_nm = clean_pos_product_display_name(p_name or "")
+                terms = [t.strip().lower() for t in f"{cl_nm},{p_name or ''},{p_kws or ''}".replace("|", ",").split(",") if len(t.strip()) >= 2]
                 if any(t in combined for t in terms):
-                    return {"matched": True, "device_label": p_name, "galut_price": str(pg), "yemot_price": str(py)}
+                    return {
+                        "matched": True,
+                        "device_label": cl_nm or p_name,
+                        "galut_price": str(pg or ""),
+                        "yemot_price": str(py or (int(pg) + 100 if pg else "")),
+                        "geula_price": str(pge or ""),
+                    }
         except Exception:
             pass
 
     # 3. Known official device models when not a screen/repair inquiry
     if not is_repair_or_smartphone_context(combined):
         if any(k in combined for k in ["f21p", "f21 p", "f21 pro", "f21pro", "f21"]):
-            return {"matched": True, "device_label": "שיאומי Qin F21 Pro", "galut_price": "550", "yemot_price": "650"}
+            return {"matched": True, "device_label": "שיאומי Qin F21 Pro", "galut_price": "550", "yemot_price": "650", "geula_price": ""}
         if any(k in combined for k in ["f22p", "f22 p", "f22 pro", "f22pro", "f22"]):
-            return {"matched": True, "device_label": "שיאומי Qin F22 Pro", "galut_price": "770", "yemot_price": "870"}
+            return {"matched": True, "device_label": "שיאומי Qin F22 Pro", "galut_price": "770", "yemot_price": "870", "geula_price": ""}
         if any(k in combined for k in ["f25p", "f25 p", "f25 pro", "f25pro", "f25"]):
-            return {"matched": True, "device_label": "F25 Pro", "galut_price": "770", "yemot_price": "870"}
+            return {"matched": True, "device_label": "F25 Pro", "galut_price": "770", "yemot_price": "870", "geula_price": ""}
 
-    return {"matched": False, "device_label": dev_label, "galut_price": "", "yemot_price": ""}
+    return {"matched": False, "device_label": dev_label, "galut_price": "", "yemot_price": "", "geula_price": ""}
 
 
 def is_price_dispute_or_challenge(text: str, recent_history: str = "") -> bool:
@@ -1329,6 +1395,28 @@ def get_known_option_price(option_name: str, open_action_taken: str = "", recent
         for r_name, r_price in all_price_rows:
             if r_name and r_price and (r_name == canon or any(s in r_name.lower() for s in stems)):
                 return str(r_price).strip()
+    except Exception:
+        pass
+
+    # 1.5 Check pos_inventory table in SQLite for this accessory/option!
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        pos_opt_rows = conn.execute(
+            "SELECT product_name, single_price, price_galut FROM pos_inventory WHERE single_price IS NOT NULL OR price_galut IS NOT NULL"
+        ).fetchall()
+        conn.close()
+        matched_pos_opt_prices = []
+        for p_nm, p_sg, p_gl in pos_opt_rows:
+            if not p_nm:
+                continue
+            p_low = auto_fix_common_hebrew_typos(p_nm.lower())
+            if p_low == canon.lower() or any(len(s) >= 3 and s in p_low for s in stems):
+                pv = p_sg or p_gl
+                if pv and 15 <= int(pv) <= 2500:
+                    matched_pos_opt_prices.append(int(pv))
+        if matched_pos_opt_prices:
+            uniq_op = sorted(set(matched_pos_opt_prices))
+            return str(int(round(sum(uniq_op) / len(uniq_op))))
     except Exception:
         pass
 
@@ -2129,6 +2217,32 @@ def adapt_admin_answer(raw_answer: str, request_text: str = "", recent_history: 
         return f"{color_sentence}\n{ask_color}", True
 
     # =========================================================================
+    # LAYER 1.8: Multi-Track Prices (גלות, ימות המשיח, גאולה) in Admin's Answer!
+    # =========================================================================
+    adm_tracks = extract_multi_track_prices_from_text(clean)
+    adm_t_cnt = sum(1 for v in (adm_tracks.get("galut"), adm_tracks.get("yemot"), adm_tracks.get("geula")) if v and int(v) > 0)
+    if adm_t_cnt >= 2 and not is_scheduling_request(request_text):
+        raw_q_prod = clean_pos_product_display_name(extract_latest_customer_question(request_text))
+        q_toks = _normalize_pos_tokens(raw_q_prod, strip_stopwords=True)
+        prod_title = clean_pos_product_display_name(" ".join(q_toks)) if q_toks else "המכשיר"
+        if not prod_title or len(prod_title) < 2:
+            prod_title = "המכשיר"
+        t_lines = []
+        if adm_tracks.get("galut"):
+            t_lines.append(f"• *מסלול גלות* (אחריות יבואן רשמי): *{adm_tracks['galut']} ₪*")
+        if adm_tracks.get("yemot"):
+            t_lines.append(f"• ⭐ *מסלול ימות המשיח* (אחריות מעבדה מלאה בחדרה, תיקון אקספרס תוך שעתיים ומכשיר חלופי — המומלץ!): *{adm_tracks['yemot']} ₪*")
+        if adm_tracks.get("geula"):
+            t_lines.append(f"• 🛡️ *מסלול גאולה* (אחריות VIP פרימיום כוללת שבר וקורוזיה!): *{adm_tracks['geula']} ₪*")
+        choice_str = "ימות המשיח ⭐ המומלץ, גאולה 🛡️ או גלות" if adm_tracks.get("geula") else "ימות המשיח ⭐ המומלץ או גלות"
+        formatted_multi = (
+            f"מכשיר *{prod_title}* זמין עבורך במסלולי האחריות הבאים לבחירתך: 📱\n"
+            + "\n".join(t_lines)
+            + f"\n\n🔥 נשארו יחידות אחרונות במלאי! תרצה שנשריין עבורך מכשיר כעת? באיזה מסלול אחריות תרצה לבחור ({choice_str})? 😃"
+        )
+        return formatted_multi, True
+
+    # =========================================================================
     # LAYER 2: Specific Diagnostic & Instruction Templates
     # =========================================================================
     if re.search(r"(?:שישאל|תשאל|לשאול)\s+(?:את\s+הלקוח\s+|אותו\s+)?מה\s+סוג\s+ההגנה", clean, re.IGNORECASE):
@@ -2645,7 +2759,7 @@ def get_warranty_explanation_with_pdf(customer_name: str = "") -> str:
 🔥 נשארו יחידות אחרונות במלאי — באיזה מסלול אחריות תרצה לבחור כדי שנשריין עבורך את המכשיר כעת? 😃"""
 
 
-def detect_chosen_warranty_track(text: str, galut_price: str = "", yemot_price: str = "") -> str:
+def detect_chosen_warranty_track(text: str, galut_price: str = "", yemot_price: str = "", geula_price: str = "") -> str:
     """
     Detects if the customer is selecting a specific warranty track ('yemot', 'galut', or 'geula')
     to purchase/reserve a device (rather than asking 'what is the difference between tracks?'
@@ -2670,6 +2784,8 @@ def detect_chosen_warranty_track(text: str, galut_price: str = "", yemot_price: 
     if any(w in clean for w in ["מסלול גאולה", "גאולה"]):
         return "geula"
     # Match exact price number ONLY if it matches the active device's galut_price or yemot_price
+    if geula_price and re.search(rf"(?:^|\s){re.escape(str(geula_price))}(?:$|\s|₪)", clean):
+        return "geula"
     if yemot_price and re.search(rf"(?:^|\s){re.escape(str(yemot_price))}(?:$|\s|₪)", clean):
         return "yemot"
     if galut_price and re.search(rf"(?:^|\s){re.escape(str(galut_price))}(?:$|\s|₪)", clean):
@@ -2986,18 +3102,18 @@ def save_permanent_style_rule(pattern_from: str, replacement_to: str, rule_instr
 
 
 def sync_pos_inventory_to_json():
-    """Exports live synced POS inventory to local JSON cache for durability."""
+    """Exports live synced POS inventory (including Galut, Yemot HaMashiach, and Geula track prices) to local JSON cache."""
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
-            "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors, updated_at FROM pos_inventory"
+            "SELECT sku, product_name, keywords, category, price_galut, price_yemot, price_geula, single_price, stock_qty, colors, updated_at FROM pos_inventory"
         ).fetchall()
         conn.close()
         data = [
             {
                 "sku": r[0], "product_name": r[1], "keywords": r[2], "category": r[3],
-                "price_galut": r[4], "price_yemot": r[5], "single_price": r[6],
-                "stock_qty": r[7], "colors": r[8], "updated_at": r[9]
+                "price_galut": r[4], "price_yemot": r[5], "price_geula": r[6], "single_price": r[7],
+                "stock_qty": r[8], "colors": r[9], "updated_at": r[10]
             }
             for r in rows
         ]
@@ -3005,6 +3121,82 @@ def sync_pos_inventory_to_json():
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+def save_learned_pos_product_prices(
+    product_name: str,
+    single_price: int | None = None,
+    galut_price: int | None = None,
+    yemot_price: int | None = None,
+    geula_price: int | None = None,
+    colors: str = "",
+):
+    """
+    Permanently saves or updates a product's price (and any warranty track prices: גלות, ימות המשיח, גאולה)
+    in `pos_inventory` so the agent remembers them forever and never needs to ask Admin again!
+    """
+    clean_nm = clean_pos_product_display_name(product_name or "")
+    if not clean_nm or len(clean_nm) < 2:
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10.0)
+        q_tokens = _normalize_pos_tokens(clean_nm, strip_stopwords=True)
+        q_codes = _extract_model_codes(q_tokens)
+        existing_rows = conn.execute(
+            "SELECT id, sku, product_name, keywords, price_galut, price_yemot, price_geula, single_price, colors FROM pos_inventory"
+        ).fetchall()
+        matched_ids = []
+        for r_id, r_sku, r_nm, r_kw, r_pg, r_py, r_pge, r_ps, r_col in existing_rows:
+            sc = _score_pos_item_match(q_tokens, q_codes, r_nm or "", r_kw or "", r_sku or "", clean_nm)
+            if sc >= 1.2 or clean_pos_product_display_name(r_nm or "").lower() == clean_nm.lower():
+                matched_ids.append((r_id, r_pg, r_py, r_pge, r_ps, r_col))
+
+        eff_single = int(single_price) if single_price else (int(galut_price) if galut_price else (int(yemot_price) if yemot_price else None))
+        now_iso = datetime.now().isoformat()
+        if matched_ids:
+            for r_id, old_pg, old_py, old_pge, old_ps, old_col in matched_ids:
+                new_pg = int(galut_price) if galut_price else old_pg
+                new_py = int(yemot_price) if yemot_price else old_py
+                new_pge = int(geula_price) if geula_price else old_pge
+                new_ps = eff_single if eff_single else old_ps
+                new_col = colors if colors else (old_col or "")
+                conn.execute(
+                    "UPDATE pos_inventory SET price_galut=?, price_yemot=?, price_geula=?, single_price=?, colors=?, updated_at=? WHERE id=?",
+                    (new_pg, new_py, new_pge, new_ps, new_col, now_iso, r_id),
+                )
+        else:
+            sku_key = f"LEARNED-{clean_nm[:24]}-{abs(hash(clean_nm)) % 10000:04d}"
+            conn.execute(
+                """
+                INSERT INTO pos_inventory (sku, product_name, keywords, category, price_galut, price_yemot, price_geula, single_price, stock_qty, colors, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(sku) DO UPDATE SET
+                    price_galut=COALESCE(excluded.price_galut, pos_inventory.price_galut),
+                    price_yemot=COALESCE(excluded.price_yemot, pos_inventory.price_yemot),
+                    price_geula=COALESCE(excluded.price_geula, pos_inventory.price_geula),
+                    single_price=COALESCE(excluded.single_price, pos_inventory.single_price),
+                    colors=CASE WHEN excluded.colors != '' THEN excluded.colors ELSE pos_inventory.colors END,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    sku_key,
+                    clean_nm,
+                    f"{product_name} | {clean_nm}",
+                    "מכשיר/מוצר שנלמד",
+                    int(galut_price) if galut_price else None,
+                    int(yemot_price) if yemot_price else None,
+                    int(geula_price) if geula_price else None,
+                    eff_single,
+                    5,
+                    colors or "",
+                    now_iso,
+                ),
+            )
+        conn.commit()
+        conn.close()
+        sync_pos_inventory_to_json()
+    except Exception as e_slp:
+        print(f"[Save Learned POS Product Notice]: {e_slp}")
 
 POS_COLOR_WORDS = {
     "שחור", "לבן", "כחול", "אדום", "זהב", "כסף", "כסוף", "אפור", "ורוד", "ירוק", "סגול", "צהוב",
@@ -3034,9 +3226,15 @@ def clean_pos_product_display_name(raw_name: str, keep_color: bool = False) -> s
     s = str(raw_name).strip()
     # 1. Remove parenthetical annotations about importer, supplier, cost, or SKU
     s = re.sub(r"\([^)]*(?:יבואן|ספק|עלות|קנייה|קניה|רווח|מק\"ט|מקט|ברקוד|קוד)[^)]*\)", " ", s, flags=re.IGNORECASE)
-    # 2. Remove explicit importer/supplier/cost key-value tails
+    # 2. Remove explicit importer/supplier/cost key-value tails and trailing warranty track tags
     s = re.sub(
         r"\b(?:יבואן\s+רשמי|יבואן\s+מקביל|אחריות\s+יבואן|יבואן|ספק|עלות|מחיר\s+עלות|קנייה|קניה|המילטון|סאני|מודן|רונלייט|ברימאג|אלקטרה|קבוצת\s+ח\.?י)\b.*$",
+        " ",
+        s,
+        flags=re.IGNORECASE,
+    )
+    s = re.sub(
+        r"(?:\s+[-–|:/]?\s*)?\b(?:ב?מסלול\s+גלות|ב?מסלול\s+ימות\s+המשיח|ב?מסלול\s+גאולה|ימות\s+המשיח|גלות|גאולה)\b\s*$",
         " ",
         s,
         flags=re.IGNORECASE,
@@ -3093,21 +3291,22 @@ def format_pos_item_answer(
     """
     Formats a live POS inventory record into a customer WhatsApp response:
     - Cleans noisy POS product names & strips importer initials (e.g. 'qlyx q8 א.ו' -> 'QLYX Q8').
-    - Calculates the AVERAGE Sale Price (מחיר ממוצע) across all importers for this product.
+    - If the product has multiple warranty track prices (גלות, ימות המשיח, גאולה), displays all available tracks clearly!
+    - Otherwise calculates the AVERAGE Sale Price (מחיר ממוצע) across all importers for this product.
     - Exposes ONLY the Customer Sale Price (NEVER cost price, supplier/importer names, or internal counts).
-    - States clearly that the agent is checking physical stock availability in the store right now with Eran.
     """
     raw_name = item.get("product_name") or "המוצר"
     clean_name = item.get("clean_name") or clean_pos_product_display_name(raw_name)
     cat = (item.get("category") or "").lower()
     galut_p = item.get("price_galut")
     yemot_p = item.get("price_yemot")
+    geula_p = item.get("price_geula")
     single_p = item.get("single_price")
     colors = (item.get("colors") or "").strip()
 
     prices = [int(p) for p in (all_sale_prices or []) if p and int(p) > 0]
     if not prices:
-        for p_cand in (single_p, galut_p):
+        for p_cand in (single_p, galut_p, yemot_p, geula_p):
             if p_cand and int(p_cand) > 0:
                 prices.append(int(p_cand))
 
@@ -3117,20 +3316,29 @@ def format_pos_item_answer(
     unique_prices = sorted(set(prices))
     avg_price = int(round(sum(unique_prices) / len(unique_prices)))
 
-    color_line = f"\n🎨 *צבעים שמופיעים במערכת:* {colors}" if colors else ""
-    if galut_p and yemot_p and int(galut_p) != int(yemot_p) and ("כשר" in cat or "מכשיר" in cat or not is_repair_or_smartphone_context(clean_name)):
+    color_line = f"\n🎨 *צבעים במערכת:* {colors}" if colors else ""
+    track_count = sum(1 for tp in (galut_p, yemot_p, geula_p) if tp and int(tp) > 0)
+    if track_count >= 2 and not _has_pos_accessory_or_part_word(clean_name):
+        track_lines = []
+        if galut_p and int(galut_p) > 0:
+            track_lines.append(f"• *מסלול גלות* (אחריות יבואן רשמי): *{ int(galut_p) } ₪*")
+        if yemot_p and int(yemot_p) > 0:
+            track_lines.append(f"• ⭐ *מסלול ימות המשיח* (אחריות מעבדה מקומית בחדרה, תיקון אקספרס ומכשיר חלופי — המומלץ!): *{ int(yemot_p) } ₪*")
+        if geula_p and int(geula_p) > 0:
+            track_lines.append(f"• 🛡️ *מסלול גאולה* (אחריות VIP פרימיום כוללת שבר וקורוזיה!): *{ int(geula_p) } ₪*")
+        tracks_block = "\n".join(track_lines)
+        choice_hint = "ימות המשיח ⭐ המומלץ, גאולה 🛡️ או גלות" if (geula_p and int(geula_p) > 0) else "ימות המשיח ⭐ המומלץ או גלות"
         return (
-            f"המחיר המשוערך עבור מכשיר *{clean_name}* אצלנו הוא: 📱{color_line}\n"
-            f"• מסלול גלות (אחריות יבואן רשמי): כ-*{galut_p} ₪*\n"
-            f"• ⭐ מסלול ימות המשיח (אחריות מעבדה מקומית בחדרה — המומלץ!): כ-*{yemot_p} ₪*\n\n"
-            f"אני בודק כעת מול ערן שהמכשיר אכן זמין במלאי הפיזי בחנות ומה המחיר הסופי עבורך, וכבר חוזר אליך עם תשובה מדויקת! 😃"
+            f"מכשיר *{clean_name}* מופיע אצלנו במערכת במסלולי האחריות הבאים לבחירתך: 📱{color_line}\n"
+            f"{tracks_block}\n\n"
+            f"אני מוודא כעת מול ערן שהמכשיר אכן זמין במלאי הפיזי בחנות — תרצה שנשריין עבורך יחידה כעת? באיזה מסלול אחריות תרצה לבחור ({choice_hint})? 😃"
         )
 
-    icon = "🛠️" if (is_repair_or_smartphone_context(clean_name) or "תיקון" in cat or "מעבדה" in cat or "חלק" in cat) else "📱"
+    icon = "🛠️" if (_has_pos_accessory_or_part_word(clean_name) or is_repair_or_smartphone_context(clean_name) or "תיקון" in cat or "מעבדה" in cat or "חלק" in cat) else "📱"
     multi_imp_note = " (מחיר ממוצע בין היבואנים במערכת)" if (importers_count > 1 or len(unique_prices) > 1) else ""
     return (
         f"המחיר המשוערך עבור *{clean_name}* הוא כ-*{avg_price} ₪*{multi_imp_note}. {icon}{color_line}\n"
-        f"אני בודק כעת מול ערן שהמוצר אכן קיים במלאי הפיזי בחנות ומה המחיר המדויק עבורך, וכבר חוזר אליך! 😃"
+        f"אני מוודא כעת מול ערן שהמוצר זמין במלאי הפיזי בחנות ומה המחיר הסופי עבורך — תרצה שנשריין ונזמין עבורך כעת? 😃"
     )
 
 def _parse_aspnet_form_inputs(html_text: str) -> dict:
@@ -3755,16 +3963,29 @@ def _xlsx_col_ref_to_idx(cell_ref: str) -> int:
 
 def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) -> tuple[str, str, str]:
     """
-    Extracts ONLY (sku, raw_product_name, sale_price_nis) from a POS table / Excel / CSV row,
+    Backwards-compatible wrapper around `_extract_pos_row_details` returning (sku, raw_product_name, sale_price_nis).
+    """
+    info = _extract_pos_row_details(cells, col_map)
+    return info["sku"], info["prod_name"], info["sale_price"]
+
+
+def _extract_pos_row_details(cells: list[str], col_map: dict = None) -> dict:
+    """
+    Extracts full product & price details from a POS table / Excel / CSV row:
+      {"sku": str, "prod_name": str, "sale_price": str, "galut_price": int|None, "yemot_price": int|None, "geula_price": int|None, "colors": str}
     while STRICTLY blocking and discarding:
     - Cost / Purchase price columns (מחיר עלות / מחיר קנייה / עלות ספק)
     - Supplier / Importer columns (שם ספק / יבואן)
     - Profit / Margin / Total Inventory Value columns (רווח / סה"כ / שווי מלאי)
     - Stock quantity & Item code columns (כמות במלאי / קוד פריט / מק"ט)
-    NOTE: Expects `cells` with empty cells preserved at their original column indices so `col_map` indices align 1-to-1!
+    Supports:
+    - Dedicated track columns in Excel (`גלות`, `ימות המשיח`, `גאולה`)
+    - Multiple sale price columns (`sale_cols_ordered`) so if the primary price column is empty for a row, the next valid consumer price column is used automatically!
+    - Inline multi-track prices inside a cell or product name (e.g. 'גלות 550 ימות המשיח 650 גאולה 750' or 'שיאומי F21 גלות' = 550).
     """
+    empty_res = {"sku": "", "prod_name": "", "sale_price": "", "galut_price": None, "yemot_price": None, "geula_price": None, "colors": ""}
     if not cells:
-        return "", "", ""
+        return empty_res
     col_map = col_map or {}
     cost_cols = col_map.get("cost_cols", set())
     supplier_cols = col_map.get("supplier_cols", set())
@@ -3773,18 +3994,24 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
     ignore_cols = col_map.get("ignore_cols", set())
     sale_col = col_map.get("sale_col")
     sale_col_fallback = col_map.get("sale_col_fallback")
+    sale_cols_ordered = col_map.get("sale_cols_ordered") or [c for c in (sale_col, sale_col_fallback) if c is not None]
+    galut_col = col_map.get("galut_col")
+    yemot_col = col_map.get("yemot_col")
+    geula_col = col_map.get("geula_col")
+    color_col = col_map.get("color_col")
     name_col = col_map.get("name_col")
     sku_col = col_map.get("sku_col")
     has_header_map = bool(col_map.get("has_header_map", False))
 
-    forbidden_price_cols = cost_cols | supplier_cols | qty_cols | cat_cols | ignore_cols
+    all_price_cols_set = set(sale_cols_ordered) | {c for c in (sale_col, sale_col_fallback, galut_col, yemot_col, geula_col) if c is not None}
+    forbidden_price_cols = (cost_cols | supplier_cols | qty_cols | cat_cols | ignore_cols) - all_price_cols_set
     if sku_col is not None:
         forbidden_price_cols.add(sku_col)
     if name_col is not None:
         forbidden_price_cols.add(name_col)
 
     cost_cell_markers = ["עלות", "קנייה", "קניה", "ספק", "יבואן", "רווח", "סיטונאי", "סה\"כ", "סהכ", "שווי", "cost", "buy", "margin", "supplier"]
-    sale_cell_markers = ["מכירה", "לצרכן", "מחירון", "ללקוח", "sale", "retail"]
+    sale_cell_markers = ["מכירה", "לצרכן", "מחירון", "ללקוח", "sale", "retail", "גלות", "ימות המשיח", "גאולה"]
 
     # 1. Determine SKU
     sku_val = ""
@@ -3793,7 +4020,7 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
     elif not has_header_map and len(cells) >= 3 and re.fullmatch(r"[A-Za-z0-9\-_]{2,20}", str(cells[0]).strip()):
         sku_val = str(cells[0]).strip()[:40]
 
-    # 2. Determine Product Name (keep raw product name like 'qlyx q8 א.ו' in DB so we know the importer row, and clean on display/match!)
+    # 2. Determine Product Name
     prod_name = ""
     if name_col is not None and name_col < len(cells):
         prod_name = str(cells[name_col]).strip()
@@ -3802,19 +4029,18 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
         best_cand = ""
         best_cand_score = -1
         for idx, c in enumerate(cells):
-            if idx in cost_cols or idx in supplier_cols or idx in qty_cols or idx in ignore_cols or idx == sale_col or idx == sale_col_fallback or idx == sku_col:
+            if idx in cost_cols or idx in supplier_cols or idx in qty_cols or idx in ignore_cols or idx in all_price_cols_set or idx == sku_col:
                 continue
             if idx in cat_cols and len(cells) > 2:
                 continue
             c_str = str(c).strip()
-            if not c_str or c_str.isdigit() or re.fullmatch(r"[\d.,₪\$ש\"ח\s\-+%]+", c_str):
+            if not c_str or c_str.isdigit() or re.fullmatch(r"[\d.,₪\$ש\"ח\s\-+%/|]+", c_str):
                 continue
             if idx == 0 and len(cells) >= 3 and re.fullmatch(r"(?:sku|מקט|מק\"ט|ברקוד|\d{2,14})", c_str, re.IGNORECASE):
                 continue
             if any(m in c_str.lower() for m in ["עלות:", "ספק:", "יבואן:", "רווח:", "סה\"כ"]):
                 continue
             if re.search(r"[א-תa-zA-Z]", c_str):
-                # Prefer cells that have both letters and model/product characteristics or multiple words
                 sc = len(c_str)
                 if re.search(r"[a-zA-Z]", c_str) and re.search(r"\d", c_str):
                     sc += 30
@@ -3830,18 +4056,56 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
 
     # Skip summary / total / header repetition rows
     if not prod_name or any(w in prod_name.lower() for w in ["סה\"כ", "סהכ ", "סיכום", "ממוצע", "תיאור פריט", "תאור פריט", "שם פריט", "שם מוצר"]):
-        return "", "", ""
+        return empty_res
 
-    # 3. Extract Customer Sale Price ONLY (never Cost Price, Item Code, or Total Valuation!)
+    # 3. Extract Track Prices (גלות, ימות המשיח, גאולה) from dedicated columns or inline text
+    galut_p = None
+    yemot_p = None
+    geula_p = None
+
+    if galut_col is not None and galut_col < len(cells):
+        gp_s = _parse_pos_price_cell(str(cells[galut_col]))
+        if gp_s and gp_s.isdigit():
+            galut_p = int(gp_s)
+    if yemot_col is not None and yemot_col < len(cells):
+        yp_s = _parse_pos_price_cell(str(cells[yemot_col]))
+        if yp_s and yp_s.isdigit():
+            yemot_p = int(yp_s)
+    if geula_col is not None and geula_col < len(cells):
+        gep_s = _parse_pos_price_cell(str(cells[geula_col]))
+        if gep_s and gep_s.isdigit():
+            geula_p = int(gep_s)
+
+    # Also check if any non-forbidden cell in the row contains inline multi-track text ('גלות 550 ימות המשיח 650 גאולה 750' or '550/650/750')
+    non_forbidden_text = " | ".join(
+        str(c).strip() for idx, c in enumerate(cells)
+        if idx not in forbidden_price_cols and str(c).strip()
+    )
+    inline_tracks = extract_multi_track_prices_from_text(non_forbidden_text)
+    if not galut_p and inline_tracks.get("galut"):
+        galut_p = inline_tracks["galut"]
+    if not yemot_p and inline_tracks.get("yemot"):
+        yemot_p = inline_tracks["yemot"]
+    if not geula_p and inline_tracks.get("geula"):
+        geula_p = inline_tracks["geula"]
+
+    # 4. Extract Customer Sale Price from mapped sale columns (in priority order)
     sale_price_val = ""
-    if sale_col is not None and sale_col < len(cells):
-        sale_price_val = _parse_pos_price_cell(str(cells[sale_col]))
-    if not sale_price_val and sale_col_fallback is not None and sale_col_fallback < len(cells):
-        sale_price_val = _parse_pos_price_cell(str(cells[sale_col_fallback]))
+    for scol in sale_cols_ordered:
+        if scol is not None and scol < len(cells):
+            cand_p = _parse_pos_price_cell(str(cells[scol]))
+            if cand_p and cand_p.isdigit() and int(cand_p) > 0:
+                sale_price_val = cand_p
+                break
 
-    # CRITICAL FIX: Only scan unmapped columns if the file had NO mapped sale_col in its header!
-    # If the file DID have a mapped sale_col and this row's sale_col cell is 0/empty, do NOT grab SKU or Total Stock Value from other columns!
-    if not sale_price_val and sale_col is None and sale_col_fallback is None:
+    if not sale_price_val:
+        for tp in (galut_p, yemot_p, geula_p):
+            if tp and int(tp) > 0:
+                sale_price_val = str(int(tp))
+                break
+
+    # 5. Fallback scan of unmapped columns (if no sale column was mapped OR if all mapped sale columns were empty on this row)
+    if not sale_price_val:
         explicit_sale_candidates = []
         general_price_candidates = []
         non_empty_indices = [i for i, v in enumerate(cells) if str(v).strip()]
@@ -3849,10 +4113,10 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
             if idx in forbidden_price_cols:
                 continue
             # Never treat the first column of a multi-column table as a price (it is almost always Item Code / Row # / SKU!)
-            if len(non_empty_indices) >= 3 and idx == non_empty_indices[0]:
+            if len(non_empty_indices) >= 3 and idx == non_empty_indices[0] and idx != sale_col:
                 continue
             c_str = str(c).strip()
-            if not c_str or (sku_val and c_str == sku_val):
+            if not c_str or (sku_val and c_str == sku_val) or c_str == prod_name:
                 continue
             c_low = c_str.lower()
             if any(cm in c_low for cm in cost_cell_markers):
@@ -3863,7 +4127,7 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
                 if 15 <= val_i <= 8500:
                     if any(sm in c_low for sm in sale_cell_markers):
                         explicit_sale_candidates.append(val_i)
-                    else:
+                    elif not has_header_map or not sale_cols_ordered:
                         general_price_candidates.append(val_i)
 
         if explicit_sale_candidates:
@@ -3871,16 +4135,43 @@ def _extract_sale_price_only_from_cells(cells: list[str], col_map: dict = None) 
         elif general_price_candidates:
             sale_price_val = str(max(general_price_candidates))
 
-    return sku_val, prod_name[:90], sale_price_val
+    # 6. Check if prod_name itself specifies a single warranty track for this row (e.g. 'שיאומי F21 גלות' = 550)
+    if sale_price_val and sale_price_val.isdigit():
+        sp_int = int(sale_price_val)
+        pn_low = prod_name.lower()
+        if "ימות המשיח" in pn_low and not yemot_p:
+            yemot_p = sp_int
+        elif "גאולה" in pn_low and not geula_p:
+            geula_p = sp_int
+        elif "גלות" in pn_low and not galut_p:
+            galut_p = sp_int
+
+    colors_val = ""
+    if color_col is not None and color_col < len(cells):
+        colors_val = str(cells[color_col]).strip()[:40]
+
+    return {
+        "sku": sku_val,
+        "prod_name": prod_name[:90],
+        "sale_price": sale_price_val,
+        "galut_price": galut_p,
+        "yemot_price": yemot_p,
+        "geula_price": geula_p,
+        "colors": colors_val,
+    }
 
 
 def _parse_inventory_file_bytes(file_bytes: bytes, filename: str = "") -> list[list[str]]:
     """
-    Universal zero-dependency parser for NewOrder BackOffice / POS inventory exports:
-    1. .xlsx (Excel OpenXML ZIP archive via standard library zipfile + xml.etree.ElementTree)
-       - Preserves EXACT column positions using Excel cell references (e.g. r="D12" -> index 3) so empty cells NEVER shift columns!
-    2. .xls (HTML <table> export, XML SpreadsheetML <Row><Cell><Data>, or TSV)
-    3. .csv / .tsv / .txt (UTF-8, UTF-16, Windows-1255 / CP1255 Hebrew encodings, comma/tab/pipe/dash separated)
+    Universal multi-engine parser for NewOrder BackOffice / POS inventory exports:
+    1. .xlsx (Excel OpenXML):
+       - Primary: `openpyxl` (if installed, with `data_only=True` so formula cells evaluate to their cached values)
+       - Fallback: Standard library `zipfile` + `xml.etree.ElementTree` (case-insensitive `sharedStrings.xml`, exact `A1` column coordinate alignment via `_xlsx_col_ref_to_idx`)
+    2. Binary .xls (BIFF8 OLE2 compound document `\xd0\xcf\x11\xe0`):
+       - `xlrd` (if installed)
+    3. HTML Table `.xls` (`<table><tr><td>`) exported by ASP.NET GridViews
+    4. XML SpreadsheetML (`<Row><Cell><Data>`)
+    5. `.csv` / `.tsv` / `.txt` (UTF-8, UTF-16, Windows-1255 / CP1255 Hebrew encodings, comma/tab/semicolon/pipe/dash separated)
     """
     import zipfile
     import io
@@ -3893,18 +4184,62 @@ def _parse_inventory_file_bytes(file_bytes: bytes, filename: str = "") -> list[l
     rows_out = []
     fn_low = (filename or "").lower()
 
+    def _clean_cell_val(v) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, bool):
+            return str(v)
+        if isinstance(v, int):
+            return str(v)
+        if isinstance(v, float):
+            f_rnd = round(v, 2)
+            return str(int(f_rnd)) if f_rnd == int(f_rnd) else str(f_rnd)
+        s = str(v).strip()
+        if re.fullmatch(r"-?\d+\.\d{3,}", s):
+            try:
+                f_rnd = round(float(s), 2)
+                return str(int(f_rnd)) if f_rnd == int(f_rnd) else str(f_rnd)
+            except Exception:
+                pass
+        return s
+
     # 1. Check if it's a ZIP-based .xlsx file (starts with PK\x03\x04)
     if file_bytes[:4] == b"PK\x03\x04" or fn_low.endswith(".xlsx"):
+        # 1A. Try openpyxl first (handles all Excel styles, rich text, merged headers, and cached formula values)
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                for row_vals in ws.iter_rows(values_only=True):
+                    if not row_vals:
+                        continue
+                    row_cells = [_clean_cell_val(c) for c in row_vals]
+                    while row_cells and row_cells[-1] == "":
+                        row_cells.pop()
+                    if any(row_cells):
+                        rows_out.append(row_cells)
+            wb.close()
+            if rows_out:
+                return rows_out
+        except Exception as e_opx:
+            print(f"[OpenPyXL Parse Notice]: {e_opx}")
+
+        # 1B. Pure-Python stdlib zipfile + XML fallback
         try:
             with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+                namelist_map = {n.lower(): n for n in zf.namelist()}
                 shared_strings = []
-                if "xl/sharedStrings.xml" in zf.namelist():
-                    ss_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+                if "xl/sharedstrings.xml" in namelist_map:
+                    ss_root = ET.fromstring(zf.read(namelist_map["xl/sharedstrings.xml"]))
                     for si in ss_root.iter():
                         if si.tag.endswith("}si") or si.tag == "si":
                             texts = [t.text or "" for t in si.iter() if t.tag.endswith("}t") or t.tag == "t"]
                             shared_strings.append("".join(texts).strip())
-                sheet_files = sorted([n for n in zf.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")])
+                sheet_files = sorted([
+                    orig_n for low_n, orig_n in namelist_map.items()
+                    if low_n.startswith("xl/worksheets/sheet") and low_n.endswith(".xml")
+                ])
                 for sf in sheet_files:
                     sh_root = ET.fromstring(zf.read(sf))
                     for row_el in sh_root.iter():
@@ -3927,15 +4262,7 @@ def _parse_inventory_file_bytes(file_bytes: bytes, filename: str = "") -> list[l
                                     if c_type == "s" and raw_v.isdigit() and int(raw_v) < len(shared_strings):
                                         val_txt = shared_strings[int(raw_v)]
                                     else:
-                                        # Clean IEEE-754 floating point noise on numeric cells (e.g. '349.99999999999994' -> '350')
-                                        if c_type in ("", "n") and re.fullmatch(r"-?\d+\.\d{3,}", raw_v):
-                                            try:
-                                                f_val = round(float(raw_v), 2)
-                                                val_txt = str(int(f_val)) if f_val == int(f_val) else str(f_val)
-                                            except Exception:
-                                                val_txt = raw_v
-                                        else:
-                                            val_txt = raw_v
+                                        val_txt = _clean_cell_val(raw_v)
                             if col_idx >= 0:
                                 while len(row_cells) <= col_idx:
                                     row_cells.append("")
@@ -3949,7 +4276,24 @@ def _parse_inventory_file_bytes(file_bytes: bytes, filename: str = "") -> list[l
         except Exception as e_xlsx:
             print(f"[XLSX Parse Notice]: {e_xlsx}")
 
-    # 2. Decode text using UTF-8-SIG, UTF-16, or Hebrew Windows-1255 (cp1255)
+    # 2. Check if it's a Binary BIFF8 .xls file (starts with OLE2 magic bytes \xd0\xcf\x11\xe0)
+    if file_bytes[:4] == b"\xd0\xcf\x11\xe0":
+        try:
+            import xlrd
+            book = xlrd.open_workbook(file_contents=file_bytes)
+            for sh in book.sheets():
+                for r_idx in range(sh.nrows):
+                    row_cells = [_clean_cell_val(sh.cell_value(r_idx, c_idx)) for c_idx in range(sh.ncols)]
+                    while row_cells and row_cells[-1] == "":
+                        row_cells.pop()
+                    if any(row_cells):
+                        rows_out.append(row_cells)
+            if rows_out:
+                return rows_out
+        except Exception as e_xls:
+            print(f"[XLS Binary Parse Notice]: {e_xls}")
+
+    # 3. Decode text using UTF-8-SIG, UTF-16, or Hebrew Windows-1255 (cp1255)
     decoded_text = ""
     for enc in ("utf-8-sig", "utf-16", "cp1255", "iso-8859-8", "latin-1"):
         try:
@@ -3962,13 +4306,13 @@ def _parse_inventory_file_bytes(file_bytes: bytes, filename: str = "") -> list[l
     if not decoded_text:
         return []
 
-    # 3. Check if it's an HTML table (.xls exported from ASP.NET GridView)
+    # 4. Check if it's an HTML table (.xls exported from ASP.NET GridView)
     if "<tr" in decoded_text.lower() and ("<td" in decoded_text.lower() or "<th" in decoded_text.lower()):
         html_rows = _extract_html_table_rows(decoded_text)
         if html_rows:
             return html_rows
 
-    # 4. Check if it's XML SpreadsheetML (<Row><Cell><Data>)
+    # 5. Check if it's XML SpreadsheetML (<Row><Cell><Data>)
     if "<row" in decoded_text.lower() and "<data" in decoded_text.lower():
         try:
             for m_r in re.finditer(r"<Row\b[^>]*>(.*?)</Row>", decoded_text, flags=re.IGNORECASE | re.DOTALL):
@@ -3991,7 +4335,7 @@ def _parse_inventory_file_bytes(file_bytes: bytes, filename: str = "") -> list[l
         except Exception:
             pass
 
-    # 5. Parse as CSV / TSV / Pipe / Dash-separated lines (PRESERVING empty cells so column indices stay aligned!)
+    # 6. Parse as CSV / TSV / Pipe / Dash-separated lines (PRESERVING empty cells so column indices stay aligned!)
     lines = [ln.strip("\r\n") for ln in decoded_text.splitlines() if ln.strip()]
     for ln in lines:
         if "\t" in ln:
@@ -4008,7 +4352,6 @@ def _parse_inventory_file_bytes(file_bytes: bytes, filename: str = "") -> list[l
         elif re.search(r"\s+[-:–]\s+", ln):
             cells = [c.strip() for c in re.split(r"\s+[-:–]\s+", ln) if c.strip()]
         else:
-            # Handle 'נוקיה 215 כשר 380' or 'qlyx q8 א.ו 350' (product name followed by price at end of line)
             m_line_p = re.match(r"^(.+?)\s+(\d{2,4}(?:\.\d{1,2})?)\s*(?:₪|ש\"ח|שח|שקל)?$", ln.strip())
             if m_line_p:
                 cells = [m_line_p.group(1).strip(), m_line_p.group(2).strip()]
@@ -4018,6 +4361,155 @@ def _parse_inventory_file_bytes(file_bytes: bytes, filename: str = "") -> list[l
             rows_out.append(cells)
 
     return rows_out
+
+
+def _build_col_map_from_header_row(raw_cells: list[str]) -> dict:
+    """
+    Maps column indices from an Excel / POS table header row.
+    CRITICAL FIX: Checks Customer Sale Price headers ('מחיר כולל מע"מ', 'מחיר מכירה', 'לצרכן', 'מחירון', 'מחיר')
+    and Warranty Track headers ('גלות', 'ימות המשיח', 'גאולה') BEFORE checking tax-only headers ('מע"מ'),
+    so 'מחיר כולל מע"מ' is NEVER blocked as an ignored tax column!
+    """
+    cmap = {
+        "has_header_map": False,
+        "sale_col": None,
+        "sale_col_priority": 0,
+        "sale_col_fallback": None,
+        "sale_cols_ordered": [],
+        "galut_col": None,
+        "yemot_col": None,
+        "geula_col": None,
+        "color_col": None,
+        "cost_cols": set(),
+        "supplier_cols": set(),
+        "qty_cols": set(),
+        "cat_cols": set(),
+        "ignore_cols": set(),
+        "name_col": None,
+        "name_col_priority": 0,
+        "sku_col": None,
+        "header_names": {},
+        "mapped_count": 0,
+    }
+    sale_candidates_with_prio = []
+
+    for idx, h_cell in enumerate(raw_cells):
+        if not h_cell:
+            continue
+        hl = str(h_cell).lower().strip()
+        if len(hl) > 45:
+            continue
+        cmap["header_names"][idx] = h_cell
+
+        # 1. Cost / Purchase / Wholesale / Profit columns -> strictly block FIRST!
+        if any(w in hl for w in ["עלות", "קנייה", "קניה", "סיטונאי", "רווח", "מחיר ספק", "מחיר אחרון", "מחיר קני", "cost", "buy", "margin", "wholesale"]):
+            cmap["cost_cols"].add(idx)
+            cmap["mapped_count"] += 1
+        # 2. Total / Valuation / Discount / Row-index / Date / Tax-only columns -> strictly ignore!
+        elif (
+            any(w in hl for w in [
+                "סה\"כ", "סהכ", "שווי", "ערך מלאי", "ערך ", "אחוז", "הנחה",
+                "מספר שורה", "תאריך", "שעה", "סכום מע", "אחוז מע",
+                "total", "sum", "value", "discount"
+            ])
+            or (
+                any(t in hl for t in ["מע\"מ", "מעמ", "vat"])
+                and not any(p in hl for p in ["מחיר", "מכירה", "לצרכן", "מחירון", "ללקוח", "גלות", "ימות", "גאולה", "price", "sale", "retail"])
+            )
+        ):
+            cmap["ignore_cols"].add(idx)
+            cmap["mapped_count"] += 1
+        # 3. Warranty Track Columns ('גלות', 'ימות המשיח', 'גאולה')
+        elif any(w in hl for w in ["ימות המשיח", "ימות משיח", "מחיר ימות"]):
+            cmap["yemot_col"] = idx
+            cmap["mapped_count"] += 1
+        elif "גאולה" in hl:
+            cmap["geula_col"] = idx
+            cmap["mapped_count"] += 1
+        elif "גלות" in hl:
+            cmap["galut_col"] = idx
+            cmap["mapped_count"] += 1
+        # 4. Supplier / Importer columns -> strictly block!
+        elif any(w in hl for w in ["ספק", "יבואן", "supplier", "vendor", "importer"]):
+            cmap["supplier_cols"].add(idx)
+            cmap["mapped_count"] += 1
+        # 5. Stock / Quantity / Balance columns -> strictly block from price!
+        elif any(w in hl for w in ["כמות", "יתרה", "יתרת", "מלאי", "מינימום", "מקסימום", "מוזמן", "זמין", "qty", "stock", "quantity", "balance"]):
+            cmap["qty_cols"].add(idx)
+            cmap["mapped_count"] += 1
+        # 6. Color column
+        elif any(w in hl for w in ["צבע", "צבעים", "color", "colors"]):
+            cmap["color_col"] = idx
+            cmap["mapped_count"] += 1
+        # 7. Category / Department / Group / Brand columns
+        elif any(w in hl for w in ["מחלקה", "קטגוריה", "קבוצה", "קבוצת", "סוג פריט", "משפחה", "מותג", "יצרן", "category", "group", "department", "brand"]):
+            cmap["cat_cols"].add(idx)
+            cmap["mapped_count"] += 1
+        # 8. Customer Sale Price column (with priority so 'מחיר מכירה כולל מע"מ' / 'מחיר כולל מע"מ' / 'מחיר לצרכן' beats 'ללא מע"מ')
+        elif any(w in hl for w in ["מכירה", "לצרכן", "מחירון", "ללקוח", "מחיר", "sale", "retail", "price"]):
+            cmap["mapped_count"] += 1
+            is_no_vat = any(nv in hl for nv in ["ללא מע", "לפני מע", "לא כולל מע"])
+            if is_no_vat:
+                prio = 1
+                if cmap["sale_col_fallback"] is None:
+                    cmap["sale_col_fallback"] = idx
+            elif any(w in hl for w in ["מכירה כולל", "כולל מע", "לצרכן", "ללקוח", "מחירון"]):
+                prio = 4
+                if cmap["sale_col_priority"] < 4:
+                    if cmap["sale_col"] is not None and cmap["sale_col_fallback"] is None:
+                        cmap["sale_col_fallback"] = cmap["sale_col"]
+                    cmap["sale_col"] = idx
+                    cmap["sale_col_priority"] = 4
+            elif "מכירה" in hl or "sale" in hl or "retail" in hl:
+                prio = 3
+                if cmap["sale_col_priority"] < 3:
+                    if cmap["sale_col"] is not None and cmap["sale_col_fallback"] is None:
+                        cmap["sale_col_fallback"] = cmap["sale_col"]
+                    cmap["sale_col"] = idx
+                    cmap["sale_col_priority"] = 3
+            else:
+                prio = 2
+                if cmap["sale_col_priority"] < 2:
+                    cmap["sale_col"] = idx
+                    cmap["sale_col_priority"] = 2
+                elif cmap["sale_col_fallback"] is None:
+                    cmap["sale_col_fallback"] = idx
+            sale_candidates_with_prio.append((prio, -idx, idx))
+        # 9. Product Name / Description column (supporting both 'תיאור' and NewOrder 'תאור' without י!)
+        elif any(w in hl for w in ["תיאור פריט", "תאור פריט", "שם פריט", "שם מוצר", "תיאור מוצר", "תאור מוצר", "תיאור", "תאור", "שם הדגם", "דגם", "description", "item name", "product name"]):
+            cmap["mapped_count"] += 1
+            if cmap["name_col_priority"] < 2:
+                cmap["name_col"] = idx
+                cmap["name_col_priority"] = 2
+        elif any(w in hl for w in ["שם", "פריט", "מוצר", "name", "item", "product"]) and not any(b in hl for b in ["קוד", "מספר", "מס'", "ספק", "יבואן", "לקוח"]):
+            cmap["mapped_count"] += 1
+            if cmap["name_col_priority"] < 1:
+                cmap["name_col"] = idx
+                cmap["name_col_priority"] = 1
+        # 10. SKU / Item Code / Barcode column
+        elif any(w in hl for w in ["מק\"ט", "מקט", "ברקוד", "קוד פריט", "קוד מוצר", "קוד", "מס' פריט", "מספר פריט", "sku", "barcode", "code"]):
+            cmap["mapped_count"] += 1
+            if cmap["sku_col"] is None:
+                cmap["sku_col"] = idx
+            else:
+                cmap["ignore_cols"].add(idx)
+
+    sale_candidates_with_prio.sort(reverse=True)
+    cmap["sale_cols_ordered"] = [idx for _, _, idx in sale_candidates_with_prio]
+    if cmap["sale_col"] is None and cmap["sale_col_fallback"] is not None:
+        cmap["sale_col"] = cmap["sale_col_fallback"]
+        cmap["sale_col_fallback"] = None
+
+    if (
+        cmap["name_col"] is not None
+        or cmap["sale_col"] is not None
+        or cmap["galut_col"] is not None
+        or cmap["yemot_col"] is not None
+        or cmap["sku_col"] is not None
+    ) and cmap["mapped_count"] >= 2:
+        cmap["has_header_map"] = True
+
+    return cmap
 
 
 def _ingest_neworder_rows_into_db(
@@ -4030,9 +4522,10 @@ def _ingest_neworder_rows_into_db(
     into SQLite (`lab_repairs` for repair tickets and `pos_inventory` for products/prices).
     ENFORCES STRICT POS ACCURACY & CONFIDENTIALITY:
     - Preserves empty cells per row so column indices match the header row 1-to-1!
-    - Recognizes all NewOrder Hebrew column headers (including 'תאור' without י, 'תאור פריט', 'מחיר מכירה', 'לצרכן', 'מחירון').
+    - Recognizes all NewOrder Hebrew column headers (including 'תאור' without י, 'תאור פריט', 'מחיר כולל מע"מ', 'מחיר מכירה', 'לצרכן', 'מחירון', 'גלות', 'ימות המשיח', 'גאולה').
     - Never confuses Item Codes ('קוד פריט'), Stock Quantities ('כמות'/'יתרה'), Cost Prices ('עלות'), or Total Stock Value ('סה"כ'/'שווי') with Sale Price!
-    - When `clear_existing=True` (fresh Excel upload), clears old/stale `pos_inventory` rows first so no previously corrupted prices remain.
+    - Merges multi-track rows (e.g. 'שיאומי F21 גלות', 'שיאומי F21 ימות המשיח', 'שיאומי F21 גאולה') or multi-track columns so the bot remembers all track prices for the product!
+    - When `clear_existing=True` (fresh Excel upload), clears old/stale `pos_inventory` rows first.
     """
     repairs_added = 0
     items_added = 0
@@ -4042,33 +4535,18 @@ def _ingest_neworder_rows_into_db(
     repair_status_words = ["מוכן לאיסוף", "מוכן", "בבדיקה", "בתיקון", "ממתין לחלק", "ממתין לאישור", "הושלם", "בטיפול", "נמסר", "פתוח"]
     header_keywords = [
         "מספר קריאה", "שם לקוח", "טלפון", "סטטוס",
-        "תיאור פריט", "תאור פריט", "שם פריט", "שם מוצר", "תיאור מוצר", "תאור מוצר", "תיאור", "תאור",
+        "תיאור פריט", "תאור פריט", "שם פריט", "שם מוצר", "תיאור מוצר", "תאור מוצר", "תיאור", "תאור", "דגם",
         "מק\"ט", "מקט", "ברקוד", "קוד פריט", "קוד",
-        "מחיר", "עלות", "מכירה", "לצרכן", "מחירון",
+        "מחיר", "עלות", "מכירה", "לצרכן", "מחירון", "גלות", "ימות המשיח", "גאולה",
         "כמות", "יתרה", "מלאי", "ספק", "יבואן", "מחלקה", "קטגוריה", "קבוצה",
     ]
 
-    col_map = {
-        "has_header_map": False,
-        "sale_col": None,
-        "sale_col_priority": 0,
-        "sale_col_fallback": None,
-        "cost_cols": set(),
-        "supplier_cols": set(),
-        "qty_cols": set(),
-        "cat_cols": set(),
-        "ignore_cols": set(),
-        "name_col": None,
-        "name_col_priority": 0,
-        "sku_col": None,
-        "header_names": {},
-    }
-
+    col_map = _build_col_map_from_header_row([])
     parsed_repair_records = []
     parsed_item_records = []
+    track_aggregator = {}  # clean_disp_lower -> {"galut": int|None, "yemot": int|None, "geula": int|None, "colors": str}
 
     for cells in rows:
-        # CRITICAL: Keep empty strings at their exact column indices so data columns align 1-to-1 with header columns!
         raw_cells = [str(c).strip() for c in cells]
         non_empty_cells = [c for c in raw_cells if c]
         if len(non_empty_cells) < 2:
@@ -4076,83 +4554,21 @@ def _ingest_neworder_rows_into_db(
         row_joined = " | ".join(non_empty_cells)
         row_low = row_joined.lower()
 
-        # Detect & map table header row
+        # Detect & map table header row (allows re-mapping if a better header row appears after a title row or on a new sheet!)
         header_matches = sum(1 for hw in header_keywords if hw in row_low)
         pure_number_cells = sum(1 for c in non_empty_cells if re.fullmatch(r"-?\d+(?:\.\d+)?", c))
         if (
-            not col_map["has_header_map"]
-            and header_matches >= 2
+            header_matches >= 2
             and pure_number_cells <= max(1, len(non_empty_cells) // 3)
             and not re.search(r"\b05[0-9]-?[0-9]{7}\b", row_joined)
         ):
-            for idx, h_cell in enumerate(raw_cells):
-                if not h_cell:
-                    continue
-                hl = h_cell.lower().strip()
-                col_map["header_names"][idx] = h_cell
-
-                # 1. Total / Valuation / Tax / Discount / Row-index columns -> strictly ignore for price & name!
-                if any(w in hl for w in ["סה\"כ", "סהכ", "שווי", "ערך מלאי", "ערך ", "אחוז", "הנחה", "מע\"מ", "מספר שורה", "תאריך", "שעה", "total", "sum", "value", "vat", "discount"]):
-                    col_map["ignore_cols"].add(idx)
-                # 2. Cost / Purchase / Wholesale / Profit columns -> strictly block!
-                elif any(w in hl for w in ["עלות", "קנייה", "קניה", "סיטונאי", "רווח", "מחיר ספק", "מחיר אחרון", "cost", "buy", "margin", "wholesale"]):
-                    col_map["cost_cols"].add(idx)
-                # 3. Supplier / Importer columns -> strictly block!
-                elif any(w in hl for w in ["ספק", "יבואן", "supplier", "vendor", "importer"]):
-                    col_map["supplier_cols"].add(idx)
-                # 4. Stock / Quantity / Balance columns -> strictly block from price!
-                elif any(w in hl for w in ["כמות", "יתרה", "יתרת", "מלאי", "מינימום", "מקסימום", "מוזמן", "זמין", "qty", "stock", "quantity", "balance"]):
-                    col_map["qty_cols"].add(idx)
-                # 5. Category / Department / Group / Brand columns
-                elif any(w in hl for w in ["מחלקה", "קטגוריה", "קבוצה", "קבוצת", "סוג פריט", "משפחה", "מותג", "יצרן", "category", "group", "department", "brand"]):
-                    col_map["cat_cols"].add(idx)
-                # 6. Customer Sale Price column (with priority so 'מחיר מכירה כולל מע"מ' / 'מחיר לצרכן' beats 'ללא מע"מ' or generic 'מחיר')
-                elif any(w in hl for w in ["מכירה", "לצרכן", "מחירון", "ללקוח", "מחיר", "sale", "retail", "price"]):
-                    is_no_vat = any(nv in hl for nv in ["ללא מע", "לפני מע", "לא כולל מע"])
-                    if is_no_vat:
-                        if col_map["sale_col_fallback"] is None:
-                            col_map["sale_col_fallback"] = idx
-                    elif any(w in hl for w in ["מכירה כולל", "כולל מע", "לצרכן", "ללקוח", "מחירון"]):
-                        if col_map["sale_col_priority"] < 3:
-                            if col_map["sale_col"] is not None and col_map["sale_col_fallback"] is None:
-                                col_map["sale_col_fallback"] = col_map["sale_col"]
-                            col_map["sale_col"] = idx
-                            col_map["sale_col_priority"] = 3
-                    elif "מכירה" in hl or "sale" in hl or "retail" in hl:
-                        if col_map["sale_col_priority"] < 2:
-                            if col_map["sale_col"] is not None and col_map["sale_col_fallback"] is None:
-                                col_map["sale_col_fallback"] = col_map["sale_col"]
-                            col_map["sale_col"] = idx
-                            col_map["sale_col_priority"] = 2
-                    else:
-                        if col_map["sale_col_priority"] < 1:
-                            col_map["sale_col"] = idx
-                            col_map["sale_col_priority"] = 1
-                        elif col_map["sale_col_fallback"] is None:
-                            col_map["sale_col_fallback"] = idx
-                # 7. Product Name / Description column (supporting both 'תיאור' and NewOrder 'תאור' without י!)
-                elif any(w in hl for w in ["תיאור פריט", "תאור פריט", "שם פריט", "שם מוצר", "תיאור מוצר", "תאור מוצר", "תיאור", "תאור", "שם הדגם", "דגם", "description", "item name", "product name"]):
-                    if col_map["name_col_priority"] < 2:
-                        col_map["name_col"] = idx
-                        col_map["name_col_priority"] = 2
-                elif any(w in hl for w in ["שם", "פריט", "מוצר", "name", "item", "product"]) and not any(b in hl for b in ["קוד", "מספר", "מס'", "ספק", "יבואן", "לקוח"]):
-                    if col_map["name_col_priority"] < 1:
-                        col_map["name_col"] = idx
-                        col_map["name_col_priority"] = 1
-                # 8. SKU / Item Code / Barcode column
-                elif any(w in hl for w in ["מק\"ט", "מקט", "ברקוד", "קוד פריט", "קוד מוצר", "קוד", "מס' פריט", "מספר פריט", "sku", "barcode", "code"]):
-                    if col_map["sku_col"] is None:
-                        col_map["sku_col"] = idx
-                    else:
-                        col_map["ignore_cols"].add(idx)
-
-            if col_map["sale_col"] is None and col_map["sale_col_fallback"] is not None:
-                col_map["sale_col"] = col_map["sale_col_fallback"]
-                col_map["sale_col_fallback"] = None
-
-            if col_map["name_col"] is not None or col_map["sale_col"] is not None or col_map["sku_col"] is not None:
-                col_map["has_header_map"] = True
-            continue
+            cand_map = _build_col_map_from_header_row(raw_cells)
+            if cand_map["has_header_map"] and (
+                not col_map["has_header_map"]
+                or cand_map["mapped_count"] >= col_map.get("mapped_count", 0)
+            ):
+                col_map = cand_map
+                continue
 
         # 1. Check if row is a Lab Repair Ticket (contains a phone number or repair status keyword)
         m_phone = re.search(r"\b(05[0-9]-?[0-9]{7}|0[23489]-?[0-9]{7}|9725[0-9]{8})\b", row_joined)
@@ -4162,8 +4578,8 @@ def _ingest_neworder_rows_into_db(
             m_tid = re.search(r"\b(\d{3,7})\b", non_empty_cells[0])
             ticket_id = m_tid.group(1) if m_tid else (f"NO-{phone_norm[-4:]}" if phone_norm else f"NO-{abs(hash(row_joined)) % 10000}")
             status_label = matched_status or "בטיפול במעבדה"
-            _, _, rep_sale_price = _extract_sale_price_only_from_cells(raw_cells, col_map)
-            price_val = rep_sale_price or extract_price_nis(row_joined)
+            row_det = _extract_pos_row_details(raw_cells, col_map)
+            price_val = row_det["sale_price"] or extract_price_nis(row_joined)
             cust_name = non_empty_cells[1] if len(non_empty_cells) > 1 and not re.search(r"\d{4,}", non_empty_cells[1]) else ""
             dev_model = non_empty_cells[2] if len(non_empty_cells) > 2 else ""
             fault_desc = non_empty_cells[3] if len(non_empty_cells) > 3 else ""
@@ -4173,27 +4589,48 @@ def _ingest_neworder_rows_into_db(
             ))
             continue
 
-        # 2. Check if row is an Inventory / Price Item -> Extract ONLY Sale Price and Product Name!
-        sku_cand, prod_name, sale_price_val = _extract_sale_price_only_from_cells(raw_cells, col_map)
+        # 2. Check if row is an Inventory / Price Item -> Extract Sale Price, Track Prices, and Product Name!
+        row_det = _extract_pos_row_details(raw_cells, col_map)
+        sku_cand = row_det["sku"]
+        prod_name = row_det["prod_name"]
+        sale_price_val = row_det["sale_price"]
+        galut_p = row_det["galut_price"]
+        yemot_p = row_det["yemot_price"]
+        geula_p = row_det["geula_price"]
+        colors_val = row_det["colors"]
+
         if sale_price_val and prod_name and len(prod_name) >= 2 and not prod_name.isdigit():
-            # Always construct a row-unique SKU when multiple importers have the same SKU or no SKU so multi-importer rows NEVER overwrite each other!
             clean_disp = clean_pos_product_display_name(prod_name)
-            row_sig = f"{sku_cand}-{prod_name}-{sale_price_val}"
+            clean_key_low = (clean_disp or prod_name).lower().strip()
+            agg = track_aggregator.setdefault(clean_key_low, {"galut": None, "yemot": None, "geula": None, "colors": ""})
+            if galut_p:
+                agg["galut"] = galut_p
+            if yemot_p:
+                agg["yemot"] = yemot_p
+            if geula_p:
+                agg["geula"] = geula_p
+            if colors_val and colors_val not in agg["colors"]:
+                agg["colors"] = f"{agg['colors']}, {colors_val}".strip(", ")
+
+            row_sig = f"{sku_cand}-{prod_name}-{sale_price_val}-{galut_p}-{yemot_p}-{geula_p}"
             unique_sku = f"{(sku_cand or clean_disp)[:28]}-{abs(hash(row_sig)) % 10000:04d}"
             kw_combined = f"{prod_name} | {clean_disp}"[:140]
-            parsed_item_records.append((
-                unique_sku[:50],
-                prod_name[:90],
-                kw_combined,
-                source_label or "NewOrder",
-                int(sale_price_val),
-                5,
-                datetime.now().isoformat(),
-            ))
+            parsed_item_records.append({
+                "sku": unique_sku[:50],
+                "prod_name": prod_name[:90],
+                "clean_key_low": clean_key_low,
+                "kw_combined": kw_combined,
+                "category": source_label or "NewOrder",
+                "single_price": int(sale_price_val),
+                "galut_price": galut_p,
+                "yemot_price": yemot_p,
+                "geula_price": geula_p,
+                "colors": colors_val,
+                "updated_at": datetime.now().isoformat(),
+            })
 
     try:
         conn = sqlite3.connect(DB_PATH)
-        # If Admin uploaded a fresh Excel/CSV inventory file and we parsed valid items, clear old/corrupted pos_inventory rows first!
         if clear_existing and parsed_item_records:
             conn.execute("DELETE FROM pos_inventory")
 
@@ -4216,17 +4653,38 @@ def _ingest_neworder_rows_into_db(
             repairs_added += 1
 
         for item_rec in parsed_item_records:
+            agg = track_aggregator.get(item_rec["clean_key_low"], {})
+            eff_galut = item_rec["galut_price"] or agg.get("galut")
+            eff_yemot = item_rec["yemot_price"] or agg.get("yemot")
+            eff_geula = item_rec["geula_price"] or agg.get("geula")
+            eff_colors = item_rec["colors"] or agg.get("colors") or ""
             conn.execute(
                 """
-                INSERT INTO pos_inventory (sku, product_name, keywords, category, single_price, stock_qty, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO pos_inventory (sku, product_name, keywords, category, price_galut, price_yemot, price_geula, single_price, stock_qty, colors, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(sku) DO UPDATE SET
                     product_name=excluded.product_name,
                     keywords=excluded.keywords,
+                    price_galut=COALESCE(excluded.price_galut, pos_inventory.price_galut),
+                    price_yemot=COALESCE(excluded.price_yemot, pos_inventory.price_yemot),
+                    price_geula=COALESCE(excluded.price_geula, pos_inventory.price_geula),
                     single_price=excluded.single_price,
+                    colors=CASE WHEN excluded.colors != '' THEN excluded.colors ELSE pos_inventory.colors END,
                     updated_at=excluded.updated_at
                 """,
-                item_rec,
+                (
+                    item_rec["sku"],
+                    item_rec["prod_name"],
+                    item_rec["kw_combined"],
+                    item_rec["category"],
+                    int(eff_galut) if eff_galut else None,
+                    int(eff_yemot) if eff_yemot else None,
+                    int(eff_geula) if eff_geula else None,
+                    int(item_rec["single_price"]),
+                    5,
+                    eff_colors,
+                    item_rec["updated_at"],
+                ),
             )
             items_added += 1
 
@@ -4243,6 +4701,9 @@ def _ingest_neworder_rows_into_db(
         "name_col_header": col_map["header_names"].get(col_map["name_col"], ""),
         "sale_col_header": col_map["header_names"].get(col_map["sale_col"], ""),
         "sku_col_header": col_map["header_names"].get(col_map["sku_col"], ""),
+        "galut_col_header": col_map["header_names"].get(col_map["galut_col"], ""),
+        "yemot_col_header": col_map["header_names"].get(col_map["yemot_col"], ""),
+        "geula_col_header": col_map["header_names"].get(col_map["geula_col"], ""),
     }
     return {
         "repairs_added": repairs_added,
@@ -4436,6 +4897,7 @@ POS_BILINGUAL_SYNONYMS = {
     "אסקולס": "אסקולס",
     "first": "פירסט",
     "פירסטפון": "פירסט",
+    "firstphone": "פירסט",
     "ipro": "אייפרו",
     "איפרו": "אייפרו",
     "qin": "qin",
@@ -4443,12 +4905,39 @@ POS_BILINGUAL_SYNONYMS = {
     "qlyx": "qlyx",
     "קליקס": "qlyx",
     "קיו": "q",
+    "fig": "פיג",
+    "פיג": "פיג",
+    "upphone": "אפפון",
+    "אפפון": "אפפון",
     "note": "נוט",
     "pro": "פרו",
     "plus": "פלוס",
     "ultra": "אולטרה",
     "max": "מקס",
     "mini": "מיני",
+    "lite": "לייט",
+    "bluetooth": "בלוטוס",
+    "בלוטות": "בלוטוס",
+    "בלוטוס": "בלוטוס",
+    "typec": "טייפסי",
+    "type-c": "טייפסי",
+    "usb-c": "טייפסי",
+    "usbc": "טייפסי",
+    "sandisk": "סנדיסק",
+    "סאנדיסק": "סנדיסק",
+    "jbl": "jbl",
+    "ג'ייביאל": "jbl",
+}
+
+POS_BRAND_EQUIVALENCES = {
+    "סמסונג": {"סמסונג", "גלקסי"},
+    "גלקסי": {"סמסונג", "גלקסי"},
+    "שיאומי": {"שיאומי", "רדמי", "פוקו", "qin"},
+    "רדמי": {"שיאומי", "רדמי"},
+    "פוקו": {"שיאומי", "פוקו"},
+    "qin": {"שיאומי", "qin"},
+    "אייפון": {"אייפון", "אפל"},
+    "אפל": {"אייפון", "אפל"},
 }
 
 POS_QUERY_STOPWORDS = {
@@ -4461,6 +4950,7 @@ POS_QUERY_STOPWORDS = {
     "אפשר", "ניתן", "לקנות", "לרכוש", "להזמין", "בבקשה", "תודה", "הוא", "היא", "זה", "הזה",
     "איזה", "אילו", "באיזה", "דור", "4g", "5g", "lte", "יבואן", "רשמי", "מקביל", "מקורי", "כולל",
     "אחריות", "עם", "בלי", "או", "וגם", "גם", "רק", "לי", "לנו", "את", "זה",
+    "בכמה", "היום", "עכשיו", "אשמח", "תגיד", "לי", "מסלול", "גלות", "ימות", "המשיח", "גאולה",
 }
 
 
@@ -4499,6 +4989,8 @@ def _normalize_pos_tokens(text: str, strip_stopwords: bool = True) -> list[str]:
     )
     # Normalize 'קיו 8' -> 'q8'
     s = re.sub(r"\bקיו\s*(\d{1,3})\b", r"q\1", s)
+    # Normalize 'טייפ סי' / 'type c' -> 'טייפסי'
+    s = re.sub(r"\b(?:טייפ|type|usb)\s*[-]?\s*(?:סי|c)\b", "טייפסי", s)
     # Normalize 'דור 4' / 'דור 5' / 'דור 3' to '4g' / '5g' / '3g' so '4' is never mistaken for a device model code!
     s = re.sub(r"\bדור\s*([345])(?:\.5)?\b", r"\1g", s)
     # Join single Latin letter + space/hyphen + digits (e.g. 'q 8' -> 'q8', 'a 15' -> 'a15', 's 24' -> 's24')
@@ -4512,7 +5004,6 @@ def _normalize_pos_tokens(text: str, strip_stopwords: bool = True) -> list[str]:
     raw_tokens = [t.strip() for t in s.split() if t.strip()]
     out_tokens = []
     for tok in raw_tokens:
-        # Strip Hebrew prefixes (ל, ב, ה, מ, ו, כ, ש) if the stripped word is known or >=2 chars with digits/latin
         cand = tok
         if len(cand) >= 3 and cand[0] in "לבהמוכש":
             rest = cand[1:]
@@ -4538,7 +5029,7 @@ def _extract_model_codes(tokens: list[str]) -> set[str]:
     Returns model number/code tokens (e.g. 'q8', '215', '225', 'a15', 's24', 'f21', '4x4', 'q1', 'g10')
     ignoring generic storage tokens like '128gb', '64gb', '256gb' unless nothing else has digits.
     """
-    storage_re = re.compile(r"^\d+(?:gb|tb|mb|mah)$", re.IGNORECASE)
+    storage_re = re.compile(r"^\d+(?:gb|tb|mb|mah|w)$", re.IGNORECASE)
     codes = set()
     for t in tokens:
         if storage_re.match(t) or t in ("4g", "5g", "3g", "lte"):
@@ -4546,6 +5037,25 @@ def _extract_model_codes(tokens: list[str]) -> set[str]:
         if any(ch.isdigit() for ch in t):
             codes.add(t.lstrip("0") or t)
     return codes
+
+
+def _tokens_match_pos(q_tok: str, item_token_set: set[str]) -> bool:
+    """Checks if a query token matches any token in the POS item (including brand equivalences & Hebrew stems)."""
+    if q_tok in item_token_set:
+        return True
+    eq_set = POS_BRAND_EQUIVALENCES.get(q_tok)
+    if eq_set and (eq_set & item_token_set):
+        return True
+    for it in item_token_set:
+        if len(q_tok) >= 3 and len(it) >= 3:
+            if q_tok in it or it in q_tok:
+                return True
+            # Handle Hebrew singular/plural suffixes (ים / ות)
+            q_stem = re.sub(r"(?:ים|ות|י)$", "", q_tok)
+            i_stem = re.sub(r"(?:ים|ות|י)$", "", it)
+            if len(q_stem) >= 3 and len(i_stem) >= 3 and (q_stem == i_stem or q_stem in i_stem or i_stem in q_stem):
+                return True
+    return False
 
 
 def _score_pos_item_match(
@@ -4562,7 +5072,7 @@ def _score_pos_item_match(
     Enforces:
     1. Strict Device vs. Accessory/Part Separation: if customer asked for 'q8' (a phone), NEVER match 'מגן ל-q8' or 'מסך ל-q8'!
     2. Strict Model-Number Guard: if customer specified a model code (e.g. 'q8', '225', 'a15'), the POS item MUST contain that exact model code!
-    3. Long POS Name Filtering: scores against the cleaned product name (`clean_pos_product_display_name`) so importer codes ('א.ו') and verbose POS prefixes never penalize the score!
+    3. Brand Equivalence & Model Priority: if the query's model code(s) match the POS item's model code(s) (e.g. customer asks 'כמה עולה גלקסי a15' and Excel says 'סמסונג A15', or customer asks 'שיאומי f21' and Excel says 'F21 Pro'), it scores >= 2.0 even if the brand synonym differs or is omitted in the Excel row!
     """
     if not query_tokens:
         return 0.0
@@ -4584,32 +5094,53 @@ def _score_pos_item_match(
     item_token_set = set(item_tokens)
     item_model_codes = _extract_model_codes(item_tokens)
 
+    # Check direct SKU match if customer typed an SKU/barcode
+    if sku and len(query_tokens) == 1 and query_tokens[0].lower() == str(sku).strip().lower():
+        return 3.0
+
     # 2. STRICT MODEL GUARD: Every model number/code in the customer's query MUST appear in the POS item!
     if query_model_codes:
         for q_code in query_model_codes:
             if q_code not in item_model_codes and q_code not in item_token_set:
                 if not any(it.startswith(q_code) or it.endswith(q_code) for it in item_token_set):
                     return 0.0
+        # Also if the POS item has a DIFFERENT primary model code of the same brand (e.g. query is 'f21' and item is 'f21 215' — rare, or query is 's24' and item is 's24 fe' vs 's24 ultra'), prefer exact model code set match!
+        matched_tokens = [qt for qt in query_tokens if _tokens_match_pos(qt, item_token_set)]
+        query_coverage = len(matched_tokens) / len(query_tokens)
+        item_coverage = len(matched_tokens) / max(1, len(item_tokens))
+        extra_item_codes = item_model_codes - query_model_codes
+        code_penalty = 0.25 * len(extra_item_codes)
+        # Check that no conflicting brand was specified (e.g. customer asked 'נוקיה 215' and item is 'סמסונג 215')
+        major_brands = {"נוקיה", "סמסונג", "גלקסי", "שיאומי", "רדמי", "פוקו", "אייפון", "אפל", "אסקולס", "פירסט", "אייפרו", "qlyx", "פיג"}
+        q_brands = {qt for qt in query_tokens if qt in major_brands}
+        i_brands = {it for it in item_token_set if it in major_brands}
+        if q_brands and i_brands:
+            expanded_q_brands = set(q_brands)
+            for qb in q_brands:
+                expanded_q_brands |= POS_BRAND_EQUIVALENCES.get(qb, {qb})
+            if not (expanded_q_brands & i_brands):
+                return 0.0
+        return max(1.5, 2.0 + query_coverage * 0.5 + item_coverage * 0.5 - code_penalty)
 
-    matched_tokens = [
-        qt for qt in query_tokens
-        if qt in item_token_set or any(qt in it or it in qt for it in item_token_set if len(it) >= 3 and len(qt) >= 3)
-    ]
+    # 3. Non-model-code queries (e.g. general devices by name or accessories like 'מטען סמסונג', 'אוזניות בלוטוס', 'נגן אגס')
+    matched_tokens = [qt for qt in query_tokens if _tokens_match_pos(qt, item_token_set)]
     if not matched_tokens:
         return 0.0
 
     query_coverage = len(matched_tokens) / len(query_tokens)
     item_coverage = len(matched_tokens) / max(1, len(item_tokens))
 
-    # If query has model code(s) (e.g. 'q8' or '215' or 'a15') and all query tokens matched (e.g. 'כמה עולה q8' -> 'qlyx q8 א.ו')
-    if query_model_codes and len(matched_tokens) == len(query_tokens):
-        return 2.0 + item_coverage
+    broad_brands = {"נוקיה", "סמסונג", "גלקסי", "שיאומי", "רדמי", "אייפון", "אפל", "אסקולס", "פירסט", "אייפרו", "qlyx"}
+    if len(query_tokens) == 1 and query_tokens[0] in broad_brands and len(item_tokens) > 1:
+        return 0.5
 
-    if query_coverage >= 0.75 and (len(matched_tokens) >= 2 or (len(query_tokens) == 1 and len(matched_tokens[0]) >= 2)):
-        # If query has only 1 broad brand word (like 'נוקיה' or 'סמסונג') without a model, return 0.5 to list available models of that brand
-        if len(query_tokens) == 1 and query_tokens[0] in ("נוקיה", "סמסונג", "גלקסי", "שיאומי", "רדמי", "אייפון", "אפל") and len(item_tokens) > 1:
-            return 0.5
+    if query_coverage >= 0.65 and (len(matched_tokens) >= 2 or (len(query_tokens) == 1 and len(matched_tokens[0]) >= 2)):
         return 1.0 + query_coverage + item_coverage
+
+    # If at least 1 distinctive non-brand product word (>=3 chars) matched and coverage >= 0.5
+    distinctive_matches = [mt for mt in matched_tokens if mt not in broad_brands and len(mt) >= 3]
+    if distinctive_matches and query_coverage >= 0.5:
+        return 1.0 + query_coverage * 0.5 + item_coverage * 0.5
 
     return 0.0
 
@@ -4635,13 +5166,13 @@ def is_general_pos_catalog_question(text: str) -> bool:
 
 def get_pos_inventory_prompt_context(message_text: str = "", limit: int = 25) -> str:
     """
-    Builds a sanitized summary of POS inventory items (with CLEANED product names and AVERAGE Sale Prices across importers!)
-    for injection into the Gemini LLM system prompt. Prioritizes items matching `message_text`!
+    Builds a sanitized summary of POS inventory items (with CLEANED product names, multi-track prices if present,
+    and AVERAGE Sale Prices across importers!) for injection into the Gemini LLM system prompt.
     """
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
-            "SELECT product_name, single_price, price_galut, price_yemot, colors FROM pos_inventory ORDER BY id DESC"
+            "SELECT product_name, single_price, price_galut, price_yemot, price_geula, colors FROM pos_inventory ORDER BY id DESC"
         ).fetchall()
         conn.close()
         if not rows:
@@ -4651,13 +5182,22 @@ def get_pos_inventory_prompt_context(message_text: str = "", limit: int = 25) ->
         q_codes = _extract_model_codes(q_tokens)
 
         grouped = {}
-        for p_name, p_single, p_galut, p_yemot, colors in rows:
+        for p_name, p_single, p_galut, p_yemot, p_geula, colors in rows:
             if not p_name:
                 continue
             clean_key = clean_pos_product_display_name(p_name)
             if not clean_key:
                 continue
-            entry = grouped.setdefault(clean_key, {"prices": [], "colors": colors or "", "score": 0.0})
+            entry = grouped.setdefault(clean_key, {
+                "prices": [], "galut": p_galut, "yemot": p_yemot, "geula": p_geula,
+                "colors": colors or "", "score": 0.0
+            })
+            if p_galut and not entry["galut"]:
+                entry["galut"] = p_galut
+            if p_yemot and not entry["yemot"]:
+                entry["yemot"] = p_yemot
+            if p_geula and not entry["geula"]:
+                entry["geula"] = p_geula
             if q_tokens:
                 sc = _score_pos_item_match(q_tokens, q_codes, p_name, clean_key, "", message_text or "")
                 if sc > entry["score"]:
@@ -4673,7 +5213,11 @@ def get_pos_inventory_prompt_context(message_text: str = "", limit: int = 25) ->
             if not pr_list:
                 continue
             avg_p = int(round(sum(pr_list) / len(pr_list)))
-            lines.append(f"  * {clean_name}: מחיר מכירה ממוצע/משוערך כ-{avg_p} ₪ (דורש בדיקת מלאי פיזי מול ערן)")
+            if info.get("galut") and info.get("yemot"):
+                ge_str = f" / גאולה: {info['geula']} ₪" if info.get("geula") else ""
+                lines.append(f"  * {clean_name}: גלות {info['galut']} ₪ / ימות המשיח {info['yemot']} ₪{ge_str}")
+            else:
+                lines.append(f"  * {clean_name}: מחיר מכירה ממוצע/משוערך כ-{avg_p} ₪ (דורש בדיקת מלאי פיזי מול ערן)")
         return "\n".join(lines) if lines else "אין פריטים נוספים."
     except Exception:
         return "אין פריטים נוספים."
@@ -4684,8 +5228,8 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
     Checks live POS / Cash Register inventory with:
     1. Smart Token + Model-Code + Bilingual Matching against `pos_inventory` (filtering out long POS phrasings & importer codes like 'qlyx q8 א.ו' -> 'QLYX Q8').
     2. Strict separation between Devices and Accessories/Parts so a 30 ₪ case is never mixed into a phone's price.
-    3. Multi-Importer Price Averaging: aggregates all importer rows for the matched product and computes their AVERAGE price (`מחיר ממוצע`).
-    4. Returns the cleaned product name + average estimated price to the customer, and sends Eran the exact raw rows & prices from the report for verification!
+    3. Multi-Importer Price Averaging & Multi-Track Aggregation (`price_galut`, `price_yemot`, `price_geula`).
+    4. Returns the cleaned product name + average estimated price (or track prices) to the customer!
     """
     clean = auto_fix_common_hebrew_typos((message_text or "").lower().strip())
     clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
@@ -4710,7 +5254,7 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
         try:
             conn = sqlite3.connect(DB_PATH)
             r_all = conn.execute(
-                "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors FROM pos_inventory ORDER BY id DESC"
+                "SELECT sku, product_name, keywords, category, price_galut, price_yemot, price_geula, single_price, stock_qty, colors FROM pos_inventory ORDER BY id DESC"
             ).fetchall()
             conn.close()
             return r_all
@@ -4719,7 +5263,6 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
 
     rows = _fetch_all_pos_rows()
 
-    # If pos_inventory is completely empty and NewOrder credentials/cookies exist, try a quick live sync first
     if not rows and ((NEWORDER_USERNAME and NEWORDER_PASSWORD) or POS_API_KEY or NEWORDER_COOKIE or NEWORDER_SESSION_CACHE.get("cookies")):
         try:
             search_term_short = " ".join(query_tokens[:3]) if query_tokens else ""
@@ -4732,7 +5275,7 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
     if is_general_pos_catalog_question(clean) and rows:
         grouped_cat = {}
         for r in rows:
-            sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r
+            sku, prod_name, kw_str, cat, p_galut, p_yemot, p_geula, p_single, qty, colors = r
             if not prod_name or _has_pos_accessory_or_part_word(prod_name):
                 continue
             clean_nm = clean_pos_product_display_name(prod_name)
@@ -4769,7 +5312,7 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
 
     # 1. Score all local SQLite pos_inventory rows
     for r in rows:
-        sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r
+        sku, prod_name, kw_str, cat, p_galut, p_yemot, p_geula, p_single, qty, colors = r
         score = _score_pos_item_match(query_tokens, query_model_codes, prod_name or "", kw_str or "", sku or "", effective_query_text)
         item_dict = {
             "sku": sku,
@@ -4779,6 +5322,7 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
             "category": cat,
             "price_galut": p_galut,
             "price_yemot": p_yemot,
+            "price_geula": p_geula,
             "single_price": p_single,
             "stock_qty": qty,
             "colors": colors,
@@ -4842,6 +5386,7 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                                         "category": str(item.get("category") or ""),
                                         "price_galut": item.get("price_galut") or p_sale_int,
                                         "price_yemot": item.get("price_yemot"),
+                                        "price_geula": item.get("price_geula"),
                                         "single_price": p_sale_int,
                                         "stock_qty": 1,
                                         "colors": str(item.get("colors") or ""),
@@ -4851,7 +5396,7 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                             if table_rows:
                                 _ingest_neworder_rows_into_db(table_rows, "LivePOS")
                                 for r2 in _fetch_all_pos_rows():
-                                    sku, prod_name, kw_str, cat, p_galut, p_yemot, p_single, qty, colors = r2
+                                    sku, prod_name, kw_str, cat, p_galut, p_yemot, p_geula, p_single, qty, colors = r2
                                     sc = _score_pos_item_match(query_tokens, query_model_codes, prod_name or "", kw_str or "", sku or "", effective_query_text)
                                     if sc >= 1.0:
                                         scored_matches.append((sc, {
@@ -4862,6 +5407,7 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
                                             "category": cat,
                                             "price_galut": p_galut,
                                             "price_yemot": p_yemot,
+                                            "price_geula": p_geula,
                                             "single_price": p_single,
                                             "stock_qty": qty,
                                             "colors": colors,
@@ -4871,7 +5417,7 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
         except Exception as e_pos:
             print(f"[NewOrder Live Inventory Pull Notice]: {e_pos}")
 
-    # 3. If we found strong matches, group all importer rows for the best-matching product and compute the AVERAGE price!
+    # 3. If we found strong matches, group all importer rows for the best-matching product and compute the AVERAGE price & track prices!
     if scored_matches:
         scored_matches.sort(key=lambda x: x[0], reverse=True)
         best_score, primary_item = scored_matches[0]
@@ -4879,9 +5425,13 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
         primary_tokens = set(_normalize_pos_tokens(primary_clean_name, strip_stopwords=True))
         primary_codes = _extract_model_codes(list(primary_tokens))
 
-        # Aggregate all rows that represent the same product/model across different importers (e.g. 'qlyx q8 א.ו', 'qlyx q8 י.ש')
         same_product_items = []
         raw_prices_with_items = []
+        agg_galut = []
+        agg_yemot = []
+        agg_geula = []
+        agg_colors = []
+
         for sc, it in scored_matches:
             it_clean = it.get("clean_name") or clean_pos_product_display_name(it.get("product_name", ""))
             it_tokens = set(_normalize_pos_tokens(it_clean, strip_stopwords=True))
@@ -4892,40 +5442,78 @@ def lookup_live_pos_inventory(message_text: str, recent_history: str = "") -> di
             )
             if same_model and (sc >= best_score - 0.6 or it_clean.lower() == primary_clean_name.lower()):
                 same_product_items.append(it)
-                p_val = it.get("single_price") or it.get("price_galut")
+                if it.get("price_galut") and int(it["price_galut"]) > 0:
+                    agg_galut.append(int(it["price_galut"]))
+                if it.get("price_yemot") and int(it["price_yemot"]) > 0:
+                    agg_yemot.append(int(it["price_yemot"]))
+                if it.get("price_geula") and int(it["price_geula"]) > 0:
+                    agg_geula.append(int(it["price_geula"]))
+                if it.get("colors") and it["colors"] not in agg_colors:
+                    agg_colors.append(it["colors"])
+                p_val = it.get("single_price") or it.get("price_galut") or it.get("price_yemot") or it.get("price_geula")
                 if p_val and int(p_val) > 0:
                     raw_prices_with_items.append((int(p_val), it))
 
         if raw_prices_with_items:
             max_p = max(p for p, _ in raw_prices_with_items)
-            # Outlier guard: if max_p >= 180 (a phone/device), discard any stray row < 35% of max_p (e.g. an unlabeled 30 ₪ accessory)
             if max_p >= 180:
                 filtered_pairs = [(p, it) for p, it in raw_prices_with_items if p >= max_p * 0.35]
                 if filtered_pairs:
                     raw_prices_with_items = filtered_pairs
                     same_product_items = [it for _, it in filtered_pairs]
 
-            all_prices_list = [p for p, _ in raw_prices_with_items]
-            unique_prices = sorted(set(all_prices_list))
-            avg_price = int(round(sum(unique_prices) / len(unique_prices)))
-            est_str = f"{avg_price} ₪"
+            # Populate aggregated track prices on primary_item if present across rows
+            if agg_galut:
+                primary_item["price_galut"] = int(round(sum(set(agg_galut)) / len(set(agg_galut))))
+            if agg_yemot:
+                primary_item["price_yemot"] = int(round(sum(set(agg_yemot)) / len(set(agg_yemot))))
+            if agg_geula:
+                primary_item["price_geula"] = int(round(sum(set(agg_geula)) / len(set(agg_geula))))
+            if agg_colors and not primary_item.get("colors"):
+                primary_item["colors"] = ", ".join(agg_colors)
+
+            has_multi_tracks = sum(1 for tp in (primary_item.get("price_galut"), primary_item.get("price_yemot"), primary_item.get("price_geula")) if tp and int(tp) > 0) >= 2
+            if has_multi_tracks:
+                # Don't average Galut (550) and Yemot (650) into 600 — keep Galut as base price and display all tracks!
+                avg_price = int(primary_item.get("price_galut") or primary_item.get("price_yemot") or raw_prices_with_items[0][0])
+                unique_prices = [p for p in (primary_item.get("price_galut"), primary_item.get("price_yemot"), primary_item.get("price_geula")) if p]
+                est_parts = []
+                if primary_item.get("price_galut"):
+                    est_parts.append(f"גלות: {primary_item['price_galut']} ₪")
+                if primary_item.get("price_yemot"):
+                    est_parts.append(f"ימות המשיח: {primary_item['price_yemot']} ₪")
+                if primary_item.get("price_geula"):
+                    est_parts.append(f"גאולה: {primary_item['price_geula']} ₪")
+                est_str = " / ".join(est_parts)
+                importers_cnt = 1
+            else:
+                all_prices_list = [p for p, _ in raw_prices_with_items]
+                unique_prices = sorted(set(all_prices_list))
+                avg_price = int(round(sum(unique_prices) / len(unique_prices)))
+                est_str = f"{avg_price} ₪"
+                importers_cnt = len(same_product_items)
+
             raw_rows_breakdown = [
                 f"{it.get('product_name')} ({p} ₪)"
                 for p, it in raw_prices_with_items
             ]
             primary_item["clean_name"] = primary_clean_name
-            ans = format_pos_item_answer(primary_item, unique_prices, importers_count=len(same_product_items))
+            ans = format_pos_item_answer(primary_item, unique_prices, importers_count=importers_cnt)
             if ans:
                 return {
                     "matched": True,
                     "requires_stock_check": True,
+                    "has_multi_tracks": has_multi_tracks,
                     "answer": ans,
                     "item": primary_item,
                     "clean_name": primary_clean_name,
                     "avg_price": avg_price,
+                    "galut_price": primary_item.get("price_galut"),
+                    "yemot_price": primary_item.get("price_yemot"),
+                    "geula_price": primary_item.get("price_geula"),
                     "estimated_price_str": est_str,
                     "all_sale_prices": unique_prices,
-                    "importers_count": len(same_product_items),
+                    "importers_count": importers_cnt,
                     "raw_rows_breakdown": raw_rows_breakdown[:8],
                 }
 
@@ -5396,12 +5984,17 @@ def init_db():
                 category TEXT,
                 price_galut INTEGER,
                 price_yemot INTEGER,
+                price_geula INTEGER,
                 single_price INTEGER,
                 stock_qty INTEGER DEFAULT 5,
                 colors TEXT DEFAULT '',
                 updated_at TEXT
             )
         """)
+        try:
+            c.execute("ALTER TABLE pos_inventory ADD COLUMN price_geula INTEGER")
+        except Exception:
+            pass
         if os.path.exists(BACKUP_POS_JSON_PATH):
             try:
                 with open(BACKUP_POS_JSON_PATH, "r", encoding="utf-8") as f:
@@ -5411,8 +6004,8 @@ def init_db():
                         if isinstance(pi, dict) and pi.get("product_name"):
                             c.execute("""
                                 INSERT OR REPLACE INTO pos_inventory
-                                (sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors, updated_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                (sku, product_name, keywords, category, price_galut, price_yemot, price_geula, single_price, stock_qty, colors, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """, (
                                 pi.get("sku") or pi.get("product_name"),
                                 pi.get("product_name"),
@@ -5420,6 +6013,7 @@ def init_db():
                                 pi.get("category", "מכשיר כשר"),
                                 pi.get("price_galut"),
                                 pi.get("price_yemot"),
+                                pi.get("price_geula"),
                                 pi.get("single_price"),
                                 pi.get("stock_qty", 5),
                                 pi.get("colors", ""),
@@ -6399,14 +6993,14 @@ def get_pos_inventory():
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
-            "SELECT sku, product_name, keywords, category, price_galut, price_yemot, single_price, stock_qty, colors, updated_at FROM pos_inventory ORDER BY updated_at DESC"
+            "SELECT sku, product_name, keywords, category, price_galut, price_yemot, price_geula, single_price, stock_qty, colors, updated_at FROM pos_inventory ORDER BY updated_at DESC"
         ).fetchall()
         conn.close()
         items = [
             {
                 "sku": r[0], "product_name": r[1], "keywords": r[2], "category": r[3],
-                "price_galut": r[4], "price_yemot": r[5], "single_price": r[6],
-                "stock_qty": r[7], "colors": r[8], "updated_at": r[9]
+                "price_galut": r[4], "price_yemot": r[5], "price_geula": r[6], "single_price": r[7],
+                "stock_qty": r[8], "colors": r[9], "updated_at": r[10]
             }
             for r in rows
         ]
@@ -7213,7 +7807,7 @@ async def unified_whatsapp_webhook(req: Request):
             if m_req:
                 req_id_val = int(m_req.group(1))
                 target_pending = conn.execute(
-                    "SELECT id, phone, request_text FROM customer_requests WHERE id = ? AND status IN ('pending', 'awaiting_customer_time')",
+                    "SELECT id, phone, request_text FROM customer_requests WHERE id = ? AND status IN ('pending', 'awaiting_customer_time', 'awaiting_customer_reply')",
                     (req_id_val,)
                 ).fetchone()
 
@@ -7544,7 +8138,24 @@ async def unified_whatsapp_webhook(req: Request):
                         if spec_target_opt and adm_price and len(extract_options_and_prices_from_text(adapted_admin_ans)) < 2:
                             save_learned_item_price(spec_target_opt, adm_price)
 
-                        prev_meta_tags = " ".join(re.findall(r"\[(?:LAST_QUOTED_ITEM|LAST_QUOTED_PRICE|TARGET_ITEM|PRICE|GALUT_PRICE|YEMOT_PRICE):[^\]]+\]", prev_action_str))
+                        # Also persist multi-track prices (גלות / ימות המשיח / גאולה) or single product price into pos_inventory!
+                        adm_multi_tr = extract_multi_track_prices_from_text(f"{admin_answer} {adapted_admin_ans}")
+                        latest_cust_q_for_pos = extract_latest_customer_question(req_text)
+                        pos_q_tokens = _normalize_pos_tokens(latest_cust_q_for_pos, strip_stopwords=True)
+                        pos_prod_label = " ".join(pos_q_tokens) if pos_q_tokens else ""
+                        if pos_prod_label and not is_scheduling_request(req_text):
+                            if any(adm_multi_tr.values()):
+                                save_learned_pos_product_prices(
+                                    pos_prod_label,
+                                    single_price=adm_multi_tr.get("galut") or adm_multi_tr.get("yemot") or (int(adm_price) if adm_price else None),
+                                    galut_price=adm_multi_tr.get("galut"),
+                                    yemot_price=adm_multi_tr.get("yemot"),
+                                    geula_price=adm_multi_tr.get("geula"),
+                                )
+                            elif adm_price and not is_temp_stock_msg and len(extract_options_and_prices_from_text(adapted_admin_ans)) < 2:
+                                save_learned_pos_product_prices(pos_prod_label, single_price=int(adm_price))
+
+                        prev_meta_tags = " ".join(re.findall(r"\[(?:LAST_QUOTED_ITEM|LAST_QUOTED_PRICE|TARGET_ITEM|PRICE|GALUT_PRICE|YEMOT_PRICE|GEULA_PRICE):[^\]]+\]", prev_action_str))
                         cust_reply_msg = format_admin_answer_for_customer(target_cust_phone, admin_answer, f"{req_text} {prev_meta_tags}".strip(), target_cust_name, target_msg_count, recent_cust_text)
                         action_with_price = adapted_admin_ans
                         extracted_adm_opts = extract_options_and_prices_from_text(adapted_admin_ans)
@@ -7567,6 +8178,8 @@ async def unified_whatsapp_webhook(req: Request):
                             action_with_price += f" [LAST_QUOTED_ITEM:{spec_target_opt}] [LAST_QUOTED_PRICE:{adm_price}]"
                         if kosher_tracks_adm.get("matched"):
                             action_with_price += f" [GALUT_PRICE:{kosher_tracks_adm['galut_price']}] [YEMOT_PRICE:{kosher_tracks_adm['yemot_price']}]"
+                            if kosher_tracks_adm.get("geula_price"):
+                                action_with_price += f" [GEULA_PRICE:{kosher_tracks_adm['geula_price']}]"
                         elif adm_price and len(extracted_adm_opts) < 2:
                             action_with_price += f" [PRICE:{adm_price}]"
                         elif not adm_price and not merged_adm_opts:
@@ -7809,6 +8422,42 @@ async def unified_whatsapp_webhook(req: Request):
         cust_phone_fmt = format_phone_display(sender_phone)
         cust_has_neg = bool(re.search(r"\b(?:לא|אין\s+צורך|לא\s+צריך|לא\s+רוצה|לא\s+כרגע|מוותר|אסתדר)\b", cust_clean))
 
+        # (0.6.00) Check if the customer is switching to ask about a NEW product/device from POS inventory or Learned KB!
+        # Never trap a new product question inside a previous item's open dialogue!
+        msg_pos_tokens = _normalize_pos_tokens(message_text, strip_stopwords=True)
+        open_pos_tokens = set(_normalize_pos_tokens(f"{open_req_text} {open_action_taken}", strip_stopwords=True))
+        is_reply_word = (
+            is_satisfaction_yes(message_text)
+            or cust_has_neg
+            or bool(detect_chosen_warranty_track(message_text))
+            or bool(detect_chosen_color(message_text))
+            or bool(detect_specific_option_name(message_text))
+            or is_payment_confirmation_message(message_text, type_msg)
+            or any(w in cust_clean for w in ["איזה צבע", "צבעים", "מה ההבדל", "הבדלים", "תזמין", "תשריין", "לשריין", "להזמין", "אני לוקח"])
+        )
+        if msg_pos_tokens and not is_reply_word:
+            # Check if message_text matches a product in POS inventory or Learned KB that is different from open_req_text (or if customer explicitly asks 'כמה עולה X' / 'יש לכם X')
+            new_tokens_diff = [t for t in msg_pos_tokens if t not in open_pos_tokens]
+            explicit_new_prod_q = any(q in cust_clean for q in ["כמה עולה", "מה המחיר", "מה מחיר", "יש לכם", "יש במלאי", "קיים במלאי"])
+            if new_tokens_diff or explicit_new_prod_q:
+                pos_switch_hit = lookup_live_pos_inventory(message_text, recent_history)
+                kb_switch_hit = find_matching_learned_knowledge(message_text, recent_history)
+                if (pos_switch_hit.get("matched") and pos_switch_hit.get("answer")) or kb_switch_hit:
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        conn.execute("UPDATE customer_requests SET status='handled' WHERE id=?", (open_req_id,))
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        pass
+                    active_open_row = None
+
+    if active_open_row and not is_scheduling_request(message_text):
+        open_req_id, open_req_text, open_action_taken, open_status = active_open_row
+        cust_clean = message_text.strip().lower()
+        cust_phone_fmt = format_phone_display(sender_phone)
+        cust_has_neg = bool(re.search(r"\b(?:לא|אין\s+צורך|לא\s+צריך|לא\s+רוצה|לא\s+כרגע|מוותר|אסתדר)\b", cust_clean))
+
         # (0.6.0) Customer disputes / challenges the quoted price -> Immediately escalate to Eran!
         if is_price_dispute_or_challenge(message_text, recent_history):
             updated_req_disp = f"{open_req_text} | השגת לקוח על המחיר: {message_text}"
@@ -7959,7 +8608,8 @@ async def unified_whatsapp_webhook(req: Request):
             dev_label = kosher_dev_ctx["device_label"]
             galut_p = kosher_dev_ctx["galut_price"]
             yemot_p = kosher_dev_ctx["yemot_price"]
-            chosen_track = detect_chosen_warranty_track(message_text, galut_price=galut_p, yemot_price=yemot_p)
+            geula_p = kosher_dev_ctx.get("geula_price", "")
+            chosen_track = detect_chosen_warranty_track(message_text, galut_price=galut_p, yemot_price=yemot_p, geula_price=geula_p)
             chosen_color = detect_chosen_color(message_text)
             m_prev_color = re.search(r"\[COLOR:([^\]]+)\]", open_action_taken or "")
             active_color = chosen_color or (m_prev_color.group(1) if m_prev_color else "")
@@ -8091,9 +8741,14 @@ async def unified_whatsapp_webhook(req: Request):
                         "yemot_price": yemot_p
                     }
                 elif chosen_track in ["yemot", "geula"]:
-                    final_dev_price = yemot_p
-                    track_title = "מסלול ימות המשיח ⭐ (אחריות מעבדה מלאה בחדרה)"
-                    track_note = " (כולל תיקון אקספרס תוך שעתיים במעבדה שלנו בחדרה, מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!)"
+                    if chosen_track == "geula" and geula_p:
+                        final_dev_price = geula_p
+                        track_title = "מסלול גאולה 🛡️ (אחריות VIP פרימיום כוללת שבר וקורוזיה)"
+                        track_note = " (כולל תיקון נזק לקוח ושבר מסך, תיקון אקספרס במעבדה שלנו בחדרה ומכשיר חלופי חינם!)"
+                    else:
+                        final_dev_price = yemot_p
+                        track_title = "מסלול ימות המשיח ⭐ (אחריות מעבדה מלאה בחדרה)"
+                        track_note = " (כולל תיקון אקספרס תוך שעתיים במעבדה שלנו בחדרה, מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!)"
 
                     try:
                         conn = sqlite3.connect(DB_PATH)
@@ -8156,10 +8811,12 @@ async def unified_whatsapp_webhook(req: Request):
                     else:
                         opening_track_line = f"מעולה! אשמח לשריין עבורך יחידה של *{dev_label}*{color_display} מהמלאי כבר עכשיו. 📱🔥"
 
+                    geula_opt_line = f"• 🛡️ *מסלול גאולה ({geula_p} ₪ — VIP פרימיום):* כולל גם אחריות על שבר וקורוזיה (נזק לקוח)!\n" if geula_p else ""
                     reply_choose_track = (
                         f"{opening_track_line}\n"
                         f"באיזה מסלול אחריות תרצה לבחור עבור המכשיר?\n"
                         f"• ⭐ *מסלול ימות המשיח ({yemot_p} ₪ — המסלול המומלץ והמשתלם ביותר!):* אחריות מעבדה מלאה אצלנו בחדרה, תיקון אקספרס תוך שעתיים במקום להמתין 3 שבועות ליבואן, מכשיר חלופי חינם, העברת נתונים ועדכוני גרסה ללא עלות!\n"
+                        f"{geula_opt_line}"
                         f"• *מסלול גלות ({galut_p} ₪):* אחריות יבואן רשמי בלבד (שליחה למעבדת היבואן בעת תקלה).\n\n"
                         f"איזה מסלול לרשום לך כדי שאשלח לך מיד את פרטי התשלום בביט לשריון המכשיר? 😃"
                     )
@@ -8967,6 +9624,8 @@ async def unified_whatsapp_webhook(req: Request):
             kb_action += f" [OPTIONS_JSON:{json.dumps(kb_opts, ensure_ascii=False)}]"
         if kosher_kb_info.get("matched"):
             kb_action += f" - הצעת מחיר ושריון {kosher_kb_info['device_label']} [GALUT_PRICE:{kosher_kb_info['galut_price']}] [YEMOT_PRICE:{kosher_kb_info['yemot_price']}]"
+            if kosher_kb_info.get("geula_price"):
+                kb_action += f" [GEULA_PRICE:{kosher_kb_info['geula_price']}]"
         elif kb_single_price and len(kb_opts) < 2:
             kb_action += f" [PRICE:{kb_single_price}]"
 
@@ -9017,6 +9676,19 @@ async def unified_whatsapp_webhook(req: Request):
         breakdown_str = ", ".join(raw_breakdown) if raw_breakdown else (pos_item.get("product_name") or clean_title)
         cust_phone_fmt = format_phone_display(sender_phone)
 
+        avg_p_num = pos_hit.get("avg_price") or pos_item.get("single_price") or pos_item.get("price_galut") or 0
+        galut_p_num = pos_hit.get("galut_price") or pos_item.get("price_galut")
+        yemot_p_num = pos_hit.get("yemot_price") or pos_item.get("price_yemot")
+        geula_p_num = pos_hit.get("geula_price") or pos_item.get("price_geula")
+
+        pos_action_tags = f"נמסר ללקוח מחיר מהקופה ({est_price_str} עבור {clean_title}) [LAST_QUOTED_ITEM:{clean_title}]"
+        if avg_p_num:
+            pos_action_tags += f" [LAST_QUOTED_PRICE:{avg_p_num}] [PRICE:{avg_p_num}]"
+        if galut_p_num and yemot_p_num:
+            pos_action_tags += f" [GALUT_PRICE:{galut_p_num}] [YEMOT_PRICE:{yemot_p_num}]"
+            if geula_p_num:
+                pos_action_tags += f" [GEULA_PRICE:{geula_p_num}]"
+
         saved_pos_req_id = None
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -9028,9 +9700,9 @@ async def unified_whatsapp_webhook(req: Request):
                     sender_phone,
                     "נעם שיח - קופה ומלאי",
                     message_text,
-                    f"נמסר ללקוח מחיר ממוצע מהקופה ({est_price_str} עבור {clean_title}) ונשלחה בדיקת מלאי פיזי לערן",
-                    "",
-                    "pending",
+                    pos_action_tags,
+                    "מסלול ימות המשיח ⭐" if (galut_p_num and yemot_p_num) else "",
+                    "awaiting_customer_reply",
                     datetime.now().isoformat(),
                 ),
             )
@@ -9043,12 +9715,12 @@ async def unified_whatsapp_webhook(req: Request):
         target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
         imp_note = f" (ממוצע של {importers_cnt} יבואנים/רשומות בדוח)" if importers_cnt > 1 else ""
         admin_pos_msg = (
-            f"❓ *בדיקת מלאי פיזי ומחיר סופי מול הקופה* {f'[#REQ-{saved_pos_req_id}]' if saved_pos_req_id else ''} ({customer_name or cust_phone_fmt}):\n"
-            f"📦 *מוצר מבוקש (לאחר סינון):* *{clean_title}*{imp_note}\n"
-            f"📋 *שורות שנקראו מהדוח בקופה:* {breakdown_str}\n"
-            f"💰 *מחיר ממוצע שנמסר ללקוח:* *{est_price_str}*\n"
-            f"💬 *הודעת הלקוח:* \"{message_text}\"\n\n"
-            f"💬 *למענה מהיר: כתוב כאן אם המוצר קיים במלאי הפיזי ומה המחיר הסופי ללקוח (למשל: 'יש במלאי עולה {pos_hit.get('avg_price') or 360}' או 'חסר במלאי אפשר להזמין למחר ב-{pos_hit.get('avg_price') or 360}') — והסוכן יעדכן את הלקוח ויחתור לסגירת ההזמנה!*"
+            f"ℹ️ *עדכון אוטומטי מהקופה — הסוכן ענה ללקוח!* {f'[#REQ-{saved_pos_req_id}]' if saved_pos_req_id else ''} ({customer_name or cust_phone_fmt}):\n"
+            f"📦 *מוצר מבוקש:* *{clean_title}*{imp_note}\n"
+            f"📋 *נתונים שנקראו מהאקסל/קופה:* {breakdown_str}\n"
+            f"💰 *מחיר שנמסר ללקוח אוטומטית:* *{est_price_str}*\n"
+            f"💬 *שאלת הלקוח:* \"{message_text}\"\n\n"
+            f"💡 *הסוכן כבר ענה ללקוח והציע לו לשריין/להזמין. אם תרצה לעדכן מחיר אחר או מסלולי אחריות (למשל: 'גלות 500 ימות המשיח 600 גאולה 700'), השב ב-Swipe להודעה זו והסוכן ילמד זאת לתמיד!*"
         )
         for adm in target_admins:
             send_whatsapp_message(adm, admin_pos_msg)
@@ -9060,9 +9732,12 @@ async def unified_whatsapp_webhook(req: Request):
             "clean_name": clean_title,
             "estimated_price": est_price_str,
             "avg_price": pos_hit.get("avg_price"),
+            "galut_price": galut_p_num,
+            "yemot_price": yemot_p_num,
+            "geula_price": geula_p_num,
             "importers_count": importers_cnt,
             "raw_rows_breakdown": raw_breakdown,
-            "escalated": True,
+            "escalated": False,
         }
 
     # 3.6 FAST DETERMINISTIC PATH: Part / Screen / Battery / Port Inquiry (ONLY when message is about a part, or has no product tokens of its own!)
