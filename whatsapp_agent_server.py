@@ -2815,7 +2815,7 @@ WARRANTY_FULL_EXPLANATION = """📋 *השוואת מסלולי האחריות ב
 
 🟢 *3. מסלול גאולה (VIP פרימיום — שקט מושלם 🛡️):*
 • כל יתרונות "ימות המשיח" ובנוסף:
-• *תיקון נזק לקוח (שבר / נפילה) ללא עלות!* (תיקון ראשון חינם, שני ב-50% הנחה).
+• *תיקון שבר / נפילה ללא עלות!* (תיקון ראשון חינם, שני ב-50% הנחה).
 • החלפת מכשיר לדגם אחר עד 14 ימי עסקים (גם אם נעשה שימוש במכשיר!).
 • התחייבות לתיקון או החלפת מכשיר תוך 3 שעות בלבד!"""
 
@@ -3094,7 +3094,7 @@ MASTER_OVERRIDE_CODES = ("22015743", "22015473")
 DEFAULT_TRACK_SHORT_DESCS = {
     "galut": "אחריות יבואן ארצית - טיפול עד 21 ימי עסקים",
     "yemot": "אחריות מעבדה מלאה בחדרה, תיקון אקספרס תוך שעתיים ומכשיר חלופי — המומלץ!",
-    "geula": "אחריות VIP פרימיום כוללת שבר ונזק לקוח!",
+    "geula": "אחריות VIP פרימיום כוללת שבר!",
 }
 
 def get_track_short_desc(track_key: str) -> str:
@@ -3168,27 +3168,40 @@ def set_dynamic_template(template_key: str, content: str):
         print(f"[Set Dynamic Template Notice]: {e}")
 
 def _remove_phrase_cleanly(text: str, phrase: str) -> str:
-    """Removes a phrase or word from text while cleaning up adjacent slashes, conjunctions (ו...), and punctuation."""
+    """Removes a phrase or word from text while cleaning up adjacent slashes, conjunctions (ו...), parentheses, and punctuation."""
     if not text or not phrase:
         return text or ""
     p_clean = phrase.strip()
     if not p_clean:
         return text
     out = text
-    # 1. Remove slash-separated occurrences: " / קורוזיה" or "קורוזיה / "
-    out = re.sub(rf"\s*/\s*(?:תיקון\s+)?{re.escape(p_clean)}(?=\s*[/\)\],.!]|$)", "", out, flags=re.IGNORECASE)
-    out = re.sub(rf"(?<=[\(\[/\s])(?:תיקון\s+)?{re.escape(p_clean)}\s*/\s*", "", out, flags=re.IGNORECASE)
-    # 2. Remove comma-separated or conjunction occurrences: ", קורוזיה" or " וקורוזיה" or " ו-קורוזיה"
-    out = re.sub(rf"\s*,\s*(?:תיקון\s+)?{re.escape(p_clean)}(?=\s*[,\)\].!]|$)", "", out, flags=re.IGNORECASE)
-    out = re.sub(rf"\s+ו-?(?:תיקון\s+)?{re.escape(p_clean)}\b", "", out, flags=re.IGNORECASE)
-    # 3. Direct substring removal if still present
-    if p_clean in out:
-        out = out.replace(p_clean, "")
-    # 4. Clean up artifacts like "/ /", "( / ", " / )", double spaces
+    # Build both exact phrase and base phrase without leading conjunction 'ו' (e.g. 'ונזק לקוח' -> 'נזק לקוח')
+    forms = [p_clean]
+    if p_clean.startswith("ו") and len(p_clean) >= 3:
+        no_vav = re.sub(r"^ו-?", "", p_clean).strip()
+        if no_vav and no_vav not in forms:
+            forms.append(no_vav)
+
+    for pf in forms:
+        # 1. Remove slash-separated occurrences: " / קורוזיה" or "קורוזיה / "
+        out = re.sub(rf"\s*/\s*(?:תיקון\s+)?{re.escape(pf)}(?=\s*[/\)\],.!]|$)", "", out, flags=re.IGNORECASE)
+        out = re.sub(rf"(?<=[\(\[/\s])(?:תיקון\s+)?{re.escape(pf)}\s*/\s*", "", out, flags=re.IGNORECASE)
+        # 2. Remove comma-separated or conjunction occurrences: ", קורוזיה" or " וקורוזיה" or " ו-קורוזיה"
+        out = re.sub(rf"\s*,\s*(?:תיקון\s+)?{re.escape(pf)}(?=\s*[,\)\].!]|$)", "", out, flags=re.IGNORECASE)
+        out = re.sub(rf"\s+ו-?(?:תיקון\s+)?{re.escape(pf)}(?=[\s,!.)\]*]|$)", "", out, flags=re.IGNORECASE)
+        out = re.sub(rf"\b{re.escape(pf)}\s+ו-?", "", out, flags=re.IGNORECASE)
+        # 3. Direct substring removal if still present
+        if pf in out:
+            out = out.replace(pf, "")
+
+    # 4. Clean up parenthetical leftovers like "תיקון (שבר / נפילה)" -> "תיקון שבר / נפילה"
+    out = re.sub(r"(תיקון)\s+\(([^)\n]+)\)", r"\1 \2", out)
+    # 5. Clean up artifacts like "/ /", "( / ", " / )", double spaces, space before '!' or ')'
     out = re.sub(r"\(\s*/\s*", "(", out)
     out = re.sub(r"\s*/\s*\)", ")", out)
     out = re.sub(r"/\s*/", "/", out)
     out = re.sub(r"\(\s*\)", "", out)
+    out = re.sub(r"\s+([!?,.)])", r"\1", out)
     out = re.sub(r"[ \t]{2,}", " ", out)
     # Remove bullet lines that became empty
     cleaned_lines = []
@@ -3229,13 +3242,27 @@ def apply_learned_style_rules(text: str) -> str:
         "מה תרצה להזמין?",
         out
     )
-    # Enforce current dynamic short track descriptions on device price quotes
+    # Enforce current dynamic short track descriptions on device price quotes for ALL 3 tracks (גלות, ימות המשיח, גאולה)
     try:
         curr_galut_desc = get_track_short_desc("galut")
         if curr_galut_desc:
             out = re.sub(
-                r"(•\s*\*?מסלול\s+גלות\*?\s*)\([^\)\n]*?(?:אחריות\s+יבואן|טיפול\s+עד)[^\)\n]*?\)",
+                r"(•\s*\*?מסלול\s+גלות\*?\s*)\([^\)\n]+\)",
                 lambda m: f"{m.group(1)}({curr_galut_desc})",
+                out
+            )
+        curr_yemot_desc = get_track_short_desc("yemot")
+        if curr_yemot_desc:
+            out = re.sub(
+                r"(•\s*(?:⭐\s*)?\*?מסלול\s+ימות\s+המשיח\*?\s*)\([^\)\n]+\)",
+                lambda m: f"{m.group(1)}({curr_yemot_desc})",
+                out
+            )
+        curr_geula_desc = get_track_short_desc("geula")
+        if curr_geula_desc:
+            out = re.sub(
+                r"(•\s*(?:🛡️\s*)?\*?מסלול\s+גאולה\*?\s*)\([^\)\n]+\)",
+                lambda m: f"{m.group(1)}({curr_geula_desc})",
                 out
             )
     except Exception:
@@ -6660,7 +6687,10 @@ def init_db():
                     for t_k, t_obj in tmpl_cached.items():
                         t_val = t_obj.get("content") if isinstance(t_obj, dict) else str(t_obj)
                         if t_k and t_val:
-                            t_val_clean = _remove_phrase_cleanly(str(t_val), "קורוזיה") if t_k == "WARRANTY_FULL_EXPLANATION" else str(t_val)
+                            t_val_clean = str(t_val)
+                            if t_k in ("WARRANTY_FULL_EXPLANATION", "TRACK_SHORT_GEULA"):
+                                for _obs_w in ("קורוזיה", "ונזק לקוח", "נזק לקוח"):
+                                    t_val_clean = _remove_phrase_cleanly(t_val_clean, _obs_w)
                             c.execute(
                                 "INSERT OR REPLACE INTO dynamic_templates (template_key, content, updated_at) VALUES (?, ?, ?)",
                                 (t_k, t_val_clean, (t_obj.get("updated_at") if isinstance(t_obj, dict) else None) or datetime.now().isoformat())
@@ -7833,19 +7863,177 @@ def _extract_track_section_preview(full_warranty_text: str, track_name: str) -> 
     return full_warranty_text.strip()
 
 
+def _apply_verbatim_track_replacement(tr_name: str, verbatim_text: str, used_code: str, is_append_only: bool = False) -> tuple[str, str]:
+    """
+    Updates a specific warranty track ('גלות', 'ימות המשיח', or 'גאולה') across BOTH:
+    1. TRACK_SHORT_<TRACK> (used in device price quotes)
+    2. WARRANTY_FULL_EXPLANATION (the 3-track comparison template)
+    Supports single-line parentheticals, single-line full descriptions, and multi-line bulleted sections!
+    Returns (new_full_warranty_text, updated_short_desc).
+    """
+    tpl_key_map = {
+        "גלות": "TRACK_SHORT_GALUT",
+        "ימות המשיח": "TRACK_SHORT_YEMOT",
+        "גאולה": "TRACK_SHORT_GEULA",
+    }
+    default_header_map = {
+        "גלות": "🔴 *1. מסלול גלות (אחריות יבואן ארצית - טיפול עד 21 ימי עסקים):*",
+        "ימות המשיח": "🟡 *2. מסלול ימות המשיח (האחריות המומלצת שלנו ⭐):*",
+        "גאולה": "🟢 *3. מסלול גאולה (VIP פרימיום — שקט מושלם 🛡️):*",
+    }
+    tpl_key = tpl_key_map.get(tr_name, "TRACK_SHORT_GALUT")
+    old_short_desc = get_track_short_desc(tr_name)
+
+    raw_clean = (verbatim_text or "").strip()
+    lines = [ln.strip() for ln in raw_clean.splitlines() if ln.strip()]
+    is_multiline = len(lines) >= 2 or any(ln.startswith(("•", "-", "*")) for ln in lines[1:])
+
+    # Determine the short inline description for device quotes
+    short_desc_candidate = ""
+    if not is_multiline:
+        # Single-line replacement
+        s_clean = re.sub(rf"^(?:🔴|🟡|🟢)?\s*\*?(?:[123]\.\s*)?מסלול\s+{re.escape(tr_name)}\*?\s*[:\-–—]?\s*", "", raw_clean, flags=re.IGNORECASE).strip()
+        s_clean = s_clean.strip(" ()\t\n\"'").rstrip(".")
+        if s_clean:
+            short_desc_candidate = s_clean
+    else:
+        # Multi-line replacement: check if line 0 has parenthetical header e.g. "מסלול גאולה (...):"
+        m_hdr_paren = re.search(rf"מסלול\s+{re.escape(tr_name)}\s*\(([^)\n]+)\)", lines[0])
+        if m_hdr_paren:
+            short_desc_candidate = m_hdr_paren.group(1).strip()
+        else:
+            # Summarize bullet lines into a clean inline short description
+            bullet_summaries = []
+            for bl in lines:
+                if re.search(rf"מסלול\s+{re.escape(tr_name)}", bl) and not bl.startswith(("•", "-")):
+                    continue
+                b_txt = re.sub(r"^[•\-\*]+\s*", "", bl).replace("*", "").strip().rstrip(".")
+                if b_txt:
+                    bullet_summaries.append(b_txt)
+            if bullet_summaries:
+                short_desc_candidate = " | ".join(bullet_summaries[:2])
+
+    if not is_append_only and short_desc_candidate:
+        set_dynamic_template(tpl_key, short_desc_candidate)
+        # Update all learned_kb entries that mention this track
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            kb_rows = conn.execute("SELECT id, answer FROM learned_kb").fetchall()
+            for k_id, k_ans in kb_rows:
+                if not k_ans:
+                    continue
+                new_k_ans = re.sub(
+                    rf"(•\s*\*?(?:⭐\s*|🛡️\s*)?\*?מסלול\s+{re.escape(tr_name)}\*?\s*)\([^\)\n]+\)",
+                    lambda m: f"{m.group(1)}({short_desc_candidate})",
+                    k_ans
+                )
+                if new_k_ans != k_ans:
+                    conn.execute("UPDATE learned_kb SET answer = ? WHERE id = ?", (new_k_ans, k_id))
+            conn.commit()
+            conn.close()
+            sync_learned_kb_to_json()
+        except Exception:
+            pass
+        if old_short_desc and old_short_desc != short_desc_candidate:
+            save_permanent_style_rule(
+                f"מסלול {tr_name} ({old_short_desc})",
+                f"מסלול {tr_name} ({short_desc_candidate})",
+                f"הנחיית קוד מאסטר ({used_code}) למסלול {tr_name}: ({short_desc_candidate})"
+            )
+
+    curr_warranty = get_dynamic_template("WARRANTY_FULL_EXPLANATION", WARRANTY_FULL_EXPLANATION)
+
+    def _replace_or_append_track_sec(sec_txt: str) -> str:
+        sec_lines = [ln for ln in sec_txt.splitlines() if ln.strip()]
+        existing_header = sec_lines[0] if sec_lines else default_header_map.get(tr_name, f"*מסלול {tr_name}:*")
+
+        if is_append_only:
+            add_clean = raw_clean.strip(" ()\t\n.,!\"'").strip()
+            bullet_line = f"• {add_clean}." if not add_clean.endswith((".", "!")) else f"• {add_clean}"
+            if add_clean in sec_txt:
+                return sec_txt
+            return sec_txt.rstrip() + "\n" + bullet_line
+
+        if is_multiline:
+            # Check if the user's first line already includes the track header ("מסלול גאולה...")
+            first_ln = lines[0]
+            if re.search(rf"מסלול\s+{re.escape(tr_name)}", first_ln):
+                # Ensure it has the emoji/number prefix if user omitted it
+                if not any(em in first_ln for em in ("🔴", "🟡", "🟢")):
+                    em_prefix = {"גלות": "🔴 *1. ", "ימות המשיח": "🟡 *2. ", "גאולה": "🟢 *3. "}.get(tr_name, "")
+                    first_ln_clean = first_ln.lstrip("* ").rstrip("*:")
+                    new_hdr = f"{em_prefix}{first_ln_clean}:*"
+                else:
+                    new_hdr = first_ln
+                rem_lines = lines[1:]
+            else:
+                new_hdr = existing_header
+                rem_lines = lines
+
+            formatted_bullets = []
+            for r_ln in rem_lines:
+                r_s = r_ln.strip()
+                if not r_s:
+                    continue
+                if not r_s.startswith(("•", "-", "*")):
+                    r_s = f"• {r_s}"
+                elif r_s.startswith("- "):
+                    r_s = "• " + r_s[2:]
+                formatted_bullets.append(r_s)
+            if formatted_bullets:
+                return new_hdr + "\n" + "\n".join(formatted_bullets)
+            return new_hdr
+
+        # Single-line replacement (not append-only):
+        was_paren = bool(re.match(r"^\(.+\)$", raw_clean))
+        clean_single = short_desc_candidate or raw_clean.strip(" ()\t\n.,!\"'").strip()
+
+        # If the user wrote a short parenthetical or header-style description for Galut, update header + bullet 1
+        if tr_name == "גלות" and (was_paren or len(clean_single) <= 65):
+            new_hdr = re.sub(
+                rf"(מסלול\s+{re.escape(tr_name)}\s*)\([^\)\n]+\)",
+                lambda m: f"{m.group(1)}({clean_single})",
+                existing_header,
+                count=1
+            )
+            b1 = f"• {clean_single}." if not clean_single.endswith((".", "!")) else f"• {clean_single}"
+            if len(sec_lines) >= 2:
+                sec_lines[0] = new_hdr
+                sec_lines[1] = b1
+                return "\n".join(sec_lines)
+            return f"{new_hdr}\n{b1}"
+
+        if was_paren:
+            new_hdr = re.sub(
+                rf"(מסלול\s+{re.escape(tr_name)}\s*)\([^\)\n]+\)",
+                lambda m: f"{m.group(1)}({clean_single})",
+                existing_header,
+                count=1
+            )
+            sec_lines[0] = new_hdr
+            return "\n".join(sec_lines)
+
+        # User provided the exact text they want for this track on a single line (word-for-word replacement)
+        sub_bullets = [p.strip() for p in re.split(r"(?:•|\n|;\s*)", clean_single) if p.strip()]
+        if len(sub_bullets) >= 2:
+            b_lines = [f"• {sb}" if not sb.startswith("•") else sb for sb in sub_bullets]
+            return existing_header + "\n" + "\n".join(b_lines)
+        else:
+            b_line = f"• {clean_single}." if not clean_single.endswith((".", "!")) else f"• {clean_single}"
+            return f"{existing_header}\n{b_line}"
+
+    new_warranty = _edit_warranty_track_section(curr_warranty, tr_name, _replace_or_append_track_sec)
+    set_dynamic_template("WARRANTY_FULL_EXPLANATION", new_warranty)
+    save_permanent_style_rule("", short_desc_candidate or raw_clean, f"הנחיית קוד מאסטר ({used_code}) למסלול {tr_name}: {raw_clean}")
+    return new_warranty, get_track_short_desc(tr_name)
+
+
 def handle_master_override_code_command(message_text: str, sender_phone: str, raw_chat_id: str, quoted_text: str = "") -> dict:
     """
     Universal Master Override Handler triggered by `22015743: [הנחיה]` or `22015473: [הנחיה]` from ANY chat or phone number!
-    Supports:
-    1. Removing words/claims from warranty tracks or permanent templates
-       (e.g. `22015743: תוריד את התיקון קורוזיה במסלול גאולה כי זה לא נכון`).
-    2. Replacing phrases globally (`22015743: במקום X תכתוב Y` / `22015743: תשנה את X ל-Y`).
-    3. Updating or adding warranty track descriptions (`22015473: במסלול גלות תרשום ( אחריות יבואן ארצית - טיפול עד 21 ימי עסקים)`).
-    4. Updating product/device prices including multi-track prices (`22015743: המחיר של X הוא ...`).
-    5. Updating Q&A rules or general permanent behavior (`22015743: כששואלים על X תענה Y`).
     """
     m_code = re.match(r"^\s*(22015743|22015473|2201\d{4})\s*(?:[:\-]\s*|\s+)(.+)$", (message_text or "").strip(), flags=re.DOTALL)
-    used_code = m_code.group(1) if m_code else "22015473"
+    used_code = m_code.group(1) if m_code else "22015743"
     raw_body = (m_code.group(2) if m_code else (message_text or "")).strip()
     body = auto_fix_common_hebrew_typos(raw_body)
 
@@ -7870,83 +8058,147 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
     elif "גלות" in body:
         target_track = "גלות"
 
-    # Strip conversational rationale at the end (e.g. "כי זה לא נכון", "זה לא נכון", "מעכשיו ואילך")
+    # Strip conversational rationale at the end of single-line commands (e.g. "כי זה לא נכון", "זה לא נכון", "מעכשיו ואילך")
     body_no_reason = re.sub(
-        r"\s+(?:כי\s+זה\s+לא\s+נכון|כי\s+אין\s+דבר\s+כזה|כי\s+זה\s+טעות|כי\s+זה\s+שגוי|זה\s+לא\s+נכון|מעכשיו\s+ואילך|מהנוסח\s+הקבוע|מההודעה\s+הקבועה).*$",
+        r"\s+(?:כי\s+זה\s+לא\s+נכון|כי\s+אין\s+דבר\s+כזה|כי\s+זה\s+טעות|כי\s+זה\s+שגוי|זה\s+לא\s+נכון|מעכשיו\s+ואילך|מהנוסח\s+הקבוע|מההודעה\s+הקבועה)[^\n]*$",
         "",
         body,
         flags=re.IGNORECASE
     ).strip(" .,!")
 
     # =========================================================================
-    # CASE 1: REMOVAL / DELETION ("תוריד את ...", "תמחק את ...", "להוריד את ...", "אל תכתוב ...", "בלי ...")
-    # Example: "22015743: תוריד את התיקון קורוזיה במסלול גאולה כי זה לא נכון"
+    # CASE 0: FULL MULTI-TRACK WARRANTY TEMPLATE PASTED WORD-FOR-WORD
     # =========================================================================
-    m_remove = re.match(
-        r"^(?:תוריד|להוריד|תמחק|למחוק|תסיר|להסיר|תבטל|לבטל|אל\s+תכתוב|אל\s+תרשום|אל\s+תציין|בלי)\s+(?:את\s+)?(.+)$",
-        body_no_reason,
-        flags=re.IGNORECASE
+    tracks_mentioned_count = sum(1 for tk in ("מסלול גלות", "מסלול ימות המשיח", "מסלול גאולה") if tk in body)
+    if (tracks_mentioned_count >= 2 or "השוואת מסלולי האחריות" in body) and not re.search(r"המחיר\s+של|עולה\s+\d", body):
+        cleaned_full_tpl = re.sub(
+            r"^(?:תרשום|תכתוב|תעדכן|תשנה|זה\s+הנוסח|הנוסח\s+החדש)\s*[:\-]?\s*",
+            "",
+            body.strip(),
+            flags=re.IGNORECASE
+        ).strip()
+        set_dynamic_template("WARRANTY_FULL_EXPLANATION", cleaned_full_tpl)
+        for _tr_he, _tpl_k in [("גלות", "TRACK_SHORT_GALUT"), ("ימות המשיח", "TRACK_SHORT_YEMOT"), ("גאולה", "TRACK_SHORT_GEULA")]:
+            m_p = re.search(rf"מסלול\s+{re.escape(_tr_he)}\s*\(([^)\n]+)\)", cleaned_full_tpl)
+            if m_p:
+                set_dynamic_template(_tpl_k, m_p.group(1).strip())
+        confirm_msg = (
+            f"✅ *פקודת מאסטר ({used_code}) בוצעה — נוסח השוואת מסלולי האחריות כולו הוחלף מילה במילה!* 🛠️📋\n\n"
+            f"📋 *הנוסח הקבוע החדש מעכשיו ואילך:*\n{cleaned_full_tpl}"
+        )
+        send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
+        return {
+            "ok": True,
+            "master_code_action": "full_warranty_template_replaced_verbatim",
+            "updated_preview": cleaned_full_tpl,
+        }
+
+    # =========================================================================
+    # CASE 1: REMOVAL / DELETION ("תוריד...", "להסיר...", "תמחק...", "אל תכתוב...", "בלי...")
+    # =========================================================================
+    m_remove = (
+        re.match(
+            r"^(?:(?:במסלול|ממסלול|למסלול)\s+(?:גאולה|ימות\s+המשיח|ימות\s+משיח|גלות)\s+)?(?:תוריד|להוריד|תמחק|למחוק|תסיר|להסיר|תבטל|לבטל|אל\s+תכתוב|אל\s+תרשום|אל\s+תציין|בלי)\s+(.+)$",
+            body_no_reason,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        or re.search(
+            r"^(?:במסלול|ממסלול|למסלול)\s+(?:גאולה|ימות\s+המשיח|ימות\s+משיח|גלות)\s+.*?\b(?:תוריד|להוריד|תמחק|למחוק|תסיר|להסיר|תבטל|לבטל|בלי)\s+(.+)$",
+            body_no_reason,
+            flags=re.IGNORECASE | re.DOTALL
+        )
     )
     if m_remove and not re.search(r"\b(?:אלא|במקום\s+זה)\b", body_no_reason):
         phrase_raw = m_remove.group(1).strip()
-        # Strip location suffix like "במסלול גאולה" / "ממסלול גאולה" / "בהודעת האחריות"
+        # 1. Strip track locator phrase ("במסלול גאולה" / "ממסלול גאולה") wherever it appears WITHOUT wiping out text after it!
         phrase_clean = re.sub(
-            r"\s+(?:במסלול|ממסלול|ב-?מסלול|מ-?מסלול)\s+(?:גאולה|ימות\s+המשיח|גלות).*$",
-            "",
+            r"(?:^|\s+)(?:במסלול|ממסלול|למסלול|ב-?מסלול|מ-?מסלול)\s+(?:גאולה|ימות\s+המשיח|ימות\s+משיח|גלות)(?=\s|$|[.,!:])",
+            " ",
             phrase_raw,
             flags=re.IGNORECASE
         ).strip()
+        # 2. Strip location descriptors ("בהודעת האחריות", "במסלולי האחריות", etc.)
         phrase_clean = re.sub(
-            r"\s+(?:בהודעת\s+האחריות|במסלולי\s+האחריות|בשעות\s+הפעילות|בהודעה).*$",
+            r"(?:^|\s+)(?:בהודעת\s+האחריות|במסלולי\s+האחריות|בשעות\s+הפעילות|בהודעה)(?=\s|$)",
+            " ",
+            phrase_clean,
+            flags=re.IGNORECASE
+        ).strip()
+        # 3. Strip meta-words ("את המילים", "המילים", "את המילה", "המילה", "את המשפט", "את") from the start
+        phrase_clean = re.sub(
+            r"^(?:את\s+)?(?:המילים|המילה|המשפט|הביטוי|הסעיף|הכיתוב|התוכן)\s*[:\"'\-–]?\s*",
             "",
             phrase_clean,
             flags=re.IGNORECASE
-        ).strip(" .,!\"'")
+        ).strip()
+        phrase_clean = re.sub(r"^את\s+", "", phrase_clean, flags=re.IGNORECASE).strip(" .,!\"'")
 
-        # Build candidate strings to remove (both full phrase and core noun if prefixed with "התיקון " / "תיקון " / "אחריות על ")
         candidates = []
-        if phrase_clean:
-            candidates.append(phrase_clean)
-            no_ha = re.sub(r"^ה", "", phrase_clean).strip()
-            if no_ha and no_ha not in candidates:
-                candidates.append(no_ha)
-            core_noun = re.sub(r"^(?:ה?תיקון\s+(?:של\s+)?|ה?אחריות\s+(?:על\s+)?|ה?כיסוי\s+(?:של\s+|על\s+)?|ה?סעיף\s+(?:של\s+)?|ה?מילה\s+)", "", phrase_clean).strip()
-            if core_noun and core_noun not in candidates:
-                candidates.append(core_noun)
-                core_no_ha = re.sub(r"^ה", "", core_noun).strip()
-                if core_no_ha and core_no_ha not in candidates:
-                    candidates.append(core_no_ha)
+        def _add_cand(c_str: str):
+            c_s = (c_str or "").strip(" .,!\"'")
+            if c_s and c_s not in candidates:
+                candidates.append(c_s)
 
-        # Update WARRANTY_FULL_EXPLANATION dynamic template
-        curr_warranty = get_dynamic_template("WARRANTY_FULL_EXPLANATION", WARRANTY_FULL_EXPLANATION)
+        if phrase_clean:
+            _add_cand(phrase_clean)
+            if phrase_clean.startswith("ו") and len(phrase_clean) >= 3:
+                _add_cand(re.sub(r"^ו-?", "", phrase_clean).strip())
+            _add_cand(re.sub(r"^ה", "", phrase_clean).strip())
+            core_noun = re.sub(
+                r"^(?:ה?תיקון\s+(?:של\s+)?|ה?אחריות\s+(?:על\s+)?|ה?כיסוי\s+(?:של\s+|על\s+)?|ה?סעיף\s+(?:של\s+)?|ה?מילים\s+|ה?מילה\s+)",
+                "",
+                phrase_clean
+            ).strip()
+            if core_noun:
+                _add_cand(core_noun)
+                if core_noun.startswith("ו") and len(core_noun) >= 3:
+                    _add_cand(re.sub(r"^ו-?", "", core_noun).strip())
+                _add_cand(re.sub(r"^ה", "", core_noun).strip())
+
         def _remove_candidates_from_sec(sec_txt: str) -> str:
             res_txt = sec_txt
             for cand in candidates:
-                if cand and cand in res_txt:
+                if cand:
                     res_txt = _remove_phrase_cleanly(res_txt, cand)
             return res_txt
 
+        # 1. Update WARRANTY_FULL_EXPLANATION dynamic template
+        curr_warranty = get_dynamic_template("WARRANTY_FULL_EXPLANATION", WARRANTY_FULL_EXPLANATION)
         new_warranty = _edit_warranty_track_section(curr_warranty, target_track, _remove_candidates_from_sec)
         set_dynamic_template("WARRANTY_FULL_EXPLANATION", new_warranty)
 
-        # Also update STORE_HOURS_DETAILS if relevant
+        # 2. Also remove from TRACK_SHORT_GALUT / TRACK_SHORT_YEMOT / TRACK_SHORT_GEULA (used in device quotes!)
+        track_keys_to_clean = (
+            [{"גלות": "TRACK_SHORT_GALUT", "ימות המשיח": "TRACK_SHORT_YEMOT", "גאולה": "TRACK_SHORT_GEULA"}[target_track]]
+            if target_track in ("גלות", "ימות המשיח", "גאולה")
+            else ["TRACK_SHORT_GALUT", "TRACK_SHORT_YEMOT", "TRACK_SHORT_GEULA"]
+        )
+        for tk_clean in track_keys_to_clean:
+            curr_short = get_dynamic_template(tk_clean, "")
+            if curr_short:
+                new_short = _remove_candidates_from_sec(curr_short)
+                if new_short != curr_short:
+                    set_dynamic_template(tk_clean, new_short)
+
+        # 3. Also update STORE_HOURS_DETAILS if relevant
         curr_hours = get_dynamic_template("STORE_HOURS_DETAILS", STORE_HOURS_DETAILS)
         new_hours = _remove_candidates_from_sec(curr_hours)
         if new_hours != curr_hours:
             set_dynamic_template("STORE_HOURS_DETAILS", new_hours)
 
-        # Save permanent deletion rule in learned_style_rules so it is stripped everywhere!
-        primary_removed = candidates[-1] if candidates else phrase_clean
-        rule_inst = f"הנחיית קוד מאסטר (22015743): {raw_body} (אין לכלול את '{primary_removed}')"
+        # 4. Save permanent deletion rule in learned_style_rules so it is stripped everywhere!
+        primary_removed = candidates[0] if candidates else phrase_clean
+        rule_inst = f"הנחיית קוד מאסטר ({used_code}): {raw_body} (אין לכלול את '{primary_removed}')"
         for cand in candidates:
             if len(cand) >= 2:
                 save_permanent_style_rule(cand, "[DELETE]", rule_inst)
 
         preview_block = _extract_track_section_preview(new_warranty, target_track) if target_track else new_warranty
         track_label = f" (במסלול {target_track})" if target_track else ""
+        short_line_info = f"\n✨ *נוסח קצר בהצעות מחיר למכשירים:* • מסלול {target_track} ({get_track_short_desc(target_track)})" if target_track else ""
         confirm_msg = (
-            f"✅ *פקודת מאסטר (22015743) בוצעה — הנוסח הקבוע עודכן לתמיד{track_label}!* 🛠️\n"
-            f"🗑️ *הוסר מהנוסח הקבוע:* \"{phrase_clean}\"\n\n"
+            f"✅ *פקודת מאסטר ({used_code}) בוצעה — הנוסח הקבוע עודכן לתמיד{track_label}!* 🛠️\n"
+            f"🗑️ *הוסר מהנוסח הקבוע:* \"{phrase_clean}\"{short_line_info}\n\n"
             f"📋 *הנוסח המעודכן מעכשיו ואילך:*\n{preview_block}"
         )
         send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
@@ -7965,22 +8217,23 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
         re.search(
             r"במקום\s+(?:לכתוב\s+|לרשום\s+|להגיד\s+|לשאול\s+)?[:\"']?(.+?)[\"']?\s+(?:תכתוב|תרשום|תגיד|תשאל|תשים|צריך\s+להיות)\s*[:\"']?(.+?)[\"']?$",
             body_no_reason,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE | re.DOTALL
         )
         or re.search(
             r"(?:תשנה|לשנות|תחליף|להחליף)\s+(?:את\s+)?[:\"']?(.+?)[\"']?\s+(?:ל-|ל|ב-|ב)\s*[:\"']?(.+?)[\"']?$",
             body_no_reason,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE | re.DOTALL
         )
         or re.search(
             r"(?:אל|לא)\s+(?:תשאל|תכתוב|תרשום|תגיד)\s+[:\"']?(.+?)[\"']?\s+(?:אלא|אלה)\s+(?:תכתוב|תרשום|תשאל|תגיד)?\s*[:\"']?(.+?)[\"']?$",
             body_no_reason,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE | re.DOTALL
         )
     )
     if m_replace and not re.search(r"המחיר\s+של", body_no_reason):
         old_val = m_replace.group(1).strip(" .,!\"'")
         new_val = m_replace.group(2).strip(" .,!\"'")
+        old_val = re.sub(r"^(?:במסלול|ממסלול)\s+(?:גאולה|ימות\s+המשיח|גלות)\s+", "", old_val).strip()
         old_val = re.sub(r"\s+(?:במסלול|ממסלול)\s+(?:גאולה|ימות\s+המשיח|גלות)$", "", old_val).strip()
 
         curr_warranty = get_dynamic_template("WARRANTY_FULL_EXPLANATION", WARRANTY_FULL_EXPLANATION)
@@ -7992,15 +8245,20 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
         if new_warranty != curr_warranty:
             set_dynamic_template("WARRANTY_FULL_EXPLANATION", new_warranty)
 
+        for _tk in ("TRACK_SHORT_GALUT", "TRACK_SHORT_YEMOT", "TRACK_SHORT_GEULA"):
+            _c_sh = get_dynamic_template(_tk, "")
+            if old_val and old_val in _c_sh:
+                set_dynamic_template(_tk, _c_sh.replace(old_val, new_val))
+
         curr_hours = get_dynamic_template("STORE_HOURS_DETAILS", STORE_HOURS_DETAILS)
         if old_val in curr_hours:
             set_dynamic_template("STORE_HOURS_DETAILS", curr_hours.replace(old_val, new_val))
 
-        rule_inst = f"הנחיית קוד מאסטר (22015743): במקום '{old_val}' חובה לכתוב תמיד '{new_val}'"
+        rule_inst = f"הנחיית קוד מאסטר ({used_code}): במקום '{old_val}' חובה לכתוב תמיד '{new_val}'"
         save_permanent_style_rule(old_val, new_val, rule_inst)
 
         confirm_msg = (
-            f"✅ *פקודת מאסטר (22015743) בוצעה — הנוסח הוחלף באופן קבוע!* 🛠️\n"
+            f"✅ *פקודת מאסטר ({used_code}) בוצעה — הנוסח הוחלף באופן קבוע!* 🛠️\n"
             f"🔄 *נוסח קודם:* \"{old_val}\"\n"
             f"✨ *נוסח קבוע חדש:* \"{new_val}\""
         )
@@ -8013,24 +8271,26 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
         }
 
     # =========================================================================
-    # CASE 3: UPDATING OR ADDING A WARRANTY TRACK DESCRIPTION / LINE
-    # Examples:
-    # - "22015473: במסלול גלות תרשום ( אחריות יבואן ארצית - טיפול עד 21 ימי עסקים)"
-    # - "22015743: תוסיף במסלול גאולה גיבוי ענן חינם"
+    # CASE 3: UPDATING, REWRITING (WORD-FOR-WORD), OR ADDING A WARRANTY TRACK DESCRIPTION
     # =========================================================================
     m_track_add = (
         re.match(
-            r"^במסלול\s+(גאולה|ימות\s+המשיח|גלות)\s+(תוסיף|להוסיף|תכתוב|לכתוב|תרשום|לרשום|עדכן|תעדכן|תשנה|לשנות)\s*(?:ש-|ש|:)?\s*(.+)$",
+            r"^(?:במסלול|למסלול)\s+(גאולה|ימות\s+המשיח|ימות\s+משיח|גלות)\s+(תוסיף|להוסיף|תכתוב|לכתוב|תרשום|לרשום|עדכן|תעדכן|תשנה|לשנות|יהיה|צריך\s+להיות)\s*(?:ש-|ש|:)?\s*(.+)$",
             body_no_reason,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE | re.DOTALL
         )
         or re.match(
-            r"^(תוסיף|להוסיף|תכתוב|לכתוב|תרשום|לרשום|עדכן|תעדכן|תשנה|לשנות)?\s*(?:במסלול|למסלול)\s+(גאולה|ימות\s+המשיח|גלות)\s*(?:ש-|ש|:|את)?\s*(.+)$",
+            r"^(תוסיף|להוסיף|תכתוב|לכתוב|תרשום|לרשום|עדכן|תעדכן|תשנה|לשנות)?\s*(?:במסלול|למסלול)\s+(גאולה|ימות\s+המשיח|ימות\s+משיח|גלות)\s*(?:ש-|ש|:|את\s+הנוסח\s+הבא|את\s+הנוסח|את)?\s*(.+)$",
             body_no_reason,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        or re.match(
+            r"^()\s*(?:🔴|🟡|🟢)?\s*\*?(?:[123]\.\s*)?מסלול\s+(גאולה|ימות\s+המשיח|ימות\s+משיח|גלות)\*?\s*(?:[:\-–—]|\n)\s*(.+)$",
+            body.strip(),
+            flags=re.IGNORECASE | re.DOTALL
         )
     )
-    if m_track_add:
+    if m_track_add and not re.search(r"^(?:המחיר\s+של|כמה\s+עולה)", body_no_reason):
         g1 = (m_track_add.group(1) or "").strip()
         g2 = (m_track_add.group(2) or "").strip()
         if g1 in ("גאולה", "גלות") or "ימות" in g1:
@@ -8043,79 +8303,25 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
             tr_name = "ימות המשיח"
 
         raw_addition = m_track_add.group(3).strip()
+        raw_addition = re.sub(
+            r"^(?:את\s+הנוסח\s+הבא|את\s+הנוסח|הנוסח\s+הבא|ככה|כך|מילה\s+במילה)\s*[:\-]?\s*",
+            "",
+            raw_addition,
+            flags=re.IGNORECASE
+        ).strip()
         was_parenthesized = bool(re.match(r"^\(.+\)$", raw_addition))
-        addition_text = raw_addition.strip(" ()\t\n.,!\"'").strip()
+        is_pure_add_bullet = verb_used in ("תוסיף", "להוסיף") and not was_parenthesized and "\n" not in raw_addition
 
-        is_pure_add_bullet = verb_used in ("תוסיף", "להוסיף") and not was_parenthesized
-
-        # 1. Update dynamic inline track description (used in all device price quotes: F21/F22/F25/POS items!)
-        tpl_key_map = {
-            "גלות": "TRACK_SHORT_GALUT",
-            "ימות המשיח": "TRACK_SHORT_YEMOT",
-            "גאולה": "TRACK_SHORT_GEULA",
-        }
-        tpl_key = tpl_key_map.get(tr_name, "TRACK_SHORT_GALUT")
-        old_short_desc = get_track_short_desc(tr_name)
-        if not is_pure_add_bullet:
-            set_dynamic_template(tpl_key, addition_text)
-            # Rewrite existing learned_kb entries so all saved device quotes show the new track description immediately
-            try:
-                conn = sqlite3.connect(DB_PATH)
-                kb_rows = conn.execute("SELECT id, answer FROM learned_kb").fetchall()
-                for k_id, k_ans in kb_rows:
-                    if not k_ans:
-                        continue
-                    new_k_ans = re.sub(
-                        rf"(•\s*\*?(?:⭐\s*|🛡️\s*)?\*?מסלול\s+{re.escape(tr_name)}\*?\s*)\([^\)\n]+\)",
-                        lambda m: f"{m.group(1)}({addition_text})",
-                        k_ans
-                    )
-                    if new_k_ans != k_ans:
-                        conn.execute("UPDATE learned_kb SET answer = ? WHERE id = ?", (new_k_ans, k_id))
-                conn.commit()
-                conn.close()
-                sync_learned_kb_to_json()
-            except Exception:
-                pass
-            if old_short_desc and old_short_desc != addition_text:
-                save_permanent_style_rule(
-                    f"מסלול {tr_name} ({old_short_desc})",
-                    f"מסלול {tr_name} ({addition_text})",
-                    f"הנחיית קוד מאסטר ({used_code}) למסלול {tr_name}: ({addition_text})"
-                )
-
-        # 2. Update WARRANTY_FULL_EXPLANATION section for this track
-        curr_warranty = get_dynamic_template("WARRANTY_FULL_EXPLANATION", WARRANTY_FULL_EXPLANATION)
-
-        def _update_or_append_sec(sec_txt: str) -> str:
-            out_sec = sec_txt
-            if not is_pure_add_bullet:
-                # Update header parenthetical: e.g. "🔴 *1. מסלול גלות (...):*" -> "🔴 *1. מסלול גלות (addition_text):*"
-                out_sec = re.sub(
-                    rf"(מסלול\s+{re.escape(tr_name)}\s*)\([^\)\n]+\)",
-                    lambda m: f"{m.group(1)}({addition_text})",
-                    out_sec,
-                    count=1
-                )
-                if tr_name == "גלות":
-                    # Also update the first bullet of Galut so there is no contradiction with old text
-                    lines = out_sec.splitlines()
-                    if len(lines) >= 2:
-                        bullet_line = f"• {addition_text}." if not addition_text.endswith((".", "!")) else f"• {addition_text}"
-                        lines[1] = bullet_line
-                        out_sec = "\n".join(lines)
-                    return out_sec
-            bullet_line = f"• {addition_text}." if not addition_text.endswith((".", "!")) else f"• {addition_text}"
-            if addition_text in out_sec:
-                return out_sec
-            return out_sec.rstrip() + "\n" + bullet_line
-
-        new_warranty = _edit_warranty_track_section(curr_warranty, tr_name, _update_or_append_sec)
-        set_dynamic_template("WARRANTY_FULL_EXPLANATION", new_warranty)
-        save_permanent_style_rule("", addition_text, f"הנחיית קוד מאסטר ({used_code}) למסלול {tr_name}: {addition_text}")
+        verbatim_payload = body.strip() if re.match(r"^(?:🔴|🟡|🟢)\s*\*?[123]\.\s*מסלול", body.strip()) else raw_addition
+        new_warranty, updated_short = _apply_verbatim_track_replacement(
+            tr_name=tr_name,
+            verbatim_text=verbatim_payload,
+            used_code=used_code,
+            is_append_only=is_pure_add_bullet,
+        )
 
         preview_block = _extract_track_section_preview(new_warranty, tr_name)
-        quote_line_preview = f"• מסלול {tr_name} ({get_track_short_desc(tr_name)})"
+        quote_line_preview = f"• מסלול {tr_name} ({updated_short})"
         confirm_msg = (
             f"✅ *פקודת מאסטר ({used_code}) בוצעה — מסלול {tr_name} עודכן לתמיד בכל המערכת!* 🛠️\n"
             f"✨ *נוסח מסלול {tr_name} בהצעות מחיר למכשירים מעכשיו:*\n{quote_line_preview}\n\n"
@@ -8126,7 +8332,7 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
             "ok": True,
             "master_code_action": "warranty_track_updated",
             "track": tr_name,
-            "added": addition_text,
+            "added": raw_addition,
             "quote_line_preview": quote_line_preview,
             "updated_preview": preview_block,
         }
@@ -8141,7 +8347,7 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
         body_no_reason,
         flags=re.IGNORECASE
     )
-    if m_price_cmd or (has_tracks_in_cmd and any(ch.isdigit() for ch in body_no_reason)):
+    if m_price_cmd or (has_tracks_in_cmd and any(ch.isdigit() for ch in body_no_reason) and not target_track):
         if m_price_cmd:
             prod_raw = m_price_cmd.group(1).strip(" .,!:-")
             price_part = m_price_cmd.group(2).strip()
@@ -8170,7 +8376,7 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
                 p_summary.append(f"{single_p} ₪")
             p_str = " | ".join(p_summary)
             confirm_msg = (
-                f"✅ *פקודת מאסטר (22015743) בוצעה — המחיר של '{clean_prod}' עודכן לתמיד במלאי ובזיכרון הסוכן!* 💰📦\n"
+                f"✅ *פקודת מאסטר ({used_code}) בוצעה — המחיר של '{clean_prod}' עודכן לתמיד במלאי ובזיכרון הסוכן!* 💰📦\n"
                 f"• *מוצר:* {clean_prod}\n"
                 f"• *מחיר קבוע מעודכן:* {p_str}"
             )
@@ -8183,12 +8389,12 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
             }
 
     # =========================================================================
-    # CASE 5: GENERAL PERMANENT RULE / Q&A OVERRIDE ("כששואלים על X תענה Y" or general instruction)
+    # CASE 5: GENERAL PERMANENT RULE / Q&A OVERRIDE ("כששואלים על X תענה Y")
     # =========================================================================
     m_qa = re.search(
         r"(?:כששואלים\s+על|כאשר\s+שואלים\s+על|לגבי|בנושא)\s+(.+?)\s+(?:תענה|תכתוב|תרשום|תגיד)\s*[:\"']?(.+?)[\"']?$",
         body_no_reason,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE | re.DOTALL
     )
     if m_qa:
         kw_topic = m_qa.group(1).strip(" .,!\"'")
@@ -8204,9 +8410,9 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
             sync_learned_kb_to_json()
         except Exception:
             pass
-        save_permanent_style_rule("", ans_topic, f"הנחיית קוד מאסטר (22015743) בנושא '{kw_topic}': {ans_topic}")
+        save_permanent_style_rule("", ans_topic, f"הנחיית קוד מאסטר ({used_code}) בנושא '{kw_topic}': {ans_topic}")
         confirm_msg = (
-            f"✅ *פקודת מאסטר (22015743) בוצעה — הכלל נשמר לתמיד!* 🧠\n"
+            f"✅ *פקודת מאסטר ({used_code}) בוצעה — הכלל נשמר לתמיד!* 🧠\n"
             f"🔑 *נושא / מילות מפתח:* {kw_topic}\n"
             f"💬 *תשובה קבועה מעכשיו:* \"{ans_topic}\""
         )
@@ -8218,13 +8424,46 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
             "answer": ans_topic,
         }
 
-    # Fallback: If quoted_text is present or general instruction was given, save as permanent style instruction & update last KB
-    save_permanent_style_rule("", body_no_reason, f"הנחיית קוד מאסטר קבועה (22015743): {raw_body}")
+    # =========================================================================
+    # CASE 6: VERBATIM FALLBACK WHEN A TRACK IS MENTIONED
+    # =========================================================================
+    if target_track:
+        cleaned_verbatim = re.sub(
+            rf"^(?:במסלול|למסלול|עבור\s+מסלול)?\s*{re.escape(target_track)}\s*[:\-–—]?\s*",
+            "",
+            body.strip(),
+            flags=re.IGNORECASE
+        ).strip()
+        if cleaned_verbatim:
+            new_warranty, updated_short = _apply_verbatim_track_replacement(
+                tr_name=target_track,
+                verbatim_text=cleaned_verbatim,
+                used_code=used_code,
+                is_append_only=False,
+            )
+            preview_block = _extract_track_section_preview(new_warranty, target_track)
+            quote_line_preview = f"• מסלול {target_track} ({updated_short})"
+            confirm_msg = (
+                f"✅ *פקודת מאסטר ({used_code}) בוצעה — מסלול {target_track} הוחלף מילה במילה בכל המערכת!* 🛠️\n"
+                f"✨ *נוסח מסלול {target_track} בהצעות מחיר למכשירים מעכשיו:*\n{quote_line_preview}\n\n"
+                f"📋 *הנוסח המעודכן בהסבר מסלולי האחריות:*\n{preview_block}"
+            )
+            send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
+            return {
+                "ok": True,
+                "master_code_action": "warranty_track_replaced_verbatim",
+                "track": target_track,
+                "quote_line_preview": quote_line_preview,
+                "updated_preview": preview_block,
+            }
+
+    # General fallback
+    save_permanent_style_rule("", body_no_reason, f"הנחיית קוד מאסטר קבועה ({used_code}): {raw_body}")
     if quoted_text and len(quoted_text.strip()) >= 4:
-        save_permanent_style_rule(quoted_text.strip(), body_no_reason, f"החלפת הודעה מצוטטת (22015743): {body_no_reason}")
+        save_permanent_style_rule(quoted_text.strip(), body_no_reason, f"החלפת הודעה מצוטטת ({used_code}): {body_no_reason}")
 
     confirm_msg = (
-        f"✅ *פקודת מאסטר (22015743) נקלטה ונשמרה ככלל ברזל קבוע במערכת!* 🛡️\n"
+        f"✅ *פקודת מאסטר ({used_code}) נקלטה ונשמרה ככלל ברזל קבוע במערכת!* 🛡️\n"
         f"📌 *הנחיה קבועה שנשמרה:* \"{raw_body}\""
     )
     send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
@@ -9756,8 +9995,8 @@ async def unified_whatsapp_webhook(req: Request):
                 elif chosen_track in ["yemot", "geula"]:
                     if chosen_track == "geula" and geula_p:
                         final_dev_price = geula_p
-                        track_title = "מסלול גאולה 🛡️ (אחריות VIP פרימיום כוללת שבר ונזק לקוח)"
-                        track_note = " (כולל תיקון נזק לקוח ושבר מסך, תיקון אקספרס במעבדה שלנו בחדרה ומכשיר חלופי חינם!)"
+                        track_title = f"מסלול גאולה 🛡️ ({get_track_short_desc('geula')})"
+                        track_note = " (כולל תיקון שבר מסך, תיקון אקספרס במעבדה שלנו בחדרה ומכשיר חלופי חינם!)"
                     else:
                         final_dev_price = yemot_p
                         track_title = "מסלול ימות המשיח ⭐ (אחריות מעבדה מלאה בחדרה)"
@@ -9824,7 +10063,7 @@ async def unified_whatsapp_webhook(req: Request):
                     else:
                         opening_track_line = f"מעולה! אשמח לשריין עבורך יחידה של *{dev_label}*{color_display} מהמלאי כבר עכשיו. 📱🔥"
 
-                    geula_opt_line = f"• 🛡️ *מסלול גאולה ({geula_p} ₪ — VIP פרימיום):* כולל גם אחריות על שבר ונזק לקוח!\n" if geula_p else ""
+                    geula_opt_line = f"• 🛡️ *מסלול גאולה ({geula_p} ₪ — VIP פרימיום):* {get_track_short_desc('geula')}\n" if geula_p else ""
                     reply_choose_track = (
                         f"{opening_track_line}\n"
                         f"באיזה מסלול אחריות תרצה לבחור עבור המכשיר?\n"
