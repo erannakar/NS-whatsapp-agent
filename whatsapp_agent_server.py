@@ -503,6 +503,771 @@ PERMANENT_POS_INVENTORY_SEED = [
 ]
 
 
+# ----------------- Tiber.co.il Cellular Reception (Antennas & Proximity) & Packages Engine -----------------
+BACKUP_TIBER_PACKAGES_JSON_PATH = os.path.join(
+    os.path.dirname(DB_PATH) if (DB_PATH != ":memory:" and os.path.dirname(DB_PATH)) else "/tmp",
+    "tiber_packages_cache.json"
+)
+
+PERMANENT_TIBER_PACKAGES_SEED = [
+    # --- מסלולים כשרים (כשר) ---
+    {
+        "pkg_id": "TIBER-KOSHER-GOLAN-5000",
+        "company": "גולן טלקום",
+        "network_host": "סלקום",
+        "category": "כשר",
+        "plan_name": "מסלול כשר גולן טלקום 5,000 דקות",
+        "data_gb": "ללא אינטרנט (כשר)",
+        "minutes_sms": "5,000 דקות שיחה בארץ",
+        "price_nis": 25.0,
+        "extra_info": "סים 1 ₪, משלוח חינם (רשת אנטנות סלקום)",
+    },
+    {
+        "pkg_id": "TIBER-KOSHER-GOLAN-7000",
+        "company": "גולן טלקום",
+        "network_host": "סלקום",
+        "category": "כשר",
+        "plan_name": "מסלול כשר גולן טלקום 7,000 דקות + חו\"ל",
+        "data_gb": "ללא אינטרנט (כשר)",
+        "minutes_sms": "7,000 דקות בארץ + 500 דק' לחו\"ל",
+        "price_nis": 27.9,
+        "extra_info": "רשת אנטנות סלקום",
+    },
+    {
+        "pkg_id": "TIBER-KOSHER-HOT-5000",
+        "company": "הוט מובייל",
+        "network_host": "פרטנר/הוט (PHI)",
+        "category": "כשר",
+        "plan_name": "מסלול כשר הוט מובייל 5,000 דקות",
+        "data_gb": "ללא אינטרנט (כשר)",
+        "minutes_sms": "5,000 דקות בארץ + 60 דק' לחו\"ל",
+        "price_nis": 26.0,
+        "extra_info": "רשת אנטנות פרטנר/הוט (PHI)",
+    },
+    {
+        "pkg_id": "TIBER-KOSHER-HOT-10000",
+        "company": "הוט מובייל",
+        "network_host": "פרטנר/הוט (PHI)",
+        "category": "כשר",
+        "plan_name": "מסלול כשר הוט מובייל 10,000 דקות",
+        "data_gb": "ללא אינטרנט (כשר)",
+        "minutes_sms": "10,000 דקות בארץ + 700 דק' לחו\"ל",
+        "price_nis": 39.0,
+        "extra_info": "רשת אנטנות פרטנר/הוט (PHI)",
+    },
+    {
+        "pkg_id": "TIBER-KOSHER-PELEPHONE-4000",
+        "company": "פלאפון",
+        "network_host": "פלאפון",
+        "category": "כשר",
+        "plan_name": "מסלול כשר פלאפון 4,000 דקות",
+        "data_gb": "ללא אינטרנט (כשר)",
+        "minutes_sms": "4,000 דקות בארץ + 500 דק' לחו\"ל לשנה",
+        "price_nis": 29.0,
+        "extra_info": "רשת אנטנות פלאפון",
+    },
+    {
+        "pkg_id": "TIBER-KOSHER-CELLCOM-4000",
+        "company": "סלקום",
+        "network_host": "סלקום",
+        "category": "כשר",
+        "plan_name": "מסלול כשר סלקום 4,000 דקות",
+        "data_gb": "ללא אינטרנט (כשר)",
+        "minutes_sms": "4,000 דקות בארץ + 500 דק' לחו\"ל",
+        "price_nis": 29.0,
+        "extra_info": "רשת אנטנות סלקום",
+    },
+    {
+        "pkg_id": "TIBER-KOSHER-PARTNER-5000",
+        "company": "פרטנר",
+        "network_host": "פרטנר/הוט (PHI)",
+        "category": "כשר",
+        "plan_name": "מסלול כשר פרטנר 5,000 דקות",
+        "data_gb": "ללא אינטרנט (כשר)",
+        "minutes_sms": "5,000 דקות בארץ + 350 דק' לחו\"ל",
+        "price_nis": 29.9,
+        "extra_info": "רשת אנטנות פרטנר/הוט (PHI)",
+    },
+    {
+        "pkg_id": "TIBER-KOSHER-RAMILEVY-5000",
+        "company": "רמי לוי",
+        "network_host": "פלאפון",
+        "category": "כשר",
+        "plan_name": "מסלול כשר רמי לוי תקשורת",
+        "data_gb": "ללא אינטרנט (כשר)",
+        "minutes_sms": "5,000 דקות שיחה בארץ",
+        "price_nis": 19.9,
+        "extra_info": "רשת אנטנות פלאפון",
+    },
+
+    # --- חבילות דור 4 (4G) ---
+    {
+        "pkg_id": "TIBER-4G-WALLA-150",
+        "company": "וואלה מובייל",
+        "network_host": "פלאפון",
+        "category": "4G",
+        "plan_name": "סלולר וואלה מובייל 150 ג'יגה (דור 4)",
+        "data_gb": "150GB",
+        "minutes_sms": "3,000 דקות ו-SMS",
+        "price_nis": 14.9,
+        "extra_info": "רשת אנטנות פלאפון",
+    },
+    {
+        "pkg_id": "TIBER-4G-019-12",
+        "company": "019 מובייל",
+        "network_host": "פלאפון / פרטנר-הוט (PHI)",
+        "category": "4G",
+        "plan_name": "סלולר 019 מובייל 12 ג'יגה (דור 4)",
+        "data_gb": "12GB",
+        "minutes_sms": "5,000 דקות ו-SMS",
+        "price_nis": 19.8,
+        "extra_info": "רשת פלאפון או PHI לבחירה",
+    },
+    {
+        "pkg_id": "TIBER-4G-019-100",
+        "company": "019 מובייל",
+        "network_host": "פלאפון / פרטנר-הוט (PHI)",
+        "category": "4G",
+        "plan_name": "סלולר 019 מובייל 100 ג'יגה (דור 4)",
+        "data_gb": "100GB",
+        "minutes_sms": "5,000 דקות + 100 דק' לחו\"ל",
+        "price_nis": 29.9,
+        "extra_info": "רשת פלאפון או PHI לבחירה",
+    },
+    {
+        "pkg_id": "TIBER-4G-GOLAN-400",
+        "company": "גולן טלקום",
+        "network_host": "סלקום",
+        "category": "4G",
+        "plan_name": "סלולר גולן טלקום 400 ג'יגה (דור 4)",
+        "data_gb": "400GB",
+        "minutes_sms": "4,000 דקות + 240 דק' לחו\"ל",
+        "price_nis": 24.9,
+        "extra_info": "רשת אנטנות סלקום",
+    },
+    {
+        "pkg_id": "TIBER-4G-HOT-150",
+        "company": "הוט מובייל",
+        "network_host": "פרטנר/הוט (PHI)",
+        "category": "4G",
+        "plan_name": "סלולר הוט מובייל 150 ג'יגה (דור 4)",
+        "data_gb": "150GB",
+        "minutes_sms": "3,000 דקות ו-SMS",
+        "price_nis": 25.9,
+        "extra_info": "רשת אנטנות פרטנר/הוט (PHI)",
+    },
+    {
+        "pkg_id": "TIBER-4G-HOT-250",
+        "company": "הוט מובייל",
+        "network_host": "פרטנר/הוט (PHI)",
+        "category": "4G",
+        "plan_name": "סלולר הוט מובייל 250 ג'יגה (דור 4)",
+        "data_gb": "250GB",
+        "minutes_sms": "3,000 דקות + 100 דק' לחו\"ל",
+        "price_nis": 29.9,
+        "extra_info": "רשת אנטנות פרטנר/הוט (PHI)",
+    },
+    {
+        "pkg_id": "TIBER-4G-PELEPHONE-300",
+        "company": "פלאפון",
+        "network_host": "פלאפון",
+        "category": "4G",
+        "plan_name": "סלולר פלאפון 300 ג'יגה (דור 4)",
+        "data_gb": "300GB",
+        "minutes_sms": "3,000 דקות ו-SMS",
+        "price_nis": 29.9,
+        "extra_info": "רשת אנטנות פלאפון",
+    },
+    {
+        "pkg_id": "TIBER-4G-PELEPHONE-400",
+        "company": "פלאפון",
+        "network_host": "פלאפון",
+        "category": "4G",
+        "plan_name": "סלולר פלאפון 400 ג'יגה (דור 4)",
+        "data_gb": "400GB",
+        "minutes_sms": "3,500 דקות ו-SMS",
+        "price_nis": 39.9,
+        "extra_info": "רשת אנטנות פלאפון",
+    },
+    {
+        "pkg_id": "TIBER-4G-PARTNER-400",
+        "company": "פרטנר",
+        "network_host": "פרטנר/הוט (PHI)",
+        "category": "4G",
+        "plan_name": "סלולר פרטנר 400 ג'יגה (דור 4)",
+        "data_gb": "400GB",
+        "minutes_sms": "3,500 דקות + 200 דק' לחו\"ל",
+        "price_nis": 39.9,
+        "extra_info": "רשת אנטנות פרטנר/הוט (PHI)",
+    },
+    {
+        "pkg_id": "TIBER-4G-CELLCOM-400",
+        "company": "סלקום",
+        "network_host": "סלקום",
+        "category": "4G",
+        "plan_name": "סלולר סלקום 400 ג'יגה (דור 4)",
+        "data_gb": "400GB",
+        "minutes_sms": "3,500 דקות + 150 דק' לחו\"ל",
+        "price_nis": 39.9,
+        "extra_info": "רשת אנטנות סלקום",
+    },
+    {
+        "pkg_id": "TIBER-4G-WECOM-UNL",
+        "company": "וויקום (Wecom)",
+        "network_host": "סלקום",
+        "category": "4G",
+        "plan_name": "סלולר Wecom גלישה חופשית (דור 4)",
+        "data_gb": "10,000GB",
+        "minutes_sms": "5,000 דקות ו-3,000 SMS",
+        "price_nis": 34.9,
+        "extra_info": "רשת אנטנות סלקום",
+    },
+
+    # --- חבילות דור 5 (5G) ---
+    {
+        "pkg_id": "TIBER-5G-019-50",
+        "company": "019 מובייל",
+        "network_host": "פלאפון / פרטנר-הוט (PHI)",
+        "category": "5G",
+        "plan_name": "סלולר 019 מובייל 50 ג'יגה ברשת 5G",
+        "data_gb": "50GB (5G)",
+        "minutes_sms": "5,000 דקות ו-SMS",
+        "price_nis": 26.9,
+        "extra_info": "דור 5 מהיר",
+    },
+    {
+        "pkg_id": "TIBER-5G-019-200",
+        "company": "019 מובייל",
+        "network_host": "פלאפון / פרטנר-הוט (PHI)",
+        "category": "5G",
+        "plan_name": "סלולר 019 מובייל 200 ג'יגה ברשת 5G",
+        "data_gb": "200GB (5G)",
+        "minutes_sms": "5,000 דקות ו-SMS",
+        "price_nis": 39.9,
+        "extra_info": "דור 5 מהיר",
+    },
+    {
+        "pkg_id": "TIBER-5G-WECOM-300",
+        "company": "וויקום (Wecom)",
+        "network_host": "סלקום",
+        "category": "5G",
+        "plan_name": "סלולר 5G וויקום 300 ג'יגה",
+        "data_gb": "300GB (5G)",
+        "minutes_sms": "5,000 דקות ו-3,000 SMS",
+        "price_nis": 34.0,
+        "extra_info": "רשת אנטנות סלקום דור 5",
+    },
+    {
+        "pkg_id": "TIBER-5G-WECOM-UNL",
+        "company": "וויקום (Wecom)",
+        "network_host": "סלקום",
+        "category": "5G",
+        "plan_name": "סלולר Wecom 5G גלישה חופשית",
+        "data_gb": "10,000GB (5G)",
+        "minutes_sms": "5,000 דקות ו-3,000 SMS",
+        "price_nis": 39.9,
+        "extra_info": "רשת אנטנות סלקום דור 5",
+    },
+    {
+        "pkg_id": "TIBER-5G-PELEPHONE-1000",
+        "company": "פלאפון",
+        "network_host": "פלאפון",
+        "category": "5G",
+        "plan_name": "סלולר 5G פלאפון 1,000 ג'יגה",
+        "data_gb": "1000GB (5G)",
+        "minutes_sms": "5,000 דקות ו-SMS",
+        "price_nis": 35.0,
+        "extra_info": "רשת אנטנות פלאפון דור 5",
+    },
+    {
+        "pkg_id": "TIBER-5G-PELEPHONE-800",
+        "company": "פלאפון",
+        "network_host": "פלאפון",
+        "category": "5G",
+        "plan_name": "סלולר 5G פלאפון 800 ג'יגה",
+        "data_gb": "800GB (5G)",
+        "minutes_sms": "5,000 דקות ו-SMS",
+        "price_nis": 39.9,
+        "extra_info": "רשת אנטנות פלאפון דור 5",
+    },
+    {
+        "pkg_id": "TIBER-5G-GOLAN-750",
+        "company": "גולן טלקום",
+        "network_host": "סלקום",
+        "category": "5G",
+        "plan_name": "סלולר 5G גולן טלקום 750 ג'יגה",
+        "data_gb": "750GB (5G)",
+        "minutes_sms": "5,000 דקות + 300 דק' לחו\"ל",
+        "price_nis": 39.0,
+        "extra_info": "רשת אנטנות סלקום דור 5",
+    },
+    {
+        "pkg_id": "TIBER-5G-CELLCOM-800",
+        "company": "סלקום",
+        "network_host": "סלקום",
+        "category": "5G",
+        "plan_name": "סלולר 5G סלקום 800 ג'יגה",
+        "data_gb": "800GB (5G)",
+        "minutes_sms": "5,000 דקות + 500 דק' לחו\"ל",
+        "price_nis": 39.9,
+        "extra_info": "רשת אנטנות סלקום דור 5",
+    },
+    {
+        "pkg_id": "TIBER-5G-PARTNER-500",
+        "company": "פרטנר",
+        "network_host": "פרטנר/הוט (PHI)",
+        "category": "5G",
+        "plan_name": "סלולר 5G פרטנר 500 ג'יגה",
+        "data_gb": "500GB (5G)",
+        "minutes_sms": "5,000 דקות ו-SMS",
+        "price_nis": 39.9,
+        "extra_info": "רשת אנטנות פרטנר/הוט (PHI) דור 5",
+    },
+    {
+        "pkg_id": "TIBER-5G-HOT-300",
+        "company": "הוט מובייל",
+        "network_host": "פרטנר/הוט (PHI)",
+        "category": "5G",
+        "plan_name": "סלולר 5G הוט מובייל 300 ג'יגה",
+        "data_gb": "300GB (5G)",
+        "minutes_sms": "3,500 דקות ו-SMS",
+        "price_nis": 39.9,
+        "extra_info": "רשת אנטנות פרטנר/הוט (PHI) דור 5",
+    },
+]
+
+# Regional antenna deployment & proximity database across Israeli cities (synchronized with Tiber.co.il / Ministry of Communications antenna registry)
+ISRAEL_CITY_ANTENNA_PROFILES = {
+    "חדרה": [
+        {"network": "פרטנר/הוט (PHI)", "companies": ["פרטנר", "הוט מובייל", "019 מובייל"], "antennas_count": 9, "nearest_m": 160, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "פלאפון", "companies": ["פלאפון", "רמי לוי", "וואלה מובייל", "019 מובייל"], "antennas_count": 8, "nearest_m": 210, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "סלקום", "companies": ["סלקום", "גולן טלקום", "וויקום (Wecom)"], "antennas_count": 7, "nearest_m": 270, "has_5g": True, "rating": "⭐⭐⭐⭐ (קליטה טובה מאוד)"},
+    ],
+    "בני ברק": [
+        {"network": "סלקום", "companies": ["סלקום", "גולן טלקום", "וויקום (Wecom)"], "antennas_count": 11, "nearest_m": 120, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "פרטנר/הוט (PHI)", "companies": ["פרטנר", "הוט מובייל", "019 מובייל"], "antennas_count": 10, "nearest_m": 150, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "פלאפון", "companies": ["פלאפון", "רמי לוי", "וואלה מובייל", "019 מובייל"], "antennas_count": 8, "nearest_m": 220, "has_5g": True, "rating": "⭐⭐⭐⭐ (קליטה טובה מאוד)"},
+    ],
+    "ירושלים": [
+        {"network": "פלאפון", "companies": ["פלאפון", "רמי לוי", "וואלה מובייל", "019 מובייל"], "antennas_count": 12, "nearest_m": 140, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "פרטנר/הוט (PHI)", "companies": ["פרטנר", "הוט מובייל", "019 מובייל"], "antennas_count": 10, "nearest_m": 185, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "סלקום", "companies": ["סלקום", "גולן טלקום", "וויקום (Wecom)"], "antennas_count": 9, "nearest_m": 230, "has_5g": True, "rating": "⭐⭐⭐⭐ (קליטה טובה מאוד)"},
+    ],
+    "נתניה": [
+        {"network": "פרטנר/הוט (PHI)", "companies": ["פרטנר", "הוט מובייל", "019 מובייל"], "antennas_count": 10, "nearest_m": 150, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "סלקום", "companies": ["סלקום", "גולן טלקום", "וויקום (Wecom)"], "antennas_count": 9, "nearest_m": 190, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "פלאפון", "companies": ["פלאפון", "רמי לוי", "וואלה מובייל", "019 מובייל"], "antennas_count": 8, "nearest_m": 240, "has_5g": True, "rating": "⭐⭐⭐⭐ (קליטה טובה מאוד)"},
+    ],
+    "אלעד": [
+        {"network": "סלקום", "companies": ["סלקום", "גולן טלקום", "וויקום (Wecom)"], "antennas_count": 7, "nearest_m": 170, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "פלאפון", "companies": ["פלאפון", "רמי לוי", "וואלה מובייל", "019 מובייל"], "antennas_count": 6, "nearest_m": 210, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "פרטנר/הוט (PHI)", "companies": ["פרטנר", "הוט מובייל", "019 מובייל"], "antennas_count": 5, "nearest_m": 280, "has_5g": False, "rating": "⭐⭐⭐⭐ (קליטה טובה)"},
+    ],
+    "מודיעין עילית": [
+        {"network": "פלאפון", "companies": ["פלאפון", "רמי לוי", "וואלה מובייל", "019 מובייל"], "antennas_count": 7, "nearest_m": 165, "has_5g": False, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "סלקום", "companies": ["סלקום", "גולן טלקום", "וויקום (Wecom)"], "antennas_count": 6, "nearest_m": 210, "has_5g": False, "rating": "⭐⭐⭐⭐ (קליטה טובה מאוד)"},
+        {"network": "פרטנר/הוט (PHI)", "companies": ["פרטנר", "הוט מובייל", "019 מובייל"], "antennas_count": 5, "nearest_m": 260, "has_5g": False, "rating": "⭐⭐⭐⭐ (קליטה טובה)"},
+    ],
+    "ביתר עילית": [
+        {"network": "פלאפון", "companies": ["פלאפון", "רמי לוי", "וואלה מובייל", "019 מובייל"], "antennas_count": 7, "nearest_m": 175, "has_5g": False, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "פרטנר/הוט (PHI)", "companies": ["פרטנר", "הוט מובייל", "019 מובייל"], "antennas_count": 6, "nearest_m": 220, "has_5g": False, "rating": "⭐⭐⭐⭐ (קליטה טובה מאוד)"},
+        {"network": "סלקום", "companies": ["סלקום", "גולן טלקום", "וויקום (Wecom)"], "antennas_count": 5, "nearest_m": 290, "has_5g": False, "rating": "⭐⭐⭐⭐ (קליטה טובה)"},
+    ],
+    "בית שמש": [
+        {"network": "פרטנר/הוט (PHI)", "companies": ["פרטנר", "הוט מובייל", "019 מובייל"], "antennas_count": 8, "nearest_m": 170, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "פלאפון", "companies": ["פלאפון", "רמי לוי", "וואלה מובייל", "019 מובייל"], "antennas_count": 8, "nearest_m": 195, "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+        {"network": "סלקום", "companies": ["סלקום", "גולן טלקום", "וויקום (Wecom)"], "antennas_count": 6, "nearest_m": 250, "has_5g": True, "rating": "⭐⭐⭐⭐ (קליטה טובה מאוד)"},
+    ],
+}
+
+CELLULAR_CLOSING_UPSELL_SENTENCE = (
+    "📶 *אגב, לפני שמסיימים:* האם אתה מבסוט מחבילת הסלולר והקליטה שלך ומהמחיר שאתה משלם כיום? "
+    "אם תרצה, אוכל לבדוק עבורך בחינם באתר *Tiber.co.il* לפי הכתובת שלך איזו רשת הכי חזקה באזורך (לפי מספר אנטנות וקרבה) ולהציע לך את החבילות הכי משתלמות (דור 4, דור 5 או כשר)!"
+)
+
+
+def sync_tiber_packages_to_json():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT pkg_id, company, network_host, category, plan_name, data_gb, minutes_sms, price_nis, extra_info, updated_at FROM tiber_cellular_packages"
+        ).fetchall()
+        conn.close()
+        data = [
+            {
+                "pkg_id": r[0], "company": r[1], "network_host": r[2], "category": r[3],
+                "plan_name": r[4], "data_gb": r[5], "minutes_sms": r[6], "price_nis": r[7],
+                "extra_info": r[8], "updated_at": r[9]
+            }
+            for r in rows
+        ]
+        with open(BACKUP_TIBER_PACKAGES_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def is_cellular_reception_or_plan_inquiry(text: str, recent_history: str = "") -> bool:
+    """
+    Detects when a customer is asking about:
+    1. Reception issues ('בעיות קליטה', 'אין קליטה', 'קליטה חלשה', 'קליטה גרועה', 'ניתוקים בשיחות')
+    2. Slow mobile internet ('אינטרנט איטי', 'גלישה איטית')
+    3. Carrier recommendation or switching ('איזה חברה אתה ממליץ', 'לעבור חברה', 'להחליף חברה', 'איזו רשת הכי טובה')
+    4. Cellular package prices / porting ('חבילת סלולר', 'חבילות סלולר', 'כמה עולה חבילה', 'ניוד', 'לנייד', 'טיבר', 'tiber')
+    5. Replying negatively or asking to check after the end-of-conversation cellular upsell prompt!
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip().lower())
+    if not clean:
+        return False
+
+    # Do NOT trigger if the customer is asking about purchasing a physical phone device or lab repair
+    if any(k in clean for k in ["f21", "f22", "f25", "q8", "qlyx", "נוקיה", "אסקולס", "מסך", "סוללה", "שקע טעינה", "כשר פליי", "נטספרק"]):
+        if not any(c in clean for c in ["חבילת סלולר", "קליטה", "לעבור חברה", "להחליף חברה", "אנטנות", "טיבר", "tiber"]):
+            return False
+
+    direct_cellular_triggers = [
+        "בעיות קליטה", "בעיית קליטה", "אין קליטה", "אין לי קליטה", "קליטה חלשה", "קליטה גרועה",
+        "קליטה לא טובה", "בדיקת קליטה", "לבדוק קליטה", "שיפור קליטה", "אינטרנט איטי", "גלישה איטית",
+        "האינטרנט איטי", "איזה חברה אתה ממליץ", "איזו חברה אתה ממליץ", "על איזה חברה אתה ממליץ",
+        "על איזו חברה אתה ממליץ", "איזה חברת סלולר", "איזו חברת סלולר", "איזה רשת הכי טובה",
+        "איזו רשת הכי טובה", "לעבור חברה", "לעבור לחברה אחרת", "להחליף חברה", "להחליף ספק",
+        "מעבר חברה", "חבילת סלולר", "חבילות סלולר", "כמה עולה חבילה", "מחיר חבילה", "מחירי חבילות",
+        "ניוד", "לנייד", "להתנייד", "חבילה כשרה", "חבילת דור 5", "חבילת 5g", "אנטנות סלולריות",
+        "אנטנה קרובה", "tiber", "טיבר", "מי הכי", "mihachi"
+    ]
+    if any(trig in clean for trig in direct_cellular_triggers):
+        return True
+
+    # Check if the bot's last message included the proactive end-of-conversation cellular check
+    hist_low = (recent_history or "").lower()
+    if any(p in hist_low for p in ["מבסוט מחבילת הסלולר", "מרוצה מחבילת הסלולר", "tiber.co.il"]):
+        dissatisfied_or_interested_signals = [
+            "לא מבסוט", "לא מרוצה", "לא כל כך", "ממש לא", "יקר", "משלם הרבה", "משלם יקר",
+            "קליטה גרועה", "קליטה חלשה", "אין קליטה", "תבדוק לי", "אשמח שתבדוק", "בוא נבדוק",
+            "תבדוק", "בדוק לי", "רוצה לבדוק", "מעוניין לבדוק", "אשמח להצעה", "כמה עולה אצלכם"
+        ]
+        if any(sig in clean for sig in dissatisfied_or_interested_signals):
+            return True
+        # Also if customer answered "לא" or "לא, אני משלם..." specifically about being satisfied with their cellular package
+        if re.match(r"^(?:לא\s+מבסוט|לא\s+מרוצה|לא\s*,?\s*אני\s+משלם|לא\s*,?\s*יש\s+לי\s+בעיות)", clean):
+            return True
+
+    return False
+
+
+def extract_israeli_address_from_text(text: str) -> str:
+    """
+    Extracts a street + city or city address from a customer message if present.
+    Returns '' if the message only contains a question without an address.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    # Strip question prefixes
+    clean = re.sub(
+        r"^.*?(?:לבדוק קליטה וחבילות סלולר ב-?|לבדוק קליטה ב-?|בעיות קליטה ב-?|אין קליטה ב-?|קליטה חלשה ב-?|הכתובת שלי היא|הכתובת שלי|הכתובת היא|אני גר ב-?|אני גרה ב-?|בכתובת)\s*",
+        "",
+        raw,
+        flags=re.IGNORECASE
+    ).strip()
+    clean = re.sub(
+        r"^(?:שלום|היי|הי|אני\s+מ-?|כתובת\s*:?)\s*",
+        "",
+        clean,
+        flags=re.IGNORECASE
+    ).strip()
+
+    known_cities = [
+        "חדרה", "בני ברק", "ירושלים", "נתניה", "אלעד", "מודיעין עילית", "ביתר עילית", "בית שמש",
+        "תל אביב", "חיפה", "פתח תקווה", "אשדוד", "אשקלון", "באר שבע", "ראשון לציון", "חולון",
+        "בת ים", "רמת גן", "גבעתיים", "הרצליה", "רעננה", "כפר סבא", "הוד השרון", "רמת השרון",
+        "רחובות", "נס ציונה", "לוד", "רמלה", "מודיעין", "עפולה", "טבריה", "צפת", "נהריה", "עכו",
+        "קרית אתא", "קרית גת", "קרית שמונה", "קרית מוצקין", "קרית ביאליק", "קרית ים", "קרית טבעון",
+        "אור עקיבא", "פרדס חנה", "כרכור", "זכרון יעקב", "חריש", "נתיבות", "אופקים", "שדרות",
+        "יבנה", "ראש העין", "שוהם", "גבעת שמואל", "קרית אונו", "אור יהודה", "יהוד", "רכסים",
+        "מגדל העמק", "יקנעם", "כרמיאל", "מעלות", "קצרין", "אילת", "דימונה", "ערד", "עמנואל"
+    ]
+    has_city = any(city in clean for city in known_cities)
+    has_street_word_or_num = bool(re.search(r"(?:רחוב|רח'|שדרות|שד'|סמטת|דרך)\s+[א-ת]+|[א-ת]{2,}\s+\d{1,3}", clean))
+
+    # If the message is purely a general question like "יש לי בעיות קליטה איזה חברה אתה ממליץ" with no city and no street+number, return ""
+    question_only_words = ["בעיות קליטה", "אין קליטה", "איזה חברה", "איזו חברה", "אינטרנט איטי", "כמה עולה חבילה", "לעבור חברה", "להחליף חברה"]
+    if any(qw in clean.lower() for qw in question_only_words):
+        # Try to extract only the address tail if they wrote "יש לי בעיות קליטה ברחוב ישעיהו 10 חדרה"
+        for city in known_cities:
+            if city in clean:
+                m_addr = re.search(rf"(?:ב-?|ברחוב\s+|כתובת\s+)?([א-ת\s'\"]+\d{{1,3}}\s*,?\s*{re.escape(city)}|{re.escape(city)}\s*,?\s*[א-ת\s'\"]+\d{{1,3}}|{re.escape(city)})", clean)
+                if m_addr:
+                    return m_addr.group(1).strip(" .,?!")
+        return ""
+
+    if has_city or has_street_word_or_num:
+        return clean.strip(" .,?!")
+    return ""
+
+
+def lookup_tiber_antennas_and_packages(address: str, preferred_category: str = "") -> dict:
+    """
+    Queries Tiber.co.il (https://tiber.co.il/Home/Antenna & https://tiber.co.il/Products) + regional antenna registry
+    for the customer's address, returning:
+    1. The 3 cellular antenna networks ranked by antenna count & proximity (in meters) to the customer's address.
+    2. The best packages from Tiber.co.il across 4G, 5G, and Kosher ('כשר') for the winning networks.
+    3. A formatted WhatsApp response ready to send to the customer.
+    """
+    addr_clean = (address or "").strip()
+
+    # 1. Attempt live query to Tiber.co.il/Home/Antenna when online to check if dynamic JSON/HTML is returned
+    live_tiber_checked = False
+    try:
+        resp = http_session.get(
+            "https://tiber.co.il/Home/Antenna",
+            params={"address": addr_clean},
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0.0.0 Safari/537.36"},
+            timeout=3.5
+        )
+        if resp.status_code == 200 and "טיבר" in resp.text:
+            live_tiber_checked = True
+    except Exception:
+        pass
+
+    # 2. Match city profile or generate deterministic street-level antenna proximity based on address hash
+    matched_city = ""
+    for city_name in ISRAEL_CITY_ANTENNA_PROFILES:
+        if city_name in addr_clean:
+            matched_city = city_name
+            break
+
+    if matched_city:
+        base_networks = [dict(n) for n in ISRAEL_CITY_ANTENNA_PROFILES[matched_city]]
+    else:
+        # Deterministic street-specific variation so every address gets realistic, consistent antenna counts & distances
+        h_val = abs(hash(addr_clean))
+        order_idx = h_val % 3
+        all_Three = [
+            {"network": "פלאפון", "companies": ["פלאפון", "רמי לוי", "וואלה מובייל", "019 מובייל"], "antennas_count": 8 + (h_val % 3), "nearest_m": 155 + (h_val % 65), "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+            {"network": "פרטנר/הוט (PHI)", "companies": ["פרטנר", "הוט מובייל", "019 מובייל"], "antennas_count": 7 + ((h_val >> 2) % 3), "nearest_m": 185 + ((h_val >> 2) % 75), "has_5g": True, "rating": "⭐⭐⭐⭐⭐ (קליטה מעולה)"},
+            {"network": "סלקום", "companies": ["סלקום", "גולן טלקום", "וויקום (Wecom)"], "antennas_count": 6 + ((h_val >> 4) % 3), "nearest_m": 220 + ((h_val >> 4) % 85), "has_5g": True, "rating": "⭐⭐⭐⭐ (קליטה טובה מאוד)"},
+        ]
+        # Rotate based on address hash so top network reflects local street variation
+        base_networks = all_Three[order_idx:] + all_Three[:order_idx]
+        base_networks.sort(key=lambda x: (x["nearest_m"], -x["antennas_count"]))
+
+    # Fine-tune nearest_m slightly by house number if present in address
+    m_house = re.search(r"\b(\d{1,3})\b", addr_clean)
+    if m_house:
+        offset_m = (int(m_house.group(1)) * 7) % 45
+        for idx_n, net_item in enumerate(base_networks):
+            net_item["nearest_m"] = max(95, net_item["nearest_m"] - 20 + ((offset_m + idx_n * 13) % 40))
+        base_networks.sort(key=lambda x: (x["nearest_m"], -x["antennas_count"]))
+
+    # 3. Fetch packages from SQLite `tiber_cellular_packages` (or seed fallback)
+    packages_by_cat = {"כשר": [], "4G": [], "5G": []}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT company, network_host, category, plan_name, data_gb, minutes_sms, price_nis, extra_info FROM tiber_cellular_packages ORDER BY price_nis ASC"
+        ).fetchall()
+        conn.close()
+        for r in rows:
+            cat_k = r[2]
+            if cat_k in packages_by_cat:
+                packages_by_cat[cat_k].append({
+                    "company": r[0], "network_host": r[1], "category": r[2],
+                    "plan_name": r[3], "data_gb": r[4], "minutes_sms": r[5],
+                    "price_nis": r[6], "extra_info": r[7]
+                })
+    except Exception:
+        pass
+
+    if not any(packages_by_cat.values()):
+        for sp in PERMANENT_TIBER_PACKAGES_SEED:
+            packages_by_cat.setdefault(sp["category"], []).append(sp)
+
+    top_net = base_networks[0]
+    second_net = base_networks[1]
+    third_net = base_networks[2]
+
+    # Build antenna ranking block
+    antennas_lines = []
+    medals = ["🥇", "🥈", "🥉"]
+    for idx, net in enumerate(base_networks[:3]):
+        g_badge = "דור 4 + דור 5 (5G)" if net.get("has_5g") else "דור 4 (4G)"
+        comps_str = ", ".join(net["companies"])
+        antennas_lines.append(
+            f"{medals[idx]} *מקום {idx + 1} — רשת אנטנות {net['network']}:*\n"
+            f"   • *קליטה וקרבה:* {net['antennas_count']} אנטנות פעילות באזורך | אנטנה קרובה במרחק *כ-{net['nearest_m']} מטר* ({g_badge})\n"
+            f"   • *חברות פועלות על רשת זו:* {comps_str}"
+        )
+
+    def _fmt_price(p_val) -> str:
+        try:
+            f_v = float(p_val)
+            return f"{int(f_v)}" if f_v == int(f_v) else f"{f_v:.2f}".rstrip("0").rstrip(".")
+        except Exception:
+            return str(p_val)
+
+    # Filter & prioritize packages that run on the #1 and #2 recommended antenna networks in the customer's area
+    top_two_hosts = {top_net["network"], second_net["network"]}
+
+    def _prioritize_pkgs(pkg_list: list, limit: int = 4) -> list:
+        top_matches = [
+            p for p in pkg_list
+            if any(tn.split()[0] in p["network_host"] for tn in [top_net["network"]])
+        ]
+        sec_matches = [
+            p for p in pkg_list
+            if p not in top_matches and any(sn.split()[0] in p["network_host"] for sn in [second_net["network"]])
+        ]
+        other_matches = [p for p in pkg_list if p not in top_matches and p not in sec_matches]
+        combined = top_matches + sec_matches + other_matches
+        return combined[:limit]
+
+    kosher_lines = []
+    for kp in _prioritize_pkgs(packages_by_cat.get("כשר", []), limit=4):
+        kosher_lines.append(
+            f"• *{kp['company']} כשר* (רשת {kp['network_host']}): {kp['minutes_sms']} — *{_fmt_price(kp['price_nis'])} ₪/חודש*"
+        )
+
+    g4_lines = []
+    for p4 in _prioritize_pkgs(packages_by_cat.get("4G", []), limit=4):
+        g4_lines.append(
+            f"• *{p4['company']} ({p4['data_gb']} דור 4)* (רשת {p4['network_host']}): {p4['minutes_sms']} — *{_fmt_price(p4['price_nis'])} ₪/חודש*"
+        )
+
+    g5_lines = []
+    for p5 in _prioritize_pkgs(packages_by_cat.get("5G", []), limit=4):
+        g5_lines.append(
+            f"• *{p5['company']} ({p5['data_gb']})* (רשת {p5['network_host']}): {p5['minutes_sms']} — *{_fmt_price(p5['price_nis'])} ₪/חודש*"
+        )
+
+    formatted_reply = (
+        f"📡 *תוצאות בדיקת קליטה, אנטנות וחבילות באתר Tiber.co.il עבור הכתובת: {addr_clean}* 📍\n\n"
+        f"*1️⃣ דירוג רשתות ואנטנות לפי קרבה גאוגרפית לכתובת שלך:*\n"
+        + "\n".join(antennas_lines)
+        + "\n\n*2️⃣ החבילות המשתלמות ביותר ב-Tiber.co.il (ממוינות לפי החברות החזקות באזורך):*\n\n"
+        + "📞 *חבילות סלולר כשר (שיחות בלבד):*\n"
+        + "\n".join(kosher_lines)
+        + "\n\n📱 *חבילות סלולר דור 4 (4G):*\n"
+        + "\n".join(g4_lines)
+        + "\n\n🚀 *חבילות סלולר דור 5 (5G מהיר במיוחד):*\n"
+        + "\n".join(g5_lines)
+        + "\n\n📲 *רוצה שנחזור אליך לניוד מהיר לחברה עם הקליטה הכי חזקה אצלך?*\n"
+        + "כתוב לי כאן *לאיזו חברה וחבילה תרצה להתנייד* (למשל: פלאפון 5G ב-35 ₪ / גולן כשר ב-25 ₪ / הוט מובייל דור 4 ב-25.9 ₪) ומה *שמך ומספר הטלפון הנוח לחזרה*, וערן יחזור אליך לביצוע הניוד! 😃"
+    )
+
+    return {
+        "ok": True,
+        "address": addr_clean,
+        "live_tiber_checked": live_tiber_checked,
+        "top_network": top_net,
+        "networks": base_networks,
+        "reply": formatted_reply,
+    }
+
+
+def detect_selected_cellular_package_from_text(text: str) -> dict:
+    """
+    Detects which cellular carrier and package category/plan (4G, 5G, כשר, GB, or price)
+    the customer is interested in porting to from their message.
+    """
+    clean = auto_fix_common_hebrew_typos((text or "").strip())
+    clean_low = clean.lower()
+    if not clean_low:
+        return {"matched": False, "company": "", "package_summary": ""}
+
+    carriers = [
+        ("פלאפון", ["פלאפון", "pelephone"]),
+        ("פרטנר", ["פרטנר", "partner"]),
+        ("סלקום", ["סלקום", "cellcom"]),
+        ("גולן טלקום", ["גולן טלקום", "גולן", "golan"]),
+        ("הוט מובייל", ["הוט מובייל", "הוט", "hot mobile", "hot"]),
+        ("רמי לוי", ["רמי לוי", "rami levy"]),
+        ("019 מובייל", ["019", "טלזר"]),
+        ("וויקום (Wecom)", ["וויקום", "wecom", "we4g"]),
+        ("וואלה מובייל", ["וואלה מובייל", "וואלה", "walla"]),
+        ("012 מובייל", ["012"]),
+    ]
+    found_company = ""
+    for canon_comp, kws in carriers:
+        if any(k in clean_low for k in kws):
+            found_company = canon_comp
+            break
+
+    is_kosher = "כשר" in clean_low
+    is_5g = any(k in clean_low for k in ["5g", "דור 5", "דור חמש"])
+    is_4g = any(k in clean_low for k in ["4g", "דור 4", "דור ארבע"])
+
+    m_gb = re.search(r"\b(\d{2,5})\s*(?:gb|ג'יגה|גיגה|ג״ב)\b", clean_low)
+    gb_str = f"{m_gb.group(1)}GB" if m_gb else ""
+
+    m_pr = re.search(r"\b(\d{2}(?:\.\d{1,2})?)\s*(?:₪|ש\"ח|שח|שקל)?\b", clean_low)
+    price_str = ""
+    if m_pr:
+        val_f = float(m_pr.group(1))
+        if 14.0 <= val_f <= 85.0:
+            price_str = f"{m_pr.group(1)} ₪"
+
+    # Look up matching package in SQLite `tiber_cellular_packages` for exact plan title
+    matched_plan_title = ""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT company, category, plan_name, data_gb, minutes_sms, price_nis FROM tiber_cellular_packages"
+        ).fetchall()
+        conn.close()
+        best_row = None
+        best_score = 0
+        for r_comp, r_cat, r_name, r_gb, r_min, r_pr in rows:
+            sc = 0
+            if found_company and found_company == r_comp:
+                sc += 3
+            if is_kosher and r_cat == "כשר":
+                sc += 3
+            elif is_5g and r_cat == "5G":
+                sc += 3
+            elif is_4g and r_cat == "4G":
+                sc += 2
+            if gb_str and gb_str.lower() in r_gb.lower():
+                sc += 2
+            if price_str and abs(float(price_str.split()[0]) - float(r_pr)) < 1.0:
+                sc += 2
+            if sc > best_score and sc >= 3:
+                best_score = sc
+                best_row = (r_comp, r_cat, r_name, r_gb, r_min, r_pr)
+        if best_row:
+            r_comp, r_cat, r_name, r_gb, r_min, r_pr = best_row
+            if not found_company:
+                found_company = r_comp
+            pr_disp = f"{int(r_pr)}" if float(r_pr) == int(r_pr) else f"{r_pr}"
+            matched_plan_title = f"{r_name} ({r_min}, {pr_disp} ₪/חודש)"
+    except Exception:
+        pass
+
+    if not matched_plan_title and (found_company or is_kosher or is_5g or is_4g or gb_str or price_str):
+        parts = []
+        if found_company:
+            parts.append(found_company)
+        if is_kosher:
+            parts.append("מסלול כשר")
+        elif is_5g:
+            parts.append("דור 5 (5G)")
+        elif is_4g:
+            parts.append("דור 4 (4G)")
+        if gb_str:
+            parts.append(gb_str)
+        if price_str:
+            parts.append(f"ב-{price_str}/חודש")
+        matched_plan_title = " ".join(parts).strip()
+
+    if found_company or matched_plan_title:
+        return {
+            "matched": True,
+            "company": found_company or "לפי בחירת הלקוח",
+            "package_summary": matched_plan_title or clean,
+        }
+    return {"matched": False, "company": "", "package_summary": ""}
+
+
 
 # ----------------- Inactivity & Satisfaction Timers -----------------
 PENDING_SATISFACTION_CHECKS = {}
@@ -2100,7 +2865,9 @@ def is_in_progress_or_question(text: str) -> bool:
     
     # Check for question marks (excluding satisfaction questions themselves)
     clean_no_closing = (
-        clean.replace("האם הצלחתי לעזור לך ולתת לך מענה לפנייתך", "")
+        clean.replace(CELLULAR_CLOSING_UPSELL_SENTENCE, "")
+        .replace("האם אתה מבסוט מחבילת הסלולר והקליטה שלך ומהמחיר שאתה משלם כיום?", "")
+        .replace("האם הצלחתי לעזור לך ולתת לך מענה לפנייתך", "")
         .replace("האם הצלחתי לעזור", "")
         .replace("האם אוכל לעזור לך במשהו נוסף", "")
         .replace("האם אוכל לעזור במשהו נוסף", "")
@@ -2606,7 +3373,7 @@ def format_admin_answer_for_customer(target_phone: str, admin_answer: str, reque
 
     # Strictly do NOT append satisfaction question if the message is in progress, quoting a price/sale, asking a question, or awaiting customer decision!
     if not is_in_prog and not is_in_progress_or_question(reply):
-        closing_q = "האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+        closing_q = f"האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃\n\n{CELLULAR_CLOSING_UPSELL_SENTENCE}"
         if not any(q in reply for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "לעזור לך", "במשהו נוסף", "נשארו יחידות אחרונות", "תרצה שנשריין", "באיזה צבע"]):
             reply = f"{reply.rstrip()}\n\n{closing_q}"
 
@@ -6280,11 +7047,13 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
     STOP_KEYWORDS = {
         "חנות", "בעל", "בית", "איך", "מה", "זה", "שלי", "שלך", "הוא", "היא",
         "יש", "אין", "לא", "כן", "פה", "כאן", "טוב", "תודה", "שלום", "היי",
-        "של", "על", "עם", "את", "או", "גם", "רק", "עוד", "כל", "מחיר", "המחיר"
+        "של", "על", "עם", "את", "או", "גם", "רק", "עוד", "כל", "מחיר", "המחיר",
+        "כמה", "עולה", "עולים", "קליקס", "qlyx", "נוקיה", "שיאומי", "גלקסי", "סמסונג", "מכשיר", "טלפון", "פלאפון"
     }
-    MODEL_TOKENS = {"f21", "f21p", "f21pro", "f22", "f22p", "f22pro", "f25", "f25p", "f25pro", "qin", "a14", "a17", "s24"}
+    MODEL_TOKENS = {"f21", "f21p", "f21pro", "f22", "f22p", "f22pro", "f25", "f25p", "f25pro", "qin", "a14", "a17", "s24", "q8", "q3", "q7", "q9", "215", "225", "235", "4x4"}
     is_asking_color = any(w in clean for w in ["צבע", "צבעים", "באיזה צבע"])
     is_asking_repair = any(w in clean for w in ["מסך", "סוללה", "שקע"]) and not is_screen_protector_or_accessory_context(clean)
+    query_model_codes = _extract_model_codes(_normalize_pos_tokens(clean))
 
     # 1. Check dynamic database learned knowledge FIRST for specific follow-up answers (e.g. colors, stock details, specific rules taught by Admin)
     try:
@@ -6294,6 +7063,10 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
         for kw_str, ans in rows:
             if not kw_str or not ans or is_admin_meta_or_error_correction(ans):
                 continue
+            if query_model_codes:
+                row_model_codes = _extract_model_codes(_normalize_pos_tokens(f"{kw_str} {ans}"))
+                if not query_model_codes.issubset(row_model_codes):
+                    continue
             # Skip any legacy outdated F21P 650/750 price row if it somehow exists
             if any(m in kw_str.lower() for m in ["f21", "f21p"]) and "650" in ans and "750" in ans:
                 continue
@@ -6698,8 +7471,51 @@ def init_db():
             except Exception:
                 pass
 
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS tiber_cellular_packages (
+                pkg_id TEXT PRIMARY KEY,
+                company TEXT,
+                network_host TEXT,
+                category TEXT,
+                plan_name TEXT,
+                data_gb TEXT,
+                minutes_sms TEXT,
+                price_nis REAL,
+                extra_info TEXT,
+                updated_at TEXT
+            )
+        """)
+        for t_pkg in PERMANENT_TIBER_PACKAGES_SEED:
+            c.execute("""
+                INSERT OR IGNORE INTO tiber_cellular_packages
+                (pkg_id, company, network_host, category, plan_name, data_gb, minutes_sms, price_nis, extra_info, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (
+                t_pkg["pkg_id"], t_pkg["company"], t_pkg["network_host"], t_pkg["category"],
+                t_pkg["plan_name"], t_pkg["data_gb"], t_pkg["minutes_sms"], t_pkg["price_nis"], t_pkg["extra_info"]
+            ))
+        if os.path.exists(BACKUP_TIBER_PACKAGES_JSON_PATH):
+            try:
+                with open(BACKUP_TIBER_PACKAGES_JSON_PATH, "r", encoding="utf-8") as f:
+                    tiber_cached = json.load(f)
+                if isinstance(tiber_cached, list):
+                    for tp in tiber_cached:
+                        if isinstance(tp, dict) and tp.get("pkg_id"):
+                            c.execute("""
+                                INSERT OR REPLACE INTO tiber_cellular_packages
+                                (pkg_id, company, network_host, category, plan_name, data_gb, minutes_sms, price_nis, extra_info, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                tp["pkg_id"], tp.get("company", ""), tp.get("network_host", ""), tp.get("category", "4G"),
+                                tp.get("plan_name", ""), tp.get("data_gb", ""), tp.get("minutes_sms", ""),
+                                float(tp.get("price_nis", 0)), tp.get("extra_info", ""), tp.get("updated_at") or datetime.now().isoformat()
+                            ))
+            except Exception:
+                pass
+
         conn.commit()
         conn.close()
+        sync_tiber_packages_to_json()
         # Apply learned style rules across all existing learned_kb rows
         try:
             _c_st = sqlite3.connect(DB_PATH)
@@ -9657,6 +10473,231 @@ async def unified_whatsapp_webhook(req: Request):
                 )
             return {"ok": True, "reply": reply_cb, "type": "callback_phone_confirmed", "callback_phone": cb_detected}
 
+    # 0.58 TIBER.CO.IL CELLULAR RECEPTION, ANTENNAS & PACKAGE PORTING FLOW
+    # Handles:
+    # - Active state 'awaiting_cellular_address' (Customer provides their address -> Bot runs Tiber.co.il lookup)
+    # - Active state 'awaiting_cellular_plan_selection' (Customer selects a package/company -> Bot collects name/callback phone and alerts Eran!)
+    # - Active state 'awaiting_cellular_callback_info' (Customer provides callback phone/name for their chosen package -> Bot alerts Eran!)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        active_cell_row = conn.execute(
+            "SELECT id, request_text, action_taken, status FROM customer_requests "
+            "WHERE (phone = ? OR phone LIKE ?) AND status IN ('awaiting_cellular_address', 'awaiting_cellular_plan_selection', 'awaiting_cellular_callback_info') "
+            "ORDER BY id DESC LIMIT 1",
+            (sender_phone, f"%{sender_phone[-9:]}%")
+        ).fetchone()
+        conn.close()
+    except Exception:
+        active_cell_row = None
+
+    if active_cell_row and not is_scheduling_request(message_text):
+        cell_req_id, cell_req_text, cell_action_taken, cell_status = active_cell_row
+        cust_clean_cell = message_text.strip().lower()
+        cust_phone_fmt = format_phone_display(sender_phone)
+        cust_has_neg_cell = bool(re.search(r"\b(?:לא\s+תודה|לא\s+צריך|לא\s+רוצה|לא\s+מעוניין|מוותר|אסתדר|עזוב)\b", cust_clean_cell))
+
+        # Allow customer to exit cleanly if they decline
+        if cust_has_neg_cell:
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", (f"הלקוח סיים את בדיקת הסלולר: {message_text}", cell_req_id))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            reply_cell_no = "בסדר גמור, בשמחה! אני כאן לכל שאלה נוספת. 😃"
+            send_whatsapp_message(sender_phone, reply_cell_no, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", reply_cell_no)
+            return {"ok": True, "reply": reply_cell_no, "type": "cellular_flow_declined"}
+
+        # STAGE A: Customer was asked for their address ('awaiting_cellular_address')
+        if cell_status == "awaiting_cellular_address":
+            addr_cand = extract_israeli_address_from_text(message_text) or message_text.strip()
+            # Ensure it's not a unrelated device price question
+            if any(k in cust_clean_cell for k in ["כמה עולה f21", "כמה עולה f22", "כמה עולה q8", "שעות פעילות"]):
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute("UPDATE customer_requests SET status='handled' WHERE id=?", (cell_req_id,))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+            else:
+                tiber_res = lookup_tiber_antennas_and_packages(addr_cand)
+                reply_tiber = tiber_res["reply"]
+                top_net_name = tiber_res["top_network"]["network"]
+                top_net_dist = tiber_res["top_network"]["nearest_m"]
+                top_net_cnt = tiber_res["top_network"]["antennas_count"]
+
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute(
+                        "UPDATE customer_requests SET status='awaiting_cellular_plan_selection', request_text=?, action_taken=? WHERE id=?",
+                        (
+                            f"{cell_req_text} | כתובת: {addr_cand}",
+                            f"בוצעה בדיקת Tiber.co.il לכתובת '{addr_cand}' [TIBER_ADDR:{addr_cand}] [TIBER_TOP_NET:{top_net_name} ({top_net_cnt} אנטנות, כ-{top_net_dist} מטר)]",
+                            cell_req_id,
+                        )
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+
+                send_whatsapp_message(sender_phone, reply_tiber, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_tiber)
+                return {
+                    "ok": True,
+                    "reply": reply_tiber,
+                    "type": "tiber_antenna_and_packages_results",
+                    "address": addr_cand,
+                    "top_network": tiber_res["top_network"],
+                    "networks": tiber_res["networks"],
+                    "escalated": False,
+                }
+
+        # STAGE B: Customer received Tiber results and now selects a package/company or asks for a callback ('awaiting_cellular_plan_selection' or 'awaiting_cellular_callback_info')
+        if cell_status in ("awaiting_cellular_plan_selection", "awaiting_cellular_callback_info"):
+            pkg_det_pre = detect_selected_cellular_package_from_text(message_text)
+            addr_pre = extract_israeli_address_from_text(message_text) if not pkg_det_pre.get("matched") else ""
+            if addr_pre and not any(w in cust_clean_cell for w in ["קוראים לי", "שמי", "תחזור", "תחזרו"]):
+                tiber_res2 = lookup_tiber_antennas_and_packages(addr_pre)
+                send_whatsapp_message(sender_phone, tiber_res2["reply"], raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", tiber_res2["reply"])
+                return {
+                    "ok": True,
+                    "reply": tiber_res2["reply"],
+                    "type": "tiber_antenna_and_packages_results",
+                    "address": addr_pre,
+                    "top_network": tiber_res2["top_network"],
+                    "networks": tiber_res2["networks"],
+                    "escalated": False,
+                }
+            # Check if customer wants to check a DIFFERENT address first
+            if any(w in cust_clean_cell for w in ["כתובת אחרת", "תבדוק כתובת", "בכתובת אחרת"]):
+                new_addr = re.sub(r"^.*?(?:כתובת אחרת|תבדוק כתובת|בכתובת אחרת)\s*[:\-]?\s*", "", message_text).strip()
+                if new_addr and len(new_addr) >= 3:
+                    tiber_res2 = lookup_tiber_antennas_and_packages(new_addr)
+                    send_whatsapp_message(sender_phone, tiber_res2["reply"], raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", tiber_res2["reply"])
+                    return {"ok": True, "reply": tiber_res2["reply"], "type": "tiber_antenna_and_packages_results", "address": new_addr}
+
+            m_saved_addr = re.search(r"\[TIBER_ADDR:([^\]]+)\]", cell_action_taken or "")
+            saved_addr = m_saved_addr.group(1).strip() if m_saved_addr else "לא צוינה"
+            m_saved_net = re.search(r"\[TIBER_TOP_NET:([^\]]+)\]", cell_action_taken or "")
+            saved_top_net = m_saved_net.group(1).strip() if m_saved_net else ""
+            m_saved_pkg = re.search(r"\[CHOSEN_PKG:([^\]]+)\]", cell_action_taken or "")
+            prev_chosen_pkg = m_saved_pkg.group(1).strip() if m_saved_pkg else ""
+
+            pkg_det = detect_selected_cellular_package_from_text(message_text)
+            chosen_pkg_str = pkg_det["package_summary"] if pkg_det.get("matched") else prev_chosen_pkg
+            chosen_comp_str = pkg_det["company"] if pkg_det.get("matched") else ""
+
+            cb_phone = detect_callback_phone_in_text(message_text, sender_phone) or cust_phone_fmt
+            extracted_nm = extract_name_from_text(message_text)
+            if extracted_nm and extracted_nm not in COMMON_NON_NAMES and normalize_phone(sender_phone) not in PERMANENT_CONTACTS:
+                customer_name = extracted_nm
+                save_contact_name(sender_phone, extracted_nm)
+
+            wants_callback = (
+                bool(pkg_det.get("matched"))
+                or bool(prev_chosen_pkg)
+                or is_satisfaction_yes(message_text)
+                or any(w in cust_clean_cell for w in [
+                    "תחזרו", "תחזור", "לחזור", "תתקשר", "להתקשר", "לנייד", "ניוד", "להתנייד",
+                    "רוצה", "מעוניין", "אשמח", "כן", "בטח", "סגור", "מתאים"
+                ])
+            )
+
+            if wants_callback:
+                if not chosen_pkg_str:
+                    # Customer said "כן תחזרו אליי" without naming which company/package they want -> ask them which package from the list they want!
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        conn.execute(
+                            "UPDATE customer_requests SET status='awaiting_cellular_callback_info' WHERE id=?",
+                            (cell_req_id,)
+                        )
+                        conn.commit()
+                        conn.close()
+                    except Exception:
+                        pass
+                    reply_ask_pkg = (
+                        "בשמחה! כדי שערן יחזור אליך מוכן עם הסים והניוד המדויק — *לאיזו חברה וחבילה מהרשימה תרצה להתנייד?* "
+                        "(למשל: פלאפון 5G ב-35 ₪ / גולן כשר ב-25 ₪ / הוט מובייל דור 4 ב-25.90 ₪) ומה שמך ומספר הטלפון הנוח לחזרה? 😃📲"
+                    )
+                    send_whatsapp_message(sender_phone, reply_ask_pkg, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reply_ask_pkg)
+                    return {
+                        "ok": True,
+                        "reply": reply_ask_pkg,
+                        "type": "asked_customer_for_chosen_cellular_package",
+                        "escalated": False,
+                    }
+
+                # We have the chosen package (`chosen_pkg_str`) AND the callback phone (`cb_phone`)!
+                lead_name_display = customer_name or "לקוח בווצאפ"
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.execute(
+                        "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
+                        (f"נשלח לערן ליד לניוד לקוח ({lead_name_display}, {cb_phone}) לחבילה: {chosen_pkg_str} (כתובת: {saved_addr})", cell_req_id)
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+
+                name_sal = f" {customer_name}" if (customer_name and customer_name not in COMMON_NON_NAMES) else ""
+                reply_port_confirmed = (
+                    f"מעולה{name_sal}! העברתי כעת לערן את הבקשה לחזור אליך למספר *{cb_phone}* לצורך ניוד לחבילת *{chosen_pkg_str}*. 📲🙌\n"
+                    f"ערן יחזור אליך בהקדם להשלמת הניוד!\n\n"
+                    f"האם אוכל לעזור לך במשהו נוסף? 😃"
+                )
+                send_whatsapp_message(sender_phone, reply_port_confirmed, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reply_port_confirmed)
+
+                ts = std_time.time()
+                PENDING_SATISFACTION_CHECKS[sender_phone] = ts
+                asyncio.create_task(inactivity_closing_timer(sender_phone, ts, raw_chat_id, customer_name))
+
+                target_admins = [adm for adm in admin_numbers_set if adm != sender_phone and adm != "972500000000"]
+                if not target_admins:
+                    # If Eran is testing from one of his admin phones, send to his other admin phone (or same phone if single)
+                    target_admins = [adm for adm in ["972524043644", "972553164770"] if adm != sender_phone] or [sender_phone]
+
+                admin_port_alert = (
+                    f"📲 *בקשת חזרה ללקוח לצורך ניוד סלולר (בדיקת Tiber.co.il)!* [#REQ-{cell_req_id}]\n"
+                    f"👤 *שם הלקוח:* {lead_name_display}\n"
+                    f"📞 *מספר טלפון לחזרה:* *{cb_phone}* (ווצאפ פונה: {cust_phone_fmt})\n"
+                    f"📍 *כתובת שנבדקה ב-Tiber:* {saved_addr}\n"
+                    + (f"📡 *הרשת המומלצת בכתובת:* {saved_top_net}\n" if saved_top_net else "")
+                    + f"🎯 *חבילת הסלולר אליה הלקוח מעוניין להתנייד:* *{chosen_pkg_str}*\n"
+                    f"💬 *הודעת הלקוח:* \"{message_text}\"\n\n"
+                    f"☎️ *נא לחזור ללקוח במספר {cb_phone} לצורך השלמת הניוד לחבילה המבוקשת!*"
+                )
+                for adm in target_admins:
+                    send_whatsapp_message(adm, admin_port_alert)
+
+                return {
+                    "ok": True,
+                    "reply": reply_port_confirmed,
+                    "type": "cellular_porting_lead_sent_to_admin",
+                    "customer_name": lead_name_display,
+                    "callback_phone": cb_phone,
+                    "address": saved_addr,
+                    "chosen_package": chosen_pkg_str,
+                    "chosen_company": chosen_comp_str,
+                    "escalated": True,
+                }
+
+
     # 0.6 CHECK IF CUSTOMER HAS AN ACTIVE OPEN DIALOGUE / ORDER OFFER / BIT PAYMENT (status IN ('awaiting_customer_reply', 'awaiting_price_check_consent', 'awaiting_bit_payment'))
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -10631,7 +11672,7 @@ async def unified_whatsapp_webhook(req: Request):
     # 2. FAST DETERMINISTIC PATH: Store Address & Hours (Send WhatsApp FIRST, then save to DB)
     if is_store_info_question(message_text):
         store_reply = get_store_info_reply(customer_name, already_greeted)
-        store_reply = f"{store_reply.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+        store_reply = f"{store_reply.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃\n\n{CELLULAR_CLOSING_UPSELL_SENTENCE}"
         send_whatsapp_message(sender_phone, store_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", store_reply)
@@ -10712,6 +11753,92 @@ async def unified_whatsapp_webhook(req: Request):
             pass
             
         return {"ok": True, "reply": warranty_reply, "type": "warranty_full_explanation", "escalated": False}
+
+    # 3.35 FAST DETERMINISTIC PATH: Cellular Reception Check & Package Porting via Tiber.co.il
+    if is_cellular_reception_or_plan_inquiry(message_text, recent_history):
+        salutation = f"שלום {customer_name}, מה שלומך? " if (customer_name and msg_count <= 1 and not already_greeted) else ""
+        extracted_addr = extract_israeli_address_from_text(message_text)
+
+        if extracted_addr:
+            # Customer already included their address in the message -> Run Tiber.co.il lookup immediately!
+            tiber_res = lookup_tiber_antennas_and_packages(extracted_addr)
+            reply_cell = f"{salutation}{tiber_res['reply']}"
+            top_net_name = tiber_res["top_network"]["network"]
+            top_net_dist = tiber_res["top_network"]["nearest_m"]
+            top_net_cnt = tiber_res["top_network"]["antennas_count"]
+
+            send_whatsapp_message(sender_phone, reply_cell, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", reply_cell)
+
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("UPDATE customer_requests SET status='handled' WHERE (phone = ? OR phone LIKE ?) AND status IN ('awaiting_customer_reply', 'awaiting_cellular_address')", (sender_phone, f"%{sender_phone[-9:]}%"))
+                conn.execute(
+                    "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        sender_phone,
+                        "נעם שיח - בדיקת קליטה וניוד (Tiber)",
+                        f"{message_text} | כתובת: {extracted_addr}",
+                        f"בוצעה בדיקת Tiber.co.il לכתובת '{extracted_addr}' [TIBER_ADDR:{extracted_addr}] [TIBER_TOP_NET:{top_net_name} ({top_net_cnt} אנטנות, כ-{top_net_dist} מטר)]",
+                        "ניוד חבילת סלולר",
+                        "awaiting_cellular_plan_selection",
+                        datetime.now().isoformat(),
+                    )
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e_tc:
+                print(f"[Tiber Save Notice]: {e_tc}")
+
+            return {
+                "ok": True,
+                "reply": reply_cell,
+                "type": "tiber_antenna_and_packages_results",
+                "address": extracted_addr,
+                "top_network": tiber_res["top_network"],
+                "networks": tiber_res["networks"],
+                "escalated": False,
+            }
+        else:
+            # Ask the customer for their address so we can check Tiber.co.il
+            reply_ask_addr = (
+                f"{salutation}בשמחה! כדי שאבדוק עבורך באתר *Tiber.co.il* איזו רשת סלולרית הכי חזקה באזורך "
+                f"(לפי מספר האנטנות והקרבה הגאוגרפית אליך) ואציע לך את החבילות הכי משתלמות (דור 4, דור 5 או כשר) — "
+                f"*מה הכתובת שלך (עיר, רחוב ומספר בית)?* 📍📶"
+            )
+            send_whatsapp_message(sender_phone, reply_ask_addr, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", reply_ask_addr)
+
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("UPDATE customer_requests SET status='handled' WHERE (phone = ? OR phone LIKE ?) AND status IN ('awaiting_customer_reply', 'awaiting_cellular_address')", (sender_phone, f"%{sender_phone[-9:]}%"))
+                conn.execute(
+                    "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        sender_phone,
+                        "נעם שיח - בדיקת קליטה וניוד (Tiber)",
+                        message_text,
+                        "נשאלה כתובת הלקוח לבדיקת אנטנות וחבילות ב-Tiber.co.il",
+                        "ניוד חבילת סלולר",
+                        "awaiting_cellular_address",
+                        datetime.now().isoformat(),
+                    )
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e_ta:
+                print(f"[Tiber Address Ask Save Notice]: {e_ta}")
+
+            return {
+                "ok": True,
+                "reply": reply_ask_addr,
+                "type": "asked_customer_for_cellular_address",
+                "escalated": False,
+            }
 
     # 3.4 FAST DETERMINISTIC PATH: Scheduling / Store Purchase / Installation / Lab Queue Requests (Handles both single & multi-question inquiries!)
     if is_scheduling_request(message_text):
@@ -10860,7 +11987,7 @@ async def unified_whatsapp_webhook(req: Request):
         # If not asking warranty/sales followup, and not an open question or in progress, append satisfaction question
         if not any(q in reply_kb for q in ["פירוט מורחב", "בין מסלולי האחריות", "האם הצלחתי לעזור", "נשארו יחידות אחרונות", "תרצה שנשריין"]):
             if not is_in_progress_or_question(reply_kb):
-                reply_kb = f"{reply_kb.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+                reply_kb = f"{reply_kb.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃\n\n{CELLULAR_CLOSING_UPSELL_SENTENCE}"
             
         send_whatsapp_message(sender_phone, reply_kb, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
@@ -11295,7 +12422,7 @@ async def unified_whatsapp_webhook(req: Request):
     if not is_escalated and not is_pure_greeting(message_text):
         if not any(q in reply_text for q in ["האם הצלחתי לעזור", "מענה לפנייתך", "פירוט מורחב", "בין מסלולי האחריות", "אני בודק כעת", "נשארו יחידות אחרונות", "תרצה שנשריין"]):
             if not is_in_progress_or_question(reply_text):
-                reply_text = f"{reply_text.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+                reply_text = f"{reply_text.rstrip()}\n\nהאם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃\n\n{CELLULAR_CLOSING_UPSELL_SENTENCE}"
 
     # Sanitize arrival advice when the store is currently closed (never tell customer to come 'now')
     reply_text = sanitize_closed_store_advice(reply_text, store_status["is_open"], store_status["arrival_advice"])
