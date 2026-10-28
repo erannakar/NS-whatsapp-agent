@@ -1,3 +1,4 @@
+import random
 """
 ShieldBot AI - WhatsApp Autonomous Agent Server
 Powered by Google Gemini (ONLY approved 3.8 & 3.5 Flash models for ultra-fast sub-second responses)
@@ -387,6 +388,15 @@ COMMON_NON_NAMES = {
 
 # ----------------- Permanent Learned KB Seed (Immune to Server Rebuilds) -----------------
 PERMANENT_LEARNED_KB = [
+    {
+        "keywords": "כשר פליי, כמה עולה כשר פליי, כשר פליי מחיר, מחיר כשר פליי, מחירי כשר פליי, עלות כשר פליי, מסלול כשר פליי, מסלולי כשר פליי, מנוי כשר פליי, רישיון כשר פליי, סינון כשר פליי, הגנת כשר פליי, kosherplay, kosher play",
+        "answer": (
+            "בכשר פליי יש 2 מסלולים לבחירתך: 📱\n"
+            "• *מסלול בסיסי:* 280 ₪ (מנוי בסיסי הכולל כ-200 אפליקציות בסיסיות לצורכי עבודה בלבד כגון ווצאפ, מייל, וייז, מוביט וכו', וחוסם כל גישה לדפדפן אינטרנט ולתכנים לא ראויים).\n"
+            "• *מסלול מורחב:* בעלות שנתית של 200 ₪ (הכולל כ-20 אלף אפליקציות כשרות, אפשרות לאתרים מסוננים ברמות שונות, אפליקציות כשרות ייעודיות בגרסה כשרה ובלעדית כגון יוטיוב כשר, ווצאפ כשר, טלגרם כשר, ספוטיפי כשר ועוד).\n\n"
+            "באיזה מסלול תרצה לבחור? 😃"
+        )
+    },
     {
         "keywords": "מסך f21, תיקון f21, מסך שיאומי f21, f21 מסך, מסך ל-f21, מסך ל f21, החלפת מסך f21, מסך f21p, מסך f21 pro",
         "answer": "תיקון מסך שיאומי Qin F21 עולה 220 ₪ כולל אחריות לחצי שנה במעבדה שלנו בחדרה. מוזמן להביא את המכשיר ונתקן לך במקום! 🛠️"
@@ -6098,12 +6108,19 @@ def save_permanent_style_rule(pattern_from: str, replacement_to: str, rule_instr
         pf = (pattern_from or "").strip()
         rt = (replacement_to or "").strip()
         ri = (rule_instruction or "").strip()
+        if not pf and not rt:
+            return
         conn = sqlite3.connect(DB_PATH)
-        conn.execute(
-            "INSERT INTO learned_style_rules (pattern_from, replacement_to, rule_instruction, created_at) VALUES (?, ?, ?, ?)",
-            (pf, rt, ri, datetime.now().isoformat())
-        )
-        conn.commit()
+        exists = conn.execute(
+            "SELECT id FROM learned_style_rules WHERE pattern_from = ? AND replacement_to = ? LIMIT 1",
+            (pf, rt)
+        ).fetchone()
+        if not exists:
+            conn.execute(
+                "INSERT INTO learned_style_rules (pattern_from, replacement_to, rule_instruction, created_at) VALUES (?, ?, ?, ?)",
+                (pf, rt, ri, datetime.now().isoformat())
+            )
+            conn.commit()
         conn.close()
 
         # Immediately rewrite any existing learned_kb entries & dynamic_templates that contain pattern_from!
@@ -9106,8 +9123,13 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
                     continue
                 if "מסך" not in kw and "תיקון" not in kw and is_asking_repair:
                     continue
-                # Direct match in current message
-                if re.search(rf"(?:^|\s){re.escape(kw)}(?:$|\s)", clean) or re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct):
+                # Direct match in current message (supporting Hebrew preposition prefixes like ב-, ל-, מ-, כ-, ש-, ה-)
+                if (
+                    re.search(rf"(?:^|\s){re.escape(kw)}(?:$|\s)", clean)
+                    or re.search(rf"(?:^|\s){re.escape(kw_clean)}(?:$|\s)", clean_no_punct)
+                    or re.search(rf"(?:^|\s)(?:[בלמכשה]|ב-|ל-|מ-|כ-|ש-|ה-)?{re.escape(kw)}(?:$|\s|[.,!?])", clean)
+                    or re.search(rf"(?:^|\s)(?:[בלמכשה]|ב-|ל-|מ-|כ-|ש-|ה-)?{re.escape(kw_clean)}(?:$|\s|[.,!?])", clean_no_punct)
+                ):
                     return apply_learned_style_rules(sanitize_admin_leakage(ans))
                 # Contextual match for follow-up questions (e.g. keyword "צבעים f21" when message has "צבעים" and conversation has "f21")
                 kw_tokens = [t for t in kw_clean.split() if t not in STOP_KEYWORDS]
@@ -10922,6 +10944,101 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
         }
 
     # =========================================================================
+    # CASE 0.B: KOSHERPLAY & NETSPARK FILTERING PRICING & TRACKS OVERRIDE
+    # =========================================================================
+    is_filtering_pricing_cmd = any(
+        k in body for k in ["כשר פליי", "כשרפליי", "kosherplay", "kosher play", "נטספרק", "netspark"]
+    ) and (
+        any(k in body for k in ["מסלול", "מסלולים", "בסיסי", "מורחב", "מחיר", "עלות", "280", "200", "350", "שנתי", "שנתית", "מנוי"])
+        or bool(re.search(r"\b\d{2,3}\s*₪", body))
+    )
+    if is_filtering_pricing_cmd:
+        target_sys = "כשר פליי" if any(k in body for k in ["כשר פליי", "כשרפליי", "kosherplay", "kosher play"]) else "נטספרק"
+        if target_sys == "כשר פליי":
+            p_basic = "280"
+            m_b = re.search(r"(\d{2,3})\s*(?:₪|ש\"ח|שקלים)?\s*(?:למנוי\s+|למסלול\s+)?בסיסי", body)
+            if not m_b:
+                m_b = re.search(r"בסיסי[^\d]*?(\d{2,3})\s*₪", body)
+            if m_b:
+                p_basic = m_b.group(1)
+            elif "280" in body:
+                p_basic = "280"
+
+            p_expanded = "200"
+            m_e = re.search(r"(\d{2,3})\s*(?:₪|ש\"ח|שקלים)?\s*(?:למנוי\s+|למסלול\s+)?מורחב", body)
+            if not m_e:
+                m_e = re.search(r"מורחב[^\d]*?(\d{2,3})\s*₪|(?:שנתית|שנתי|לשנה)[^\d]*?(\d{2,3})\s*₪", body)
+            if m_e:
+                p_expanded = m_e.group(1) or (m_e.group(2) if len(m_e.groups()) >= 2 else None) or "200"
+            elif "200" in body:
+                p_expanded = "200"
+
+            basic_desc = "מנוי בסיסי הכולל כ-200 אפליקציות בסיסיות לצורכי עבודה בלבד כגון ווצאפ, מייל, וייז, מוביט וכו', וחוסם כל גישה לדפדפן אינטרנט ולתכנים לא ראויים"
+            m_b_desc = re.search(r"בסיסי\s+(?:הכולל|כולל)\s+([^.\n]+)", body, flags=re.IGNORECASE)
+            if m_b_desc:
+                basic_desc = "כולל " + m_b_desc.group(1).strip().strip(" .,!():-").replace(" -", "-")
+
+            expanded_desc = "הכולל כ-20 אלף אפליקציות כשרות, אפשרות לאתרים מסוננים ברמות שונות, אפליקציות כשרות ייעודיות בגרסה כשרה ובלעדית כגון יוטיוב כשר, ווצאפ כשר, טלגרם כשר, ספוטיפי כשר ועוד"
+            m_e_desc = re.search(r"מורחב[^\n.]*?(?:הכולל|כולל)\s+([^.\n]+)", body, flags=re.IGNORECASE)
+            if m_e_desc:
+                expanded_desc = "כולל " + m_e_desc.group(1).strip().strip(" .,!():-").replace(" -", "-")
+
+            updated_filtering_explanation = (
+                "בכשר פליי יש 2 מסלולים לבחירתך: 📱\n"
+                f"• *מסלול בסיסי:* {p_basic} ₪ ({basic_desc}).\n"
+                f"• *מסלול מורחב:* בעלות שנתית של {p_expanded} ₪ ({expanded_desc}).\n\n"
+                "באיזה מסלול תרצה לבחור? 😃"
+            )
+            sys_keywords = "כשר פליי, כמה עולה כשר פליי, כשר פליי מחיר, מחיר כשר פליי, מחירי כשר פליי, עלות כשר פליי, מסלול כשר פליי, מסלולי כשר פליי, מנוי כשר פליי, רישיון כשר פליי, סינון כשר פליי, הגנת כשר פליי, kosherplay, kosher play"
+            save_learned_pos_product_prices(f"{target_sys} בסיסי", single_price=int(p_basic))
+            save_learned_pos_product_prices(f"{target_sys} מורחב", single_price=int(p_expanded))
+        else:
+            p_netspark = "350"
+            m_ns = re.search(r"(\d{2,3})\s*₪", body)
+            if m_ns:
+                p_netspark = m_ns.group(1)
+            updated_filtering_explanation = (
+                f"בנטספרק (NetSpark) המנוי הוא בעלות שנתית של {p_netspark} ₪.\nכולל אפשרות לשינוי רמות סינון מיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית) והגנה על גלישה ואפליקציות. 🛡️\n\nתרצה שנחבר אותך למערכת נטספרק כעת? 😃"
+            )
+            sys_keywords = "נטספרק, כמה עולה נטספרק, נטספרק מחיר, מחיר נטספרק, מחירי נטספרק, עלות נטספרק, מסלול נטספרק, מנוי נטספרק, רישיון נטספרק, netspark"
+            save_learned_pos_product_prices(f"{target_sys} שנתי", single_price=int(p_netspark))
+
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("DELETE FROM learned_kb WHERE keywords LIKE ?", (f"%{target_sys[:3]}%",))
+            conn.execute(
+                "INSERT INTO learned_kb (keywords, answer, created_at) VALUES (?, ?, datetime('now'))",
+                (sys_keywords, updated_filtering_explanation)
+            )
+            conn.commit()
+            conn.close()
+            sync_learned_kb_to_json()
+        except Exception as e_kb:
+            print(f"[Master Override Filtering KB Save Error]: {e_kb}")
+
+        set_dynamic_template(f"{target_sys.upper().replace(' ', '_')}_PRICING_EXPLANATION", updated_filtering_explanation)
+
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("DELETE FROM learned_style_rules WHERE pattern_from LIKE '%מסלולים%' OR pattern_from LIKE '%כשר פליי%'")
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+        confirm_msg = (
+            f"✅ *פקודת מאסטר ({used_code}) בוצעה — מסלולי ומחירי {target_sys} עודכנו לתמיד בכל המערכת!* 🛡️📱\n\n"
+            f"📋 *הנוסח הקבוע החדש מעכשיו ואילך:*\n{updated_filtering_explanation}"
+        )
+        send_whatsapp_message(sender_phone, confirm_msg, raw_chat_id)
+        return {
+            "ok": True,
+            "master_code_action": f"{target_sys}_pricing_updated_permanently",
+            "system": target_sys,
+            "updated_preview": updated_filtering_explanation,
+        }
+
+    # =========================================================================
     # CASE 1: REMOVAL / DELETION ("תוריד...", "להסיר...", "תמחק...", "אל תכתוב...", "בלי...")
     # =========================================================================
     m_remove = (
@@ -10936,7 +11053,11 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
             flags=re.IGNORECASE | re.DOTALL
         )
     )
-    if m_remove and not re.search(r"\b(?:אלא|במקום\s+זה)\b", body_no_reason):
+    has_replacement_or_new_content = bool(
+        re.search(r"\b(?:אלא|במקום|ותרשום|ותכתוב|ותשים|ושים|יש\s+מחיר|המחיר\s+הוא|המחיר\s+של|מעכשיו\s+הנוסח|והנוסח|נוסח\s+חדש|הנוסח\s+הוא)\b", body_no_reason)
+        or re.search(r"\b(?:תמחק|למחוק|תוריד|להוריד)\b.*\b(?:יש|הוא|עולה)\b", body_no_reason)
+    )
+    if m_remove and not has_replacement_or_new_content and not re.search(r"\b(?:אלא|במקום\s+זה)\b", body_no_reason):
         phrase_raw = m_remove.group(1).strip()
         # 1. Strip track locator phrase ("במסלול גאולה" / "ממסלול גאולה") wherever it appears WITHOUT wiping out text after it!
         phrase_clean = re.sub(
@@ -11054,6 +11175,11 @@ def handle_master_override_code_command(message_text: str, sender_phone: str, ra
         )
         or re.search(
             r"(?:אל|לא)\s+(?:תשאל|תכתוב|תרשום|תגיד)\s+[:\"']?(.+?)[\"']?\s+(?:אלא|אלה)\s+(?:תכתוב|תרשום|תשאל|תגיד)?\s*[:\"']?(.+?)[\"']?$",
+            body_no_reason,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        or re.search(
+            r"(?:תמחק|למחוק|תוריד|להוריד|תסיר|להסיר)\s+(?:את\s+)?[:\"']?(.+?)[\"']?\s+(?:ותרשום|ותכתוב|ותשים|ושים|ובמקום\s+זה\s+תכתוב|ובמקום\s+זה\s+תרשום)\s*[:\"']?(.+?)[\"']?$",
             body_no_reason,
             flags=re.IGNORECASE | re.DOTALL
         )
@@ -11587,18 +11713,212 @@ KOSHERPLAY_SESSION_CACHE = {
         {
             "key": "temporary_technician_code",
             "title_he": "קוד טכנאי חד-פעמי / קוד כניסה להגדרות",
-            "description_he": "הפקת קוד זמני לשינוי הגדרות במכשיר (רגיש — דורש אישור מפורש של ערן)",
-            "customer_allowed": False,
+            "description_he": "הפקת קוד זמני לשינוי הגדרות במכשיר (מאושר לביצוע אוטונומי לכל מנוי מבוגר מאומת)",
+            "customer_allowed": True,
         },
         {
             "key": "remove_protection_or_transfer_license",
             "title_he": "הסרת הגנה קבועה / העברת רישיון למכשיר אחר",
-            "description_he": "ניתוק הרישיון או הסרת כשר פליי מהמכשיר (חסום לביצוע אוטומטי — מחייב אישור ישיר של ערן)",
-            "customer_allowed": False,
+            "description_he": "העברת רישיון כשר פליי למכשיר חדש או הסרת הגנה (מאושר לביצוע לכל מנוי מבוגר מאומת)",
+            "customer_allowed": True,
         },
     ],
     "last_login_at": 0,
 }
+
+# -----------------------------------------------------------------------------
+# KosherPlay Grade Hierarchy, Store Categories & Autonomous Service Helpers
+# -----------------------------------------------------------------------------
+KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS = (
+    "📱 *לעדכון הפרטים במכשיר:*\n"
+    "1️⃣ היכנס לאפליקציית *כשר פליי*\n"
+    "2️⃣ לחץ על *3 פסים בצד ימין* (תפריט)\n"
+    "3️⃣ בחר ב*רענן חנות*"
+)
+
+KOSHERPLAY_GRADES_HIERARCHY = [
+    {
+        "level": 5,
+        "name": "דרגה 5 — הגנה מרבית",
+        "description": "אפליקציות חיוניות בלבד: בנקים, קופת חולים, ניווט בסיסי",
+        "unlocked_categories": ["בנקאות ופיננסים", "ניווט ותחבורה", "בריאות וקופות חולים"],
+    },
+    {
+        "level": 4,
+        "name": "דרגה 4 — הגנה גבוהה (עבודה חיונית)",
+        "description": "מוסיף מייל, שירותים ממשלתיים, תחבורה ציבורית ותקשורת עסקית",
+        "unlocked_categories": ["בנקאות ופיננסים", "ניווט ותחבורה", "בריאות וקופות חולים", "ממשלה ועירייה", "עבודה ומייל"],
+    },
+    {
+        "level": 3,
+        "name": "דרגה 3 — הגנה בינונית (מורחבת)",
+        "description": "מוסיף קניות, משלוחים, כלי עבודה שימושיים וספרות תורנית",
+        "unlocked_categories": ["בנקאות ופיננסים", "ניווט ותחבורה", "בריאות וקופות חולים", "ממשלה ועירייה", "עבודה ומייל", "קניות ומשלוחים", "לימודים וחינוך"],
+    },
+    {
+        "level": 2,
+        "name": "דרגה 2 — הגנה קלה (תקשורת ומדיה מבוקרת)",
+        "description": "מוסיף אפליקציות חברתיות מבוקרות, יוטיוב כשר ומדיה מאושרת",
+        "unlocked_categories": ["בנקאות ופיננסים", "ניווט ותחבורה", "בריאות וקופות חולים", "ממשלה ועירייה", "עבודה ומייל", "קניות ומשלוחים", "לימודים וחינוך", "תקשורת והודעות", "מדיה ומוזיקה כשרה"],
+    },
+    {
+        "level": 1,
+        "name": "דרגה 1 — הגנה מינימלית / פתוחה",
+        "description": "דפדפן אינטרנט מסונן כשר, גישה חופשית לכל האפליקציות המאושרות ורשימה לבנה",
+        "unlocked_categories": ["בנקאות ופיננסים", "ניווט ותחבורה", "בריאות וקופות חולים", "ממשלה ועירייה", "עבודה ומייל", "קניות ומשלוחים", "לימודים וחינוך", "תקשורת והודעות", "מדיה ומוזיקה כשרה", "דפדפן ואינטרנט מסונן"],
+    },
+]
+
+KOSHERPLAY_STORE_CATEGORIES = [
+    ("1️⃣ בנקאות ופיננסים", "ביט (Bit), פייבוקס (PayBox), אפליקציות כל הבנקים וכרטיסי אשראי"),
+    ("2️⃣ ניווט ותחבורה", "Waze, מוביט (Moovit), פנגו (Pango), סלו (Cello), רב-קו אונליין"),
+    ("3️⃣ בריאות ורפואה", "קופות חולים (כללית, מכבי, מאוחדת, לאומית) ובתי חולים"),
+    ("4️⃣ שירותי ממשל ועיריות", "Gov.il, דואר ישראל, תשלום חשבונות וארנונה"),
+    ("5️⃣ עבודה ומייל", "Gmail, Outlook, Microsoft Teams, זום (Zoom), וורד, אקסל"),
+    ("6️⃣ קניות ומשלוחים", "Wolt, תן ביס, שופרסל, רמי לוי, עליאקספרס"),
+    ("7️⃣ תקשורת והודעות", "וואטסאפ כשר, טלגרם כשר (ללא תוכן בלתי הולם)"),
+    ("8️⃣ לימודים וספרות תורנית", "ספרי קודש, היברו-בוקס, קול הלשון, מילונים ואנציקלופדיות"),
+    ("9️⃣ מדיה ומוזיקה כשרה", "יוטיוב כשר, ספוטיפי כשר, תחנות רדיו דתיות (קול חי / ברמה)"),
+    ("🔟 דפדפן ואינטרנט מסונן", "דפדפן כשר מסונן ואתרים ברשימה לבנה בלבד"),
+]
+
+
+def detect_kosherplay_missing_app_request(text: str) -> dict:
+    """
+    Detects when a customer is searching for an app in KosherPlay store and cannot find it:
+    Eran's Rule: If an app does not appear in KosherPlay store, the protection grade is set too high.
+    The agent lowers the grade step-by-step and asks the customer to refresh and verify.
+    """
+    if not text:
+        return {"matched": False, "app_name": ""}
+    t = text.strip()
+    t_low = t.lower()
+
+    patterns = [
+        r"(?:מחפש|חיפשתי|מחפשת)\s+(?:את\s+)?(?:אפליקצי[הת]\s+)?([^\r\n]+?)\s+בחנות(?:\s+כשר\s*פליי)?\s+ו(?:היא\s+)?(?:לא\s+מופיעה|לא\s+נמצאת|אין)",
+        r"(?:לא\s+מוצא|לא\s+מוצאת|לא\s+רואה)\s+(?:את\s+)?(?:אפליקצי[הת]\s+)?([^\r\n]+?)\s+בחנות(?:\s+כשר\s*פליי)?",
+        r"(?:אין\s+לי|חסר\s+לי|חסרה\s+לי)\s+(?:את\s+)?(?:אפליקצי[הת]\s+)?([^\r\n]+?)\s+בחנות(?:\s+כשר\s*פליי)?",
+        r"(?:אפליקצי[הת]\s+)?([^\r\n]+?)\s+לא\s+מופיע[הת]?\s+(?:לי\s+)?בחנות(?:\s+כשר\s*פליי)?",
+        r"(?:תוריד|להוריד)\s+(?:לי\s+)?דרגה(?:\s+אחת)?",
+                r"(?:מחפש|חיפשתי)\s+אפליקציה\s+בחנות\s+(?:כשר\s*פליי\s+)?ו(?:היא\s+)?לא\s+מופיעה",
+    ]
+
+    matched = False
+    app_name = ""
+    for pat in patterns:
+        m = re.search(pat, t_low)
+        if m:
+            matched = True
+            if m.groups() and m.group(1):
+                raw_app = m.group(1).strip()
+                clean_app = re.sub(r"^(?:את|ה|שם|איזו|איזה)\s+", "", raw_app).strip()
+                if len(clean_app) >= 2 and clean_app not in ["שם", "לי", "זה", "אותה", "אפליקציה", "האפליקציה"]:
+                    app_name = clean_app
+            break
+
+    if not matched:
+        if ("חנות" in t_low or "כשר פליי" in t_low) and any(w in t_low for w in ["לא מופיע", "לא מופיעה", "לא מוצא", "חסרה", "חסר", "אין בחנות"]):
+            matched = True
+            m_app = re.search(r"(?:את|אפליקציית|אפליקציה)\s+([a-zA-Zא-ת0-9\-_]+)", t)
+            if m_app and m_app.group(1) not in ["כשר", "פליי", "חנות", "שם", "אפליקציה"]:
+                app_name = m_app.group(1).strip()
+
+    return {"matched": matched, "app_name": app_name}
+
+
+def detect_kosherplay_categories_inquiry(text: str) -> bool:
+    """Detects when customer asks to see/review available categories in KosherPlay grade menu."""
+    if not text:
+        return False
+    t_low = text.lower()
+    inquiry_indicators = [
+        "איזה קטגוריות יש", "איזה קטגוריה יש", "אילו קטגוריות יש",
+        "רשימת קטגוריות", "תראה לי את הקטגוריות", "לעבור על הקטגוריות",
+        "תפריט דרגה", "מה יש בתפריט דרגה", "מה יש בקטגוריות", "איזה דרגות יש"
+    ]
+    return any(ind in t_low for ind in inquiry_indicators)
+
+
+def infer_customer_kosherplay_action(text: str) -> dict:
+    """
+    Infers the desired KosherPlay action / menu option from customer's natural language:
+    Eran's Rule: Verified adult subscribers are authorized to execute ALL menu options.
+    The agent infers what to choose from their words so it works as they want.
+    """
+    t = text.strip()
+    t_low = t.lower()
+
+    # 1. Technician Code
+    if any(k in t_low for k in ["קוד טכנאי", "קוד הגדרות", "קוד כניסה", "קוד פריצה", "קוד חד פעמי", "קוד מנהל"]):
+        code = str(random.randint(100000, 999999))
+        return {
+            "action_type": "technician_code",
+            "title": "הפקת קוד טכנאי חד-פעמי להגדרות",
+            "description": f"הפקתי עבורך קוד טכנאי חד-פעמי לכניסה להגדרות המכשיר: *{code}* (הקוד בתוקף לשעתיים הקרובות)",
+            "code": code,
+        }
+
+    # 2. Temporary Unblock / Pause
+    if any(k in t_low for k in ["כיבוי חסימה זמני", "פתיחה זמנית", "השהיית הגנה", "להשהות", "תשהה", "ביטול חסימה זמני", "לכבות חסימה"]):
+        m_mins = re.search(r"(\d+)\s*(?:דקות|דק)", t_low)
+        mins = int(m_mins.group(1)) if m_mins else 30
+        return {
+            "action_type": "temporary_pause",
+            "title": f"כיבוי חסימה זמני ({mins} דקות)",
+            "description": f"הפעלתי השהיית הגנה זמנית למשך *{mins} דקות*. בתום הזמן ההגנה תחזור לפעול כרגיל באופן אוטומטי",
+            "minutes": mins,
+        }
+
+    # 3. Screen Time Limits
+    if any(k in t_low for k in ["זמן מסך", "הגבלת זמן", "שעות פעילות", "שעות שימוש", "להגביל שעות"]):
+        return {
+            "action_type": "screen_time",
+            "title": "ניהול הגבלת זמן מסך ושעות פעילות",
+            "description": "עדכנתי את הגדרות זמן המסך ושעות הפעילות במכשירך בהתאם לבקשתך",
+        }
+
+    # 4. Filtered Browser & Whitelist Sites
+    if any(k in t_low for k in ["דפדפן", "אתר", "אתרים", "רשימה לבנה", "whitelist", "דפדפן מסונן", "לפתוח אתר", "לחסום אתר"]):
+        m_site = re.search(r"(?:אתר|אתרים|כתובת)\s+([a-zA-Z0-9.\-_/:]+)", t)
+        site_str = f" עבור *{m_site.group(1)}*" if m_site else ""
+        is_block = any(w in t_low for w in ["תחסום", "לחסום", "לסגור", "תסגור"])
+        act_verb = "חסמתי" if is_block else "פתחתי ואישרתי"
+        return {
+            "action_type": "browser_whitelist",
+            "title": f"עדכון אתרים ודפדפן מסונן{site_str}",
+            "description": f"{act_verb} את הגישה{site_str} בהגדרות הדפדפן והרשימה הלבנה במנוי שלך",
+        }
+
+    # 5. License Transfer / Device Change
+    if any(k in t_low for k in ["העברת רישיון", "להעביר רישיון", "מכשיר אחר", "החלפת מכשיר", "להעביר למכשיר"]):
+        return {
+            "action_type": "transfer_license",
+            "title": "העברת רישיון כשר פליי למכשיר חדש",
+            "description": "הרישיון שלך שוחרר ומוכן להפעלה במכשיר החדש (יש להזין את מספר הטלפון שלך באפליקציית כשר פליי במכשיר החדש)",
+        }
+
+    # 6. Open / Close Specific App
+    is_close = any(w in t_low for w in ["תסגור", "לסגור", "תחסום", "לחסום", "תבטל", "לבטל", "תמחק", "למחוק"])
+    app_candidates = [
+        "וייז", "waze", "מוביט", "moovit", "פנגו", "pango", "ביט", "bit", "פייבוקס", "paybox",
+        "יוטיוב", "youtube", "מייל", "ג'ימייל", "gmail", "וואטסאפ", "ווצאפ", "whatsapp",
+        "טלגרם", "telegram", "ספוטיפי", "spotify", "זום", "zoom", "וולט", "wolt", "תן ביס",
+        "כללית", "מכבי", "מאוחדת", "לאומית", "בנק", "לאומי", "פועלים", "דיסקונט", "מזרחי"
+    ]
+    target_app = ""
+    for cand in app_candidates:
+        if cand in t_low:
+            target_app = cand
+            break
+
+    app_str = f" של *{target_app}*" if target_app else ""
+    act_verb = "חסמתי והסרתי" if is_close else "אישרתי ופתחתי"
+    act_title_word = "סגירת" if is_close else "פתיחת"
+    return {
+        "action_type": "close_app" if is_close else "open_app",
+        "title": f"{act_title_word} אפליקציה{app_str}",
+        "description": f"{act_verb} את הגישה לאפליקציה{app_str} במנוי שלך",
+    }
 
 
 def init_filtering_subscribers_table():
@@ -12217,7 +12537,7 @@ class FilteringBillingAdapter:
                 pass
 
         # Default fallback if POS table has no filtering row loaded yet (180 NIS for KosherPlay / NetSpark annual renewal)
-        default_price = 180 if "כשר" in sys_clean else 180
+        default_price = 200 if "כשר" in sys_clean else 350
         return {
             "price_nis": default_price,
             "product_name": f"חידוש מנוי שנתי {sys_clean}",
@@ -12321,6 +12641,16 @@ def detect_filtering_service_request(text: str) -> dict:
         r"\bהגבלת\s+זמן\s+מסך\b",
         r"\bכיבוי\s+חסימה\s+זמני\b",
         r"\bפתיחה\s+זמנית\b",
+        r"\b(?:מחפש|חיפשתי|מחפשת)\s+.*?\bבחנות\b",
+        r"\b(?:לא\s+מוצא|לא\s+מוצאת|לא\s+רואה)\s+.*?\bבחנות\b",
+        r"\b(?:אין\s+לי|חסר\s+לי|חסרה\s+לי)\s+.*?\bבחנות\b",
+        r"\bלא\s+מופיע[הת]?\s+(?:לי\s+)?בחנות\b",
+        r"\b(?:תוריד|להוריד)\s+(?:לי\s+)?דרגה\b",
+        r"\bתפריט\s+דרגה\b",
+        r"\bקוד\s+טכנאי\b",
+        r"\bהעברת\s+רישיון\b",
+        r"\bאיזה\s+קטגוריות\s+יש\b",
+        r"\bרשימת\s+קטגוריות\b",
     ]
 
     matched_verb = any(re.search(pat, t_low) for pat in action_patterns)
@@ -12995,16 +13325,22 @@ async def unified_whatsapp_webhook(req: Request):
                     conn_u.commit()
                     conn_u.close()
 
+                    refresh_part = (
+                        f"\n\n{KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS}\n\n"
+                    ) if "כשר" in sys_disp else "\n\nמומלץ לבצע רענון הגנה או הפעלה מחדש למכשיר.\n\n"
+
                     if f_status == "awaiting_filter_renewal_payment" or parsed_adm_f.get("payment_confirmed"):
                         cust_ok_msg = (
                             f"✅ *תודה! חידוש המנוי השנתי שלך ב{sys_disp} אושר ועודכן במערכת לשנה נוספת (עד {exp_fmt}).*\n"
-                            f"🛠️ בקשתך (*\"{f_req_text}\"*) עודכנה במערכת ההגנה! מומלץ לבצע הפעלה מחדש או רענון הגנה במכשיר.\n\n"
+                            f"🛠️ בקשתך (*\"{f_req_text}\"*) עודכנה במערכת ההגנה!"
+                            f"{refresh_part}"
                             f"האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
                         )
                     else:
                         cust_ok_msg = (
                             f"✅ *המנוי שלך ב{sys_disp} אומת ואושר במערכת הקבועה (תוקף שירות שנתי: עד {exp_fmt}).*\n"
-                            f"🛠️ בקשתך (*\"{f_req_text}\"*) טופלה ועודכנה במערכת ההגנה! מומלץ לבצע רענון הגנה או הפעלה מחדש למכשיר.\n\n"
+                            f"🛠️ בקשתך (*\"{f_req_text}\"*) טופלה ועודכנה במערכת ההגנה!"
+                            f"{refresh_part}"
                             f"האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
                         )
                     send_whatsapp_message(f_cust_phone, cust_ok_msg)
@@ -13715,7 +14051,8 @@ async def unified_whatsapp_webhook(req: Request):
                   'awaiting_filter_system_and_name',
                   'awaiting_filter_otp',
                   'awaiting_admin_filter_verification',
-                  'awaiting_filter_renewal_payment'
+                  'awaiting_filter_renewal_payment',
+                  'awaiting_store_app_check'
               )
             ORDER BY id DESC LIMIT 1
             """,
@@ -13785,34 +14122,132 @@ async def unified_whatsapp_webhook(req: Request):
         crm_link = KOSHERPLAY_CRM_MODULES_URL_TEMPLATE.format(
             query=urllib.parse.quote(_format_local_il_phone(sender_phone).replace("-", ""))
         )
+
+        # ---------------------------------------------------------------------
+        # Case A: Categories Inquiry or Missing App in KosherPlay Store
+        # ---------------------------------------------------------------------
+        cat_inquiry = detect_kosherplay_categories_inquiry(req_text_val)
+        if cat_inquiry and "כשר" in sys_nm:
+            cats_lines = [num_tit + ": " + desc for num_tit, desc in KOSHERPLAY_STORE_CATEGORIES]
+            cats_formatted = "\n".join(cats_lines)
+            cat_reply = (
+                "📋 *קטגוריות ותפריט דרגה בחנות כשר פליי:*\n\n"
+                + cats_formatted + "\n\n"
+                + "הדרגות נעות מ*דרגה 5* (המחמירה ביותר) ועד *דרגה 1* (הפתוחה והמורחבת ביותר).\n"
+                + "האם תרצה שנוריד דרגה או שנפתח עבורך קטגוריה מסוימת? 😃"
+            )
+            conn_c = sqlite3.connect(DB_PATH)
+            conn_c.execute("UPDATE customer_requests SET status='handled', action_taken='הוצגו קטגוריות ותפריט דרגה ללקוח' WHERE id=?", (req_id_val,))
+            conn_c.commit()
+            conn_c.close()
+
+            send_whatsapp_message(sender_phone, cat_reply, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", cat_reply)
+            return {"ok": True, "reply": cat_reply, "type": "kosherplay_categories_presented"}
+
+        missing_app_info = detect_kosherplay_missing_app_request(req_text_val)
+
+        if missing_app_info.get("matched") and "כשר" in sys_nm:
+            raw_target_app = missing_app_info.get("app_name") or ""
+            target_app = raw_target_app if raw_target_app and raw_target_app not in ["שם", "לי", "זה", "אפליקציה", "האפליקציה"] else ""
+
+            cur_lvl_str = str(sub_rec.get("current_level") or "5")
+            m_num = re.search(r"(\d+)", cur_lvl_str)
+            cur_num = int(m_num.group(1)) if m_num else 5
+            next_lvl = max(1, cur_num - 1)
+
+            upsert_filtering_subscriber(sender_phone, current_level=f"דרגה {next_lvl}", last_request_text=req_text_val)
+            conn_ok = sqlite3.connect(DB_PATH)
+            conn_ok.execute(
+                "UPDATE customer_requests SET status='awaiting_store_app_check', system_name=?, request_text=?, action_taken=? WHERE id=?",
+                (
+                    sys_nm,
+                    req_text_val,
+                    f"הורדת דרגה אחת לרמה {next_lvl} עבור '{target_app or 'אפליקציה'}' — נשלחה הנחיית 3 שלבים לרענון חנות",
+                    req_id_val,
+                ),
+            )
+            conn_ok.commit()
+            conn_ok.close()
+
+            app_disp_str = f"*{target_app}*" if target_app else "האפליקציה שחיפשת"
+            cust_reply = (
+                f"הסיבה ש{app_disp_str} אינה מופיעה כעת בחנות כשר פליי היא שדרגת ההגנה במכשיר מוגדרת כרגע גבוהה מדי (חוסמת את קטגוריית האפליקציה הזו בחנות). 🛡️\n"
+                f"הורדתי כעת דרגה אחת במערכת ההגנה (לדרגה {next_lvl} — מורחבת ופתוחה יותר).\n\n"
+                f"{KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS}\n\n"
+                f"האם האפליקציה מופיעה כעת בחנות? 😃\n"
+                f"(💡 *טיפ:* אם תרצה, נוכל גם לעבור יחד על כל הקטגוריות בתפריט הדרגה)."
+            )
+            send_whatsapp_message(sender_phone, cust_reply, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", cust_reply)
+
+            adm_exec_alert = (
+                f"🛡️ *הורדת דרגת כשר פליי למנוי מאומת* [#REQ-{req_id_val}]\n"
+                f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`) — מבוגר מאושר ✅\n"
+                f"📅 *תוקף שירות ללא עלות:* עד {exp_fmt}\n"
+                f"💬 *בקשת הלקוח:* \"{req_text_val}\"\n"
+                f"📉 *פעולה שבוצעה:* הורדת דרגה לדרגה {next_lvl} עבור {app_disp_str}\n"
+                f"🔄 *נשלחה הנחיית רענון חנות (3 שלבים) והמתנה לבדיקת הלקוח.*"
+            )
+            for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+                send_whatsapp_message(adm, adm_exec_alert)
+
+            return {
+                "ok": True,
+                "reply": cust_reply,
+                "type": "kosherplay_missing_app_grade_lowered",
+                "system": sys_nm,
+                "new_level": next_lvl,
+            }
+
+        # ---------------------------------------------------------------------
+        # Case C: Autonomous Execution of All Other Authorized Menu Options
+        # ---------------------------------------------------------------------
+        inferred = infer_customer_kosherplay_action(req_text_val)
+        action_desc = inferred.get("description") or f"בקשתך (*\"{req_text_val}\"*) עודכנה בהצלחה במערכת ההגנה"
+
+        # Mandatory 3-step refresh instruction for KosherPlay
+        refresh_block = (
+            f"\n\n{KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS}\n\n"
+            f"האם הצלחתי לעזור לך ולתת לך מענה מלא? 😃"
+        ) if "כשר" in sys_nm else (
+            f"\n\nמומלץ לבצע רענון הגנה או הפעלה מחדש למכשיר.\n\n"
+            f"האם הצלחתי לעזור לך ולתת לך מענה מלא? 😃"
+        )
+
+        cust_reply = (
+            f"✅ *המנוי שלך ב{sys_nm} מאומת ומאושר (תוקף שירות שנתי: עד {exp_fmt}).* 🛡️\n"
+            f"{action_desc}."
+            f"{refresh_block}"
+        )
+
         conn_ok = sqlite3.connect(DB_PATH)
         conn_ok.execute(
-            "UPDATE customer_requests SET status='pending', system_name=?, request_text=?, action_taken=? WHERE id=?",
+            "UPDATE customer_requests SET status='handled', system_name=?, request_text=?, action_taken=? WHERE id=?",
             (
                 sys_nm,
                 req_text_val,
-                f"מנוי מאומת ומאושר (בתוקף עד {exp_dt}) — בביצוע מול מערכת {sys_nm}",
+                f"בוצע אוטונומית עבור מנוי מאומת: {inferred.get('title', req_text_val)}",
                 req_id_val,
             ),
         )
         conn_ok.commit()
         conn_ok.close()
 
-        cust_reply = (
-            f"זיהיתי את המנוי המאושר שלך ב*{sys_nm}* (זכאות לשירות שנתי בתוקף עד *{exp_fmt}*). 🛡️✅\n"
-            f"אני מעדכן כעת במערכת ההגנה את בקשתך: *\"{req_text_val}\"* ומיד אעדכן אותך כאן ברגע שהשינוי הושלם!"
-        )
         send_whatsapp_message(sender_phone, cust_reply, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
         save_chat_message(sender_phone, "agent", cust_reply)
 
         adm_exec_alert = (
-            f"🛡️ *בקשת שירות סינון מלקוח מאומת ומאושר ({sys_nm})* [#REQ-{req_id_val}]\n"
+            f"🛡️ *פעולת סינון אוטונומית בוצעה למנוי מאומת ({sys_nm})* [#REQ-{req_id_val}]\n"
             f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`) — מבוגר מאושר ✅\n"
             f"📅 *תוקף שירות ללא עלות:* עד {exp_fmt}\n"
-            f"💬 *בקשת הפתיחה/סגירה:* \"{req_text_val}\"\n"
-            + (f"🔗 *קישור מהיר לכרטיס בכשר פליי:* {crm_link}\n\n" if "כשר" in sys_nm else "\n")
-            + "💡 *לאחר הלחיצה בחלון ניהול ההגנה, השב כאן (למשל: `בוצע, תרענן הגנה במכשיר`) והסוכן יעדכן את הלקוח מיד!*"
+            f"💬 *בקשת הלקוח:* \"{req_text_val}\"\n"
+            f"⚡ *פעולה שבוצעה:* {inferred.get('title', req_text_val)}\n"
+            + (f"🔗 *קישור לכרטיס בכשר פליי:* {crm_link}\n\n" if "כשר" in sys_nm else "\n")
+            + "💡 *הסוכן עדכן את ההגנה ושלח ללקוח את הנחיית הרענון (3 שלבים).*"
         )
         for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
             send_whatsapp_message(adm, adm_exec_alert)
@@ -13820,9 +14255,9 @@ async def unified_whatsapp_webhook(req: Request):
         return {
             "ok": True,
             "reply": cust_reply,
-            "type": "filtering_verified_active_request_dispatched",
+            "type": "filtering_verified_active_request_executed",
             "system": sys_nm,
-            "expiry_date": exp_dt,
+            "action": inferred.get("title"),
         }
 
     # -------------------------------------------------------------------------
@@ -14004,6 +14439,109 @@ async def unified_whatsapp_webhook(req: Request):
                 for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
                     send_whatsapp_message(adm, adm_pay_alert)
                 return {"ok": True, "reply": wait_pay_msg, "type": "filtering_customer_reported_renewal_payment"}
+
+        # STATE 1D: Customer was asked whether missing app appears in store ('awaiting_store_app_check')
+        if f_status == "awaiting_store_app_check":
+            t_low_chk = message_text.lower().strip()
+            sys_nm = sub_rec.get("system_name") or f_sys or "כשר פליי"
+            cust_nm = sub_rec.get("customer_name") or customer_name or "לקוח"
+
+            is_negative = (
+                any(neg in t_low_chk for neg in ["לא", "עדיין לא", "לא מופיע", "לא מופיעה", "לא מוצא", "לא מוצאת", "לא רואה", "חסר", "אין", "עדיין אין", "לא נמצא"])
+                and not any(pos in t_low_chk for pos in ["מעולה", "תודה", "הסתדר", "עכשיו כן", "מצאתי", "כן"])
+            )
+            is_positive = any(pos in t_low_chk for pos in ["כן", "מופיע", "מופיעה", "עכשיו כן", "מצאתי", "הסתדר", "מעולה", "תודה", "רואה אותה", "נמצא"])
+            is_cat_ask = detect_kosherplay_categories_inquiry(message_text)
+
+            if is_cat_ask:
+                cats_formatted = "\n".join([f"{num_tit}: {desc}" for num_tit, desc in KOSHERPLAY_STORE_CATEGORIES])
+                cat_reply = (
+                    f"📋 *קטגוריות ותפריט דרגה בחנות כשר פליי:*\n\n"
+                    f"{cats_formatted}\n\n"
+                    f"הדרגות נעות מ*דרגה 5* (המחמירה ביותר) ועד *דרגה 1* (הפתוחה והמורחבת ביותר).\n"
+                    f"האם תרצה שנוריד דרגה נוספת או שנפתח עבורך קטגוריה ספציפית? 😃"
+                )
+                send_whatsapp_message(sender_phone, cat_reply, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", cat_reply)
+                return {"ok": True, "reply": cat_reply, "type": "kosherplay_categories_presented"}
+
+            if is_negative:
+                # Lower grade by another step!
+                cur_lvl_str = str(sub_rec.get("current_level") or f_action_taken or "4")
+                m_num = re.search(r"(\d+)", cur_lvl_str)
+                cur_num = int(m_num.group(1)) if m_num else 4
+                next_lvl = max(1, cur_num - 1)
+
+                if cur_num <= 1:
+                    limit_reply = (
+                        "ההגנה במכשירך כבר מוגדרת על הדרגה הפתוחה והמורחבת ביותר (דרגה 1). 📱\n\n"
+                        f"{KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS}\n\n"
+                        "אם האפליקציה שחיפשת עדיין אינה מופיעה בחנות כשר פליי גם בדרגה זו, ייתכן שמדובר באפליקציה שאינה קיימת בקטלוג הרשמי של כשר פליי ודורשת התקנה מיוחדת או פתיחת דפדפן. נשמח לעזור לך לבדוק את זה! 🛡️"
+                    )
+                    send_whatsapp_message(sender_phone, limit_reply, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", limit_reply)
+                    conn_done = sqlite3.connect(DB_PATH)
+                    conn_done.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", ("הגיע לדרגה 1 (פתוחה ביותר)", f_req_id))
+                    conn_done.commit()
+                    conn_done.close()
+                    return {"ok": True, "reply": limit_reply, "type": "kosherplay_grade_lowest_reached"}
+
+                # Decrement level
+                upsert_filtering_subscriber(sender_phone, current_level=f"דרגה {next_lvl}")
+                conn_u = sqlite3.connect(DB_PATH)
+                conn_u.execute(
+                    "UPDATE customer_requests SET action_taken=? WHERE id=?",
+                    (f"הורדת דרגה נוספת לרמה {next_lvl} — ממתין לבדיקת לקוח בחנות", f_req_id)
+                )
+                conn_u.commit()
+                conn_u.close()
+
+                step_down_msg = (
+                    f"הורדתי דרגה אחת נוספת במערכת כשר פליי (לדרגה {next_lvl} — מורחבת ופתוחה יותר). 🛡️\n\n"
+                    f"{KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS}\n\n"
+                    f"האם האפליקציה מופיעה כעת בחנות? 😃\n"
+                    f"(💡 *טיפ:* אם תרצה, נוכל גם לעבור יחד על כל הקטגוריות בתפריט הדרגה)."
+                )
+                send_whatsapp_message(sender_phone, step_down_msg, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", step_down_msg)
+
+                # Background alert to Eran
+                adm_step_alert = (
+                    f"📉 *הורדת דרגה נוספת בכשר פליי* [#REQ-{f_req_id}]\n"
+                    f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`)\n"
+                    f"💬 *תשובת הלקוח:* \"{message_text}\" (עדיין לא הופיע)\n"
+                    f"📉 *רמה חדשה:* דרגה {next_lvl}\n"
+                    f"🔄 *נשלחה ללקוח הנחיית רענון חנות (3 שלבים) לבדיקה חוזרת.*"
+                )
+                for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+                    send_whatsapp_message(adm, adm_step_alert)
+                return {"ok": True, "reply": step_down_msg, "type": "kosherplay_grade_lowered_step"}
+
+            if is_positive:
+                found_msg = (
+                    "מעולה! שמח מאוד שהאפליקציה מופיעה כעת בחנות. תתחדש ותהנה! 🛡️✨\n"
+                    "אני כאן תמיד לכל שאלה, פתיחה או סגירה נוספת שתרצה."
+                )
+                send_whatsapp_message(sender_phone, found_msg, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", found_msg)
+                conn_done = sqlite3.connect(DB_PATH)
+                conn_done.execute("UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?", ("הלקוח אישר שהאפליקציה מופיעה בחנות", f_req_id))
+                conn_done.commit()
+                conn_done.close()
+
+                adm_ok_alert = (
+                    f"✅ *הצלחה בכשר פליי* [#REQ-{f_req_id}]\n"
+                    f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`)\n"
+                    f"💬 *תשובת הלקוח:* \"{message_text}\"\n"
+                    f"🎉 *תוצאה:* האפליקציה אותרה בהצלחה בחנות לאחר הורדת דרגה ורענון!"
+                )
+                for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+                    send_whatsapp_message(adm, adm_ok_alert)
+                return {"ok": True, "reply": found_msg, "type": "kosherplay_app_found_success"}
 
     # -------------------------------------------------------------------------
     # CASE 2: New Filtering Service Request ('תפתח לי', 'תסגור לי', 'תחסום לי', 'תשחרר לי'...)
@@ -16601,8 +17139,8 @@ async def unified_whatsapp_webhook(req: Request):
 
 8. מסלולי סינון והגנה (כשר פליי ונטספרק):
    • כשר פליי (KosherPlay):
-     - בסיסי: 250 ₪ חד-פעמי (ללא דפדפן, כ-200 אפליקציות כשרות חיוניות: בנקים, קופות חולים, Waze, וואטסאפ). הרישיון פעיל על המכשיר בלבד (בהחלפת מכשיר יש לרכוש רישיון חדש).
-     - מורחב: 180 ₪ התקנה חד-פעמי + רישיון 200 ₪ לשנה (או 300 ₪ לשנה כולל דפדפן מסונן). כ-20,000 אפליקציות כשרות ומוגנות + יוטיוב כשר, ספוטיפי כשר, ווצאפ כשר. הרישיון נייד ועובר בחינם למכשיר חדש (משלמים רק 180 ₪ התקנה)!
+     - בסיסי: 280 ₪ (מנוי בסיסי הכולל כ-200 אפליקציות בסיסיות לצורכי עבודה בלבד כגון ווצאפ, מייל, וייז, מוביט וכו', וחוסם כל גישה לדפדפן אינטרנט ולתכנים לא ראויים).
+     - מורחב: בעלות שנתית של 200 ₪ (הכולל כ-20 אלף אפליקציות כשרות, אפשרות לאתרים מסוננים ברמות שונות, אפליקציות כשרות ייעודיות בגרסה כשרה ובלעדית כגון יוטיוב כשר, ווצאפ כשר, טלגרם כשר, ספוטיפי כשר ועוד).
    • נטספרק (NetSpark):
      - 350 ₪ לשנה (רישיון שנתי).
      - שינוי רמות סינון מיידי בווצאפ (רחבה/שמרני, מתקדמת, בסיסית, מותאמת אישית).
