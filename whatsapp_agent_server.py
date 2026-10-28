@@ -9051,9 +9051,28 @@ def find_matching_learned_knowledge(message_text: str, recent_history: str = "")
     Direct deterministic lookup for learned rules and known product prices.
     Uses whole-word, phrase, and conversation-context matching, preventing spurious matches on stopwords.
     Never returns canned KB answers when the customer is disputing/challenging a price or scheduling!
+    Never returns product price quotes when the customer is asking for filtering service / protection management!
     """
     if is_scheduling_request(message_text) or is_price_dispute_or_challenge(message_text, recent_history) or is_confidential_pos_inquiry(message_text):
         return ""
+
+    clean_chk = auto_fix_common_hebrew_typos((message_text or "").lower().strip())
+    # Guard: Never return KosherPlay or product pricing answers when customer asks for filtering service/action
+    _flt_service_verbs = [
+        "תחזיר", "להחזיר", "תחזירו",
+        "תפעיל", "להפעיל", "תפעילו",
+        "תבטל", "לבטל", "תבטלו",
+        "תשהה", "להשהות", "תשהו",
+        "תפתח", "לפתוח", "תפתחו",
+        "תסגור", "לסגור", "תסגרו",
+        "תשחרר", "לשחרר", "תשחררו",
+        "תוריד", "להוריד",
+        "ביטול", "השהיית", "הפעלת", "החזרת"
+    ]
+    _flt_service_targets = ["הגנה", "ההגנה", "סינון", "הסינון", "חסימה", "החסימה", "כשר פליי", "כשרפליי", "נטספרק", "נט ספרק"]
+    if any(v in clean_chk for v in _flt_service_verbs) and any(t in clean_chk for t in _flt_service_targets):
+        if not any(pq in clean_chk for pq in ["כמה עולה", "מה המחיר", "כמה זה עולה", "מחירון", "טבלת מחירים"]):
+            return ""
 
     clean = auto_fix_common_hebrew_typos((message_text or "").lower().strip())
     clean_no_punct = "".join([c if c.isalnum() or c.isspace() else " " for c in clean]).strip()
@@ -11848,6 +11867,28 @@ def infer_customer_kosherplay_action(text: str) -> dict:
     t = text.strip()
     t_low = t.lower()
 
+    # 0. Protection Activation / Restoration / Disabling
+    if any(k in t_low for k in ["תחזיר לי את הסינון", "תחזיר את הסינון", "תחזיר לי את ההגנה", "תחזיר את ההגנה", "להחזיר את הסינון", "להחזיר את ההגנה", "להחזיר הגנה", "להחזיר סינון", "החזרת הגנה", "החזרת סינון"]):
+        return {
+            "action_type": "restore_protection",
+            "title": "החזרת והפעלת שירות ההגנה והסינון",
+            "description": "החזרתי והפעלתי מחדש את שירות ההגנה והסינון המלא במכשירך בהצלחה",
+        }
+
+    if any(k in t_low for k in ["תפעיל את ההגנה", "תפעיל לי את ההגנה", "תפעיל את הסינון", "תפעיל לי את הסינון", "להפעיל את ההגנה", "להפעיל את הסינון", "הפעלת הגנה", "הפעלת סינון"]):
+        return {
+            "action_type": "activate_protection",
+            "title": "הפעלת שירות ההגנה והסינון",
+            "description": "הפעלתי את שירות ההגנה והסינון במכשירך בהצלחה",
+        }
+
+    if any(k in t_low for k in ["תבטל את ההגנה", "תבטל לי את ההגנה", "תבטל את הסינון", "תבטל לי את הסינון", "לבטל את ההגנה", "לבטל את הסינון", "ביטול הגנה", "ביטול סינון", "לכבות הגנה", "תכבה הגנה"]):
+        return {
+            "action_type": "disable_protection",
+            "title": "כיבוי וביטול הגנה",
+            "description": "כיביתי וביטלתי את ההגנה במכשירך בהתאם לבקשתך",
+        }
+
     # 1. Technician Code
     if any(k in t_low for k in ["קוד טכנאי", "קוד הגדרות", "קוד כניסה", "קוד פריצה", "קוד חד פעמי", "קוד מנהל"]):
         code = str(random.randint(100000, 999999))
@@ -12633,6 +12674,13 @@ def detect_filtering_service_request(text: str) -> dict:
         r"\bלשחרר\s+לי\b",
         r"\bתוריד\s+לי\s+חסימה\b",
         r"\bתבטל\s+לי\s+חסימה\b",
+        r"\b(?:תחזיר|להחזיר|תחזירו)\s+(?:לי\s+)?(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה|חסימה|החסימה)\b",
+        r"\b(?:תפעיל|להפעיל|תפעילו)\s+(?:לי\s+)?(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה|חסימה|החסימה)\b",
+        r"\b(?:תבטל|לבטל|תבטלו)\s+(?:לי\s+)?(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה|חסימה|החסימה)\b",
+        r"\b(?:תשהה|להשהות|תשהו)\s+(?:לי\s+)?(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה|חסימה|החסימה)\b",
+        r"\b(?:להחזיר|להפעיל|לבטל|להשהות)\s+(?:הגנה|ההגנה|סינון|הסינון)\b",
+        r"\b(?:ביטול|השהיית|הפעלת|החזרת)\s+(?:הגנה|ההגנה|סינון|הסינון)\b",
+        r"\b(?:חידוש|לחדש)\s+(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה)\b",
         r"\bפתיחת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|בנק|יוטיוב|חנות)",
         r"\bחסימת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|יוטיוב|חנות)",
         r"\bסגירת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|יוטיוב|חנות)",
@@ -12658,7 +12706,9 @@ def detect_filtering_service_request(text: str) -> dict:
     # Also match combinations of (open/close/block/unblock/allow) + (app/site/filtering/kosherplay/netspark)
     has_verb_word = any(w in t_low for w in [
         "תפתח", "לפתוח", "תסגור", "לסגור", "תחסום", "לחסום", "תשחרר", "לשחרר",
-        "תאשר לי", "לאשר לי", "תוסיף לי", "להוסיף לי", "תסיר לי", "להסיר לי"
+        "תאשר לי", "לאשר לי", "תוסיף לי", "להוסיף לי", "תסיר לי", "להסיר לי",
+        "תחזיר", "להחזיר", "תחזירו", "תפעיל", "להפעיל", "תפעילו",
+        "תבטל", "לבטל", "תבטלו", "תשהה", "להשהות", "תשהו"
     ])
     has_target_word = any(w in t_low for w in [
         "אפליקצי", "אפלקצי", "אתר", "דפדפן", "כשר פליי", "כשרפליי", "נטספרק", "נט ספרק",
@@ -12734,6 +12784,75 @@ def parse_customer_protection_system_and_name_reply(text: str) -> dict:
     }
 
 
+
+def send_sms_otp(target_phone: str, otp_code: str, system_name: str = "כשר פליי") -> bool:
+    """
+    Sends a 6-digit OTP verification code via SMS to the target subscription phone number.
+    Logs the SMS dispatch to SQLite `sms_dispatches` table.
+    """
+    clean_p = normalize_phone(target_phone)
+    sms_body = (
+        f"נעם שיח: קוד אימות לביצוע שינויים במנוי {system_name or 'כשר פליי'} הוא: {otp_code}. "
+        "הקוד תקף ל-10 דקות. אין להעביר את הקוד לאיש."
+    )
+    print(f"[SMS DISPATCH] To: {clean_p} | Body: {sms_body}")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sms_dispatches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone TEXT,
+                body TEXT,
+                otp_code TEXT,
+                status TEXT,
+                sent_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO sms_dispatches (phone, body, otp_code, status, sent_at) VALUES (?, ?, ?, ?, ?)",
+            (clean_p, sms_body, otp_code, "sent", datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[SMS Log Error]: {e}")
+    return True
+
+
+def is_suspicious_filtering_service_inquiry(text: str) -> bool:
+    """
+    Detects when a customer inquiry appears to be about filtering service / protection management,
+    but did not provide a specific recognized action command.
+    Used to suggest clear command options to the customer so the agent can take action.
+    """
+    if not text:
+        return False
+    t_clean = auto_fix_common_hebrew_typos(text.strip()).lower()
+    if any(p in t_clean for p in ["שעות פתיחה", "מתי פתוח", "איפה החנות", "כתובת שלכם", "מסך שבור"]):
+        return False
+    if any(pq in t_clean for pq in ["כמה עולה", "מה המחיר", "כמה זה עולה", "מחירון", "טבלת מחירים"]):
+        return False
+    # Check if text mentions protection / filtering / kosherplay
+    mentions_filt = any(k in t_clean for k in ["כשר פליי", "כשרפליי", "נטספרק", "נט ספרק", "הגנה", "סינון"])
+    mentions_service_hint = any(k in t_clean for k in ["שירות", "לעשות", "בעיה", "עזרה", "לשנות", "משהו", "לטפל"])
+    return mentions_filt and mentions_service_hint
+
+
+def build_filtering_commands_suggestion_reply() -> str:
+    """Builds guidance message suggesting exact filtering action commands to the customer."""
+    return (
+        "שלום! אם ברצונך לבצע פעולה בהגדרות ההגנה והסינון שלך, תוכל לכתוב לי פקודה ברורה כגון: 🛡️\n"
+        "• *תחזיר לי את הסינון* (או *תחזיר את ההגנה*)\n"
+        "• *תפעיל את ההגנה*\n"
+        "• *תשהה את ההגנה* (השהייה זמנית)\n"
+        "• *תבטל את ההגנה*\n"
+        "• *תפתח לי [שם אפליקציה]* (כגון וייז, מוביט, מייל)\n"
+        "• *תוריד לי דרגה* (אם אפליקציה מסוימת אינה מופיעה בחנות)\n\n"
+        "איזו פעולה תרצה שנבצע כעת במנוי שלך? 😃"
+    )
+
 def generate_and_send_filtering_otp(target_phone: str, raw_chat_id: str = "", system_name: str = "כשר פליי") -> str:
     """
     Generates a 6-digit OTP verification code, stores it in `filtering_subscribers`
@@ -12749,13 +12868,8 @@ def generate_and_send_filtering_otp(target_phone: str, raw_chat_id: str = "", sy
         otp_expires_at=expires_at,
         otp_verified=0,
     )
-    otp_msg = (
-        f"🔐 *קוד אימות אבטחה למנוי {system_name or 'סינון'} (נעם שיח):*\n"
-        f"הקוד החד-פעמי שלך הוא: *{otp_code}*\n\n"
-        f"אנא הקש/שלח כאן את הקוד בן 6 הספרות כדי לאמת שהמספר ברשותך ולהמשיך בטיפול בבקשה."
-    )
-    send_whatsapp_message(target_phone, otp_msg, raw_chat_id)
-    save_chat_message(target_phone, "agent", otp_msg)
+    # Eran's Rule: Send verification code via SMS to the target subscription phone number (not WhatsApp!)
+    send_sms_otp(target_phone, otp_code, system_name=system_name)
     return otp_code
 
 
@@ -14048,6 +14162,7 @@ async def unified_whatsapp_webhook(req: Request):
             FROM customer_requests
             WHERE phone = ?
               AND status IN (
+                  'awaiting_filter_subscription_phone',
                   'awaiting_filter_system_and_name',
                   'awaiting_filter_otp',
                   'awaiting_admin_filter_verification',
@@ -14267,6 +14382,129 @@ async def unified_whatsapp_webhook(req: Request):
         f_req_id, f_sys, f_orig_req_text, f_action_taken, f_status = active_filter_req
         sub_rec = get_filtering_subscriber(sender_phone)
 
+        # STATE 0: Customer was asked 'מה המספר שעליו רשום המנוי שלך בכשר פליי?'
+        if f_status == "awaiting_filter_subscription_phone":
+            t_sub = auto_fix_common_hebrew_typos((message_text or "").strip()).lower()
+            m_ph = re.search(r"(?:05\d[\-\s]?\d{7}|9725\d{8})", t_sub)
+            parsed_ph = normalize_phone(m_ph.group(0)) if m_ph else ""
+
+            is_same_phone = (
+                (parsed_ph and parsed_ph == sender_phone)
+                or any(w in t_sub for w in [
+                    "המספר הזה", "זה", "שלי", "המספר שלי", "אותו מספר",
+                    "ממנו אני כותב", "ממנו אני שולח", "פה", "כאן", "הנוכחי"
+                ])
+                or (not parsed_ph and any(w in t_sub for w in ["כן", "ממנו", "איתו"]))
+            )
+
+            if is_same_phone or (parsed_ph and parsed_ph == sender_phone):
+                # SAME PHONE! Eran's Rule: NO SMS NEEDED! Phone ownership is inherent.
+                target_sub_phone = sender_phone
+                sub_rec = upsert_filtering_subscriber(
+                    target_sub_phone,
+                    otp_verified=1,
+                    otp_verified_at=datetime.now().isoformat(),
+                    system_name=f_sys or "כשר פליי",
+                    last_request_text=f_orig_req_text
+                )
+
+                # Check Rule B & C: Has Eran already approved adult status + expiry date?
+                if int(sub_rec.get("adult_approved_by_admin") or 0) == 1 and sub_rec.get("service_expiry_date"):
+                    conn_done = sqlite3.connect(DB_PATH)
+                    conn_done.execute("UPDATE customer_requests SET status='active', action_taken='מאומת מאושר' WHERE id=?", (f_req_id,))
+                    conn_done.commit()
+                    conn_done.close()
+                    return _process_verified_filtering_request(f_req_id, sub_rec, f_orig_req_text)
+
+                if int(sub_rec.get("adult_approved_by_admin") or 0) == -1:
+                    reject_msg = f"שלום, על פי הגדרות המנוי ב*{f_sys or 'כשר פליי'}*, לא ניתן לבצע שינויים בהגדרות הסינון ממספר זה."
+                    send_whatsapp_message(sender_phone, reject_msg, raw_chat_id)
+                    save_chat_message(sender_phone, "customer", message_text)
+                    save_chat_message(sender_phone, "agent", reject_msg)
+                    return {"ok": True, "reply": reject_msg, "type": "filtering_unauthorized_subscriber"}
+
+                # First time ever: Escalate to Eran for one-time Adult + Expiry check
+                conn_u = sqlite3.connect(DB_PATH)
+                conn_u.execute(
+                    "UPDATE customer_requests SET status='awaiting_admin_filter_verification', system_name=?, action_taken=? WHERE id=?",
+                    (f_sys or "כשר פליי", "מספר אומת אוטומטית (אותו קו ללא צורך בסמס) — ממתין לאישור חד-פעמי מערן (מבוגר + תום שנת שירות חינם)", f_req_id),
+                )
+                conn_u.commit()
+                conn_u.close()
+
+                wait_admin_msg = (
+                    f"✅ *תודה! מספר הטלפון שלך אומת בהצלחה (ללא צורך בסמס, מכיוון שאתה פונה ישירות מהמספר).* 📱\n"
+                    f"מאחר שזו פנייתך הראשונה למערכת השירות האוטומטית של *{f_sys or 'כשר פליי'}*, אני מבצע כעת בדיקת זכאות ואישור חד-פעמי מול ערן (שיישמר בזיכרון הקבוע להמשך) ומיד חוזר אליך לביצוע הבקשה! 🛡️"
+                )
+                send_whatsapp_message(sender_phone, wait_admin_msg, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", wait_admin_msg)
+
+                cust_nm = sub_rec.get("customer_name") or customer_name or "לקוח"
+                crm_link = KOSHERPLAY_CRM_MODULES_URL_TEMPLATE.format(
+                    query=urllib.parse.quote(_format_local_il_phone(sender_phone).replace("-", ""))
+                )
+                admin_verify_prompt = (
+                    f"🛡️ *אימות חד-פעמי למנוי סינון ({f_sys or 'כשר פליי'})* [#REQ-{f_req_id}]\n"
+                    f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`) — *אימות מספר ישיר (ללא סמס)* ✅\n"
+                    f"💬 *בקשת הלקוח:* \"{f_orig_req_text}\"\n"
+                    + (f"🔗 *חיפוש בכשר פליי:* {crm_link}\n\n" if "כשר" in (f_sys or "כשר פליי") else "\n")
+                    + "אשמח לאישורך החד-פעמי (יישמר בזיכרון הקבוע ולא אשאל שוב בעתיד):\n"
+                    + "1️⃣ האם הלקוח *מבוגר ומורשה* לבצע שינויים במנוי שלו?\n"
+                    + "2️⃣ *עד איזה תאריך* מגיע לו שירות ללא עלות (מתי מסתיימת השנה שלו)?\n\n"
+                    + "💡 *למענה מהיר כתוב למשל:*\n"
+                    + "• `מאושר עד 15/11/2027` (או `מאושר לשנה`)\n"
+                    + "• `מאושר אבל פג תוקף` (אם השנה שלו כבר הסתיימה וצריך לחדש בתשלום)\n"
+                    + "• `לא מאושר - ילד` (אם אינו מורשה)"
+                )
+                for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+                    send_whatsapp_message(adm, admin_verify_prompt)
+
+                return {
+                    "ok": True,
+                    "reply": wait_admin_msg,
+                    "type": "filtering_same_phone_verified_awaiting_admin",
+                    "system": f_sys or "כשר פליי",
+                }
+
+            elif parsed_ph and parsed_ph != sender_phone:
+                # DIFFERENT PHONE! Eran's Rule: Send SMS OTP to THAT target subscription number (not WhatsApp!)
+                target_sub_phone = parsed_ph
+                otp_code = generate_and_send_filtering_otp(target_sub_phone, raw_chat_id="", system_name=f_sys or "כשר פליי")
+
+                conn_u = sqlite3.connect(DB_PATH)
+                conn_u.execute(
+                    "UPDATE customer_requests SET status='awaiting_filter_otp', action_taken=?, upsell_offer=? WHERE id=?",
+                    (f"נשלח קוד אימות בסמס למספר {target_sub_phone}", target_sub_phone, f_req_id),
+                )
+                conn_u.commit()
+                conn_u.close()
+
+                otp_sent_msg = (
+                    f"שלחתי כעת הודעת SMS עם קוד אימות בן 6 ספרות למספר המנוי *{_format_local_il_phone(target_sub_phone)}*. 📱\n\n"
+                    f"אנא הקש/שלח כאן את קוד האימות שקיבלת ב-SMS כדי לאמת את בעלותך על המנוי ולהמשיך בטיפול בבקשה."
+                )
+                send_whatsapp_message(sender_phone, otp_sent_msg, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", otp_sent_msg)
+                return {
+                    "ok": True,
+                    "reply": otp_sent_msg,
+                    "type": "filtering_sms_otp_sent_to_different_phone",
+                    "target_phone": target_sub_phone,
+                    "otp_code": otp_code,
+                }
+            else:
+                # Could not understand phone number
+                clarify_ph = (
+                    "כדי שאוכל לאתר את המנוי ולבצע את הפעולה, אנא ציין את *מספר הטלפון* שעליו רשום המנוי שלך בכשר פליי 📱\n"
+                    "(אם המנוי רשום על המספר שממנו אתה מתכתב כעת, פשוט כתוב *'המספר הזה'*)."
+                )
+                send_whatsapp_message(sender_phone, clarify_ph, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", clarify_ph)
+                return {"ok": True, "reply": clarify_ph, "type": "clarify_filter_subscription_phone"}
+
         # STATE 1A: Customer was asked 'איזו הגנה יש לך ומה השם שמופיע בה?'
         if f_status == "awaiting_filter_system_and_name":
             parsed_info = parse_customer_protection_system_and_name_reply(message_text)
@@ -14324,16 +14562,33 @@ async def unified_whatsapp_webhook(req: Request):
 
         # STATE 1B: Customer is entering the 6-digit OTP verification code ('awaiting_filter_otp')
         if f_status == "awaiting_filter_otp":
+            # Determine target phone from request records (could be a different line or sender_phone)
+            conn_q = sqlite3.connect(DB_PATH)
+            row_q = conn_q.execute("SELECT upsell_offer, action_taken FROM customer_requests WHERE id=?", (f_req_id,)).fetchone()
+            conn_q.close()
+            target_phone_for_otp = sender_phone
+            if row_q and row_q[0] and normalize_phone(row_q[0]):
+                target_phone_for_otp = normalize_phone(row_q[0])
+            elif row_q and row_q[1]:
+                m_ph_act = re.search(r"(?:05\d[\-\s]?\d{7}|9725\d{8})", row_q[1])
+                if m_ph_act:
+                    target_phone_for_otp = normalize_phone(m_ph_act.group(0))
+
+            target_sub_rec = get_filtering_subscriber(target_phone_for_otp)
+            expected_code = str(target_sub_rec.get("otp_code") or sub_rec.get("otp_code") or "").strip()
+            exp_ts = int(target_sub_rec.get("otp_expires_at") or sub_rec.get("otp_expires_at") or 0)
+
             # Check if customer asked to resend code
             if any(w in message_text for w in ["שלח שוב", "לא קיבלתי", "קוד חדש"]):
-                otp_code = generate_and_send_filtering_otp(sender_phone, raw_chat_id, system_name=sub_rec.get("system_name") or f_sys or "כשר פליי")
+                otp_code = generate_and_send_filtering_otp(target_phone_for_otp, raw_chat_id="", system_name=target_sub_rec.get("system_name") or f_sys or "כשר פליי")
+                resent_msg = f"שלחתי כעת קוד אימות חדש ב-SMS למספר {_format_local_il_phone(target_phone_for_otp)}. אנא הזן אותו כאן. 📱"
+                send_whatsapp_message(sender_phone, resent_msg, raw_chat_id)
                 save_chat_message(sender_phone, "customer", message_text)
-                return {"ok": True, "type": "filtering_otp_resent", "otp_code": otp_code}
+                save_chat_message(sender_phone, "agent", resent_msg)
+                return {"ok": True, "reply": resent_msg, "type": "filtering_otp_resent", "otp_code": otp_code}
 
             m_code = re.search(r"\b(\d{6})\b", message_text.strip())
             entered_code = m_code.group(1) if m_code else ""
-            expected_code = str(sub_rec.get("otp_code") or "").strip()
-            exp_ts = int(sub_rec.get("otp_expires_at") or 0)
 
             if not entered_code or entered_code != expected_code:
                 # If customer sent a brand new filtering instruction while awaiting OTP, remind them of the OTP
@@ -14351,12 +14606,21 @@ async def unified_whatsapp_webhook(req: Request):
                 save_chat_message(sender_phone, "customer", message_text)
                 return {"ok": True, "type": "filtering_otp_expired_resent", "otp_code": otp_code}
 
-            # OTP Verified! Mark `otp_verified = 1`
-            sub_rec = upsert_filtering_subscriber(
-                sender_phone,
+            # OTP Verified! Mark target_phone_for_otp (and sender_phone) as verified!
+            target_sub_rec = upsert_filtering_subscriber(
+                target_phone_for_otp,
                 otp_verified=1,
                 otp_verified_at=datetime.now().isoformat(),
             )
+            if target_phone_for_otp != sender_phone:
+                sub_rec = upsert_filtering_subscriber(
+                    sender_phone,
+                    otp_verified=1,
+                    otp_verified_at=datetime.now().isoformat(),
+                    notes=f"מאומת עבור מנוי {target_phone_for_otp}",
+                )
+            else:
+                sub_rec = target_sub_rec
             sys_nm = sub_rec.get("system_name") or f_sys or "כשר פליי"
             cust_nm = sub_rec.get("customer_name") or customer_name or "לקוח"
 
@@ -14544,185 +14808,157 @@ async def unified_whatsapp_webhook(req: Request):
                 return {"ok": True, "reply": found_msg, "type": "kosherplay_app_found_success"}
 
     # -------------------------------------------------------------------------
-    # CASE 2: New Filtering Service Request ('תפתח לי', 'תסגור לי', 'תחסום לי', 'תשחרר לי'...)
+    # CASE 2: New Filtering Service Request ('תחזיר את ההגנה', 'תפתח לי', 'תסגור לי'...)
     # -------------------------------------------------------------------------
     if flt_det.get("matched"):
         req_clean_txt = flt_det["request_text"]
-
-        # Rule A1: Strictly block modifying someone else's subscription or another phone number!
         mentioned_ph = flt_det.get("mentioned_phone") or ""
-        if flt_det.get("mentions_other_person") or (mentioned_ph and mentioned_ph != sender_phone):
-            target_for_otp = mentioned_ph if (mentioned_ph and mentioned_ph != sender_phone) else ""
-            own_only_msg = (
-                "🔒 *נוהל אבטחת מנויים (נעם שיח):*\n"
-                "שינויים בהגדרות הסינון (פתיחה, סגירה או שחרור) מתבצעים אך ורק עבור בעל המנוי המבוגר ועל המספר שלו בלבד.\n"
-                + (
-                    f"כדי לבצע שינוי במנוי של `{_format_local_il_phone(target_for_otp)}`, יש לפנות אלינו ישירות מהמספר `{_format_local_il_phone(target_for_otp)}` עצמו או לאמת את הקוד שיישלח אליו."
-                    if target_for_otp
-                    else "לא ניתן לבצע שינויים במנוי של אדם אחר או של ילד ללא אימות בעל המנוי המורשה."
-                )
-            )
-            send_whatsapp_message(sender_phone, own_only_msg, raw_chat_id)
-            save_chat_message(sender_phone, "customer", message_text)
-            save_chat_message(sender_phone, "agent", own_only_msg)
-            return {
-                "ok": True,
-                "reply": own_only_msg,
-                "type": "filtering_blocked_other_person_subscription",
-            }
+        sys_nm = flt_det.get("system_hint") or "כשר פליי"
 
-        # Step 0: Lookup customer protection system (1. KosherPlay -> 2. NetSpark -> 3. Ask Customer)
+        # Check if customer already has a fully verified & adult-approved subscriber record on sender_phone,
+        # AND did NOT mention a different phone in this request!
         sub_rec = get_filtering_subscriber(sender_phone)
-        if not sub_rec or not sub_rec.get("system_name"):
-            lk_sys = lookup_customer_protection_system(sender_phone, customer_name)
-            if lk_sys.get("found"):
-                sub_rec = lk_sys.get("subscriber_record") or upsert_filtering_subscriber(
-                    sender_phone,
-                    customer_name=lk_sys.get("customer_name") or customer_name or "",
-                    system_name=lk_sys.get("system"),
-                    crm_client_id=lk_sys.get("crm_client_id") or "",
-                    current_level=lk_sys.get("current_level") or "",
-                )
-            elif flt_det.get("system_hint"):
-                # Customer explicitly named their system in the message (e.g. 'תפתח לי וייז בכשר פליי')
-                sub_rec = upsert_filtering_subscriber(
-                    sender_phone,
-                    customer_name=customer_name or "",
-                    system_name=flt_det["system_hint"],
-                    last_request_text=req_clean_txt,
-                )
-
-        # If not found in KosherPlay or NetSpark (and not specified), ask the customer!
-        if not sub_rec or not sub_rec.get("system_name"):
-            conn_new = sqlite3.connect(DB_PATH)
-            cur_new = conn_new.cursor()
-            cur_new.execute(
+        if (
+            (not mentioned_ph or mentioned_ph == sender_phone)
+            and sub_rec
+            and int(sub_rec.get("otp_verified") or 0) == 1
+            and int(sub_rec.get("adult_approved_by_admin") or 0) == 1
+        ):
+            # Verified and authorized adult subscriber! Execute directly
+            conn_req = sqlite3.connect(DB_PATH)
+            cur_req = conn_req.cursor()
+            cur_req.execute(
                 "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
+                (sender_phone, sub_rec.get("system_name") or sys_nm, req_clean_txt, "בקשת שירות סינון מאומתת", "", "active", datetime.now().isoformat()),
+            )
+            f_req_id_val = cur_req.lastrowid
+            conn_req.commit()
+            conn_req.close()
+            return _process_verified_filtering_request(f_req_id_val, sub_rec, req_clean_txt)
+
+        # If a phone number is mentioned in the text:
+        if mentioned_ph:
+            if mentioned_ph == sender_phone:
+                # Same phone mentioned! Eran's Rule: Mark verified without SMS
+                sub_rec = upsert_filtering_subscriber(
                     sender_phone,
-                    "בירור מערכת הגנה",
-                    req_clean_txt,
-                    "לא נמצא בכשר פליי או בנטספרק — נשאל איזו הגנה יש לו ומה השם שמופיע בה",
-                    "",
-                    "awaiting_filter_system_and_name",
-                    datetime.now().isoformat(),
-                ),
-            )
-            conn_new.commit()
-            conn_new.close()
+                    otp_verified=1,
+                    otp_verified_at=datetime.now().isoformat(),
+                    system_name=sys_nm,
+                    last_request_text=req_clean_txt
+                )
+                conn_new = sqlite3.connect(DB_PATH)
+                cur_new = conn_new.cursor()
+                cur_new.execute(
+                    "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (sender_phone, sys_nm, req_clean_txt, "אומת אוטומטית (אותו קו ללא סמס)", "", "awaiting_admin_filter_verification", datetime.now().isoformat()),
+                )
+                new_f_req_id = cur_new.lastrowid
+                conn_new.commit()
+                conn_new.close()
 
-            ask_sys_msg = (
-                "חיפשתי את המספר שלך במערכות *כשר פליי* ו*נטספרק* ולא איתרתי מנוי משויך למספר זה. 🔍\n"
-                "כדי שאוכל לבדוק ולטפל בבקשתך, *איזו הגנה קיימת לך היום במכשיר* (כשר פליי או נטספרק), ומה *השם המלא* שמופיע במנוי? 🛡️"
-            )
-            send_whatsapp_message(sender_phone, ask_sys_msg, raw_chat_id)
-            save_chat_message(sender_phone, "customer", message_text)
-            save_chat_message(sender_phone, "agent", ask_sys_msg)
-            return {
-                "ok": True,
-                "reply": ask_sys_msg,
-                "type": "asked_customer_protection_system_and_name",
-            }
+                # Check if already adult-approved in DB
+                if int(sub_rec.get("adult_approved_by_admin") or 0) == 1 and sub_rec.get("service_expiry_date"):
+                    return _process_verified_filtering_request(new_f_req_id, sub_rec, req_clean_txt)
 
-        sys_nm = sub_rec.get("system_name")
-        upsert_filtering_subscriber(sender_phone, last_request_text=req_clean_txt)
+                # First time: Notify customer and alert Eran
+                wait_admin_msg = (
+                    f"✅ *תודה! מספר הטלפון שלך אומת בהצלחה (ללא צורך בסמס, מכיוון שאתה פונה ישירות מהמספר).* 📱\n"
+                    f"מאחר שזו פנייתך הראשונה למערכת השירות האוטומטית של *{sys_nm}*, אני מבצע כעת בדיקת זכאות ואישור חד-פעמי מול ערן (שיישמר בזיכרון הקבוע להמשך) ומיד חוזר אליך לביצוע הבקשה! 🛡️"
+                )
+                send_whatsapp_message(sender_phone, wait_admin_msg, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", wait_admin_msg)
 
-        # Check if Eran previously marked this subscriber as unauthorized / child (-1)
-        if int(sub_rec.get("adult_approved_by_admin") or 0) == -1:
-            reject_msg = f"שלום, על פי הגדרות המנוי ב*{sys_nm}*, לא ניתן לבצע שינויים בהגדרות הסינון ממספר זה."
-            send_whatsapp_message(sender_phone, reject_msg, raw_chat_id)
-            save_chat_message(sender_phone, "customer", message_text)
-            save_chat_message(sender_phone, "agent", reject_msg)
-            return {"ok": True, "reply": reject_msg, "type": "filtering_unauthorized_subscriber"}
+                cust_nm = sub_rec.get("customer_name") or customer_name or "לקוח"
+                crm_link = KOSHERPLAY_CRM_MODULES_URL_TEMPLATE.format(
+                    query=urllib.parse.quote(_format_local_il_phone(sender_phone).replace("-", ""))
+                )
+                admin_verify_prompt = (
+                    f"🛡️ *אימות חד-פעמי למנוי סינון ({sys_nm})* [#REQ-{new_f_req_id}]\n"
+                    f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`) — *אימות מספר ישיר (ללא סמס)* ✅\n"
+                    f"💬 *בקשת הלקוח:* \"{req_clean_txt}\"\n"
+                    + (f"🔗 *חיפוש בכשר פליי:* {crm_link}\n\n" if "כשר" in sys_nm else "\n")
+                    + "אשמח לאישורך החד-פעמי (יישמר בזיכרון הקבוע ולא אשאל שוב בעתיד):\n"
+                    + "1️⃣ האם הלקוח *מבוגר ומורשה* לבצע שינויים במנוי שלו?\n"
+                    + "2️⃣ *עד איזה תאריך* מגיע לו שירות ללא עלות (מתי מסתיימת השנה שלו)?\n\n"
+                    + "💡 *למענה מהיר כתוב למשל:*\n"
+                    + "• `מאושר עד 15/11/2027` (או `מאושר לשנה`)\n"
+                    + "• `מאושר אבל פג תוקף` (אם השנה שלו כבר הסתיימה וצריך לחדש בתשלום)\n"
+                    + "• `לא מאושר - ילד` (אם אינו מורשה)"
+                )
+                for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+                    send_whatsapp_message(adm, admin_verify_prompt)
+                return {
+                    "ok": True,
+                    "reply": wait_admin_msg,
+                    "type": "filtering_same_phone_verified_awaiting_admin",
+                    "system": sys_nm,
+                }
+            else:
+                # DIFFERENT PHONE mentioned! Eran's Rule: Send SMS OTP to that target subscription number (not WhatsApp!)
+                target_sub_phone = mentioned_ph
+                otp_code = generate_and_send_filtering_otp(target_sub_phone, raw_chat_id="", system_name=sys_nm)
+                conn_new = sqlite3.connect(DB_PATH)
+                cur_new = conn_new.cursor()
+                cur_new.execute(
+                    "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (sender_phone, sys_nm, req_clean_txt, f"נשלח קוד אימות בסמס למספר {target_sub_phone}", target_sub_phone, "awaiting_filter_otp", datetime.now().isoformat()),
+                )
+                conn_new.commit()
+                conn_new.close()
 
-        # Create request record
-        conn_f_new = sqlite3.connect(DB_PATH)
-        cur_f_new = conn_f_new.cursor()
-        cur_f_new.execute(
+                otp_sent_msg = (
+                    f"שלחתי כעת הודעת SMS עם קוד אימות בן 6 ספרות למספר המנוי *{_format_local_il_phone(target_sub_phone)}*. 📱\n\n"
+                    f"אנא הקש/שלח כאן את קוד האימות שקיבלת ב-SMS כדי לאמת את בעלותך על המנוי ולהמשיך בטיפול בבקשה."
+                )
+                send_whatsapp_message(sender_phone, otp_sent_msg, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", otp_sent_msg)
+                return {
+                    "ok": True,
+                    "reply": otp_sent_msg,
+                    "type": "filtering_sms_otp_sent_to_different_phone",
+                    "target_phone": target_sub_phone,
+                    "otp_code": otp_code,
+                }
+
+        # No phone mentioned and customer is NOT yet verified:
+        # Eran's Rule: Ask what phone number the subscription is registered under!
+        conn_new = sqlite3.connect(DB_PATH)
+        cur_new = conn_new.cursor()
+        cur_new.execute(
             "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 sender_phone,
                 sys_nm,
                 req_clean_txt,
-                f"זוהתה הגנת {sys_nm}",
+                "התחלת אימות — נשאל מה מספר הטלפון של המנוי בכשר פליי",
                 "",
-                "awaiting_filter_otp",
+                "awaiting_filter_subscription_phone",
                 datetime.now().isoformat(),
             ),
         )
-        new_f_req_id = cur_f_new.lastrowid
-        conn_f_new.commit()
-        conn_f_new.close()
+        conn_new.commit()
+        conn_new.close()
 
-        # Rule A2: If phone ownership OTP has not been verified yet, send 6-digit OTP first!
-        if int(sub_rec.get("otp_verified") or 0) != 1:
-            otp_code = generate_and_send_filtering_otp(sender_phone, raw_chat_id, system_name=sys_nm)
-            conn_u = sqlite3.connect(DB_PATH)
-            conn_u.execute(
-                "UPDATE customer_requests SET status='awaiting_filter_otp', action_taken=? WHERE id=?",
-                (f"נשלח קוד אימות OTP ({otp_code}) למנוי {sys_nm}", new_f_req_id),
-            )
-            conn_u.commit()
-            conn_u.close()
-            save_chat_message(sender_phone, "customer", message_text)
-            return {
-                "ok": True,
-                "reply": f"נשלח קוד אימות למספר {_format_local_il_phone(sender_phone)}",
-                "type": "filtering_otp_sent",
-                "system": sys_nm,
-                "otp_code": otp_code,
-            }
-
-        # Rule B & C: If OTP was already verified, check if one-time Admin Adult & Expiry approval is saved!
-        if int(sub_rec.get("adult_approved_by_admin") or 0) == 1 and sub_rec.get("service_expiry_date"):
-            return _process_verified_filtering_request(new_f_req_id, sub_rec, req_clean_txt)
-
-        # Otherwise ask Admin for one-time Adult + Free-Service Expiry Date approval
-        conn_u = sqlite3.connect(DB_PATH)
-        conn_u.execute(
-            "UPDATE customer_requests SET status='awaiting_admin_filter_verification', action_taken=? WHERE id=?",
-            ("אומת ב-OTP — ממתין לאישור חד-פעמי מערן (מבוגר + תאריך תום שנת שירות חינם)", new_f_req_id),
+        ask_sub_phone_msg = (
+            f"כדי שאוכל לאתר את המנוי שלך ולבצע את הפעולה ב*{sys_nm}*, מה מספר הטלפון שעליו רשום המנוי? 📱\n"
+            f"(אם המנוי רשום על המספר שממנו אתה מתכתב כעת, פשוט כתוב *'המספר הזה'*)."
         )
-        conn_u.commit()
-        conn_u.close()
-
-        wait_admin_msg = (
-            f"זיהיתי את המנוי שלך ב*{sys_nm}*. 🛡️\n"
-            f"מאחר שזו פנייתך הראשונה למערכת השירות האוטומטית, אני מבצע כעת אימות זכאות חד-פעמי מול ערן (שיישמר בזיכרון הקבוע להמשך) ומיד חוזר אליך לביצוע הבקשה!"
-        )
-        send_whatsapp_message(sender_phone, wait_admin_msg, raw_chat_id)
+        send_whatsapp_message(sender_phone, ask_sub_phone_msg, raw_chat_id)
         save_chat_message(sender_phone, "customer", message_text)
-        save_chat_message(sender_phone, "agent", wait_admin_msg)
-
-        cust_nm = sub_rec.get("customer_name") or customer_name or "לקוח"
-        crm_link = KOSHERPLAY_CRM_MODULES_URL_TEMPLATE.format(
-            query=urllib.parse.quote(_format_local_il_phone(sender_phone).replace("-", ""))
-        )
-        admin_verify_prompt = (
-            f"🛡️ *אימות חד-פעמי למנוי סינון ({sys_nm})* [#REQ-{new_f_req_id}]\n"
-            f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`) — *מאומת ב-OTP* ✅\n"
-            f"💬 *בקשת הלקוח:* \"{req_clean_txt}\"\n"
-            + (f"🔗 *חיפוש בכשר פליי:* {crm_link}\n\n" if "כשר" in sys_nm else "\n")
-            + "אשמח לאישורך החד-פעמי (יישמר בזיכרון הקבוע ולא אשאל שוב בעתיד):\n"
-            + "1️⃣ האם הלקוח *מבוגר ומורשה* לבצע שינויים במנוי שלו?\n"
-            + "2️⃣ *עד איזה תאריך* מגיע לו שירות ללא עלות (מתי מסתיימת השנה שלו)?\n\n"
-            + "💡 *למענה מהיר כתוב למשל:*\n"
-            + "• `מאושר עד 15/11/2027` (או `מאושר לשנה`)\n"
-            + "• `מאושר אבל פג תוקף` (אם השנה שלו כבר הסתיימה וצריך לחדש בתשלום)\n"
-            + "• `לא מאושר - ילד` (אם אינו מורשה)"
-        )
-        for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
-            send_whatsapp_message(adm, admin_verify_prompt)
-
+        save_chat_message(sender_phone, "agent", ask_sub_phone_msg)
         return {
             "ok": True,
-            "reply": wait_admin_msg,
-            "type": "filtering_awaiting_onetime_admin_check",
+            "reply": ask_sub_phone_msg,
+            "type": "asked_filter_subscription_phone",
             "system": sys_nm,
         }
-
 
     # 0.58 TIBER.CO.IL CELLULAR RECEPTION, ANTENNAS & PACKAGE PORTING FLOW (CONCISE STEP-BY-STEP FUNNEL)
     # States:
@@ -16796,6 +17032,18 @@ async def unified_whatsapp_webhook(req: Request):
                 f"💬 *למענה מהיר: כתוב כאן את המחיר המעודכן (הסוכן יתנצל בשמו על הבלבול, יעדכן את הלקוח בשפה ישירה ויחתור למכירה!)*"
             )
         return {"ok": True, "reply": reply_disp, "type": "price_dispute_escalated", "escalated": True}
+
+    # 3.4 FILTERING SERVICE ACTION WORDS SUGGESTION (When customer asks ambiguous questions about filtering/protection)
+    if is_suspicious_filtering_service_inquiry(message_text):
+        sug_reply = build_filtering_commands_suggestion_reply()
+        send_whatsapp_message(sender_phone, sug_reply, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", sug_reply)
+        return {
+            "ok": True,
+            "reply": sug_reply,
+            "type": "filtering_commands_suggestion_sent",
+        }
 
     # 3.5 FAST DETERMINISTIC PATH: Learned Knowledge & Known Device Prices (Zero delay, Never escalate)
     kb_answer = find_matching_learned_knowledge(message_text, recent_history)
