@@ -11499,6 +11499,1009 @@ def handle_admin_bit_payment_directive(admin_answer: str, target_pending, sender
     }
 
 
+
+
+
+
+# ============================================================================
+# KOSHERPLAY & NETSPARK FILTERING MANAGEMENT, SECURITY & RENEWAL ENGINE (v1)
+# ============================================================================
+# Principles implemented per Eran's architecture:
+# 0. Protection System Lookup Order:
+#    - Search KosherPlay CRM first (https://crm.kosherplay.com/modules/1?filter=...&pageIndex=0&archive=false&sortBy=&direction=asc&pageSize=12)
+#    - If not found in KosherPlay -> Search NetSpark CRM
+#    - If not found in either -> Ask customer which protection they have and under what name/phone.
+# A. Strict Own-Subscription & Phone Ownership OTP Verification:
+#    - Customer may ONLY modify their own subscription.
+#    - Sends a 6-digit verification code (WhatsApp / SMS) to the subscription phone number
+#      and requires entering the code before any service action.
+# B. One-Time Adult & Authorization Verification with Admin (Eran):
+#    - After OTP verification, asks Eran ONCE if the customer is an authorized adult.
+#    - Saved permanently in SQLite (`filtering_subscribers`) + JSON backup + WhatsApp cloud snapshot.
+# C. One-Time Free-Service Expiry Date Check + Annual Renewal via POS Price Table:
+#    - Together with the one-time adult check, asks Eran until what date the customer has free service
+#      (end of their paid year) and saves `service_expiry_date` permanently.
+#    - Once `service_expiry_date` passes, notifies customer to renew with Eran at the price loaded
+#      in `pos_inventory` (the store price table). Once Eran confirms payment, extends by +1 year.
+#    - Modular `FilteringBillingAdapter` ready to switch from `admin_approval` to an external payment website.
+# ============================================================================
+
+import urllib.parse
+from datetime import timedelta
+
+KOSHERPLAY_CRM_BASE_URL = os.getenv("KOSHERPLAY_CRM_BASE_URL", "https://crm.kosherplay.com").strip().rstrip("/")
+KOSHERPLAY_CRM_MODULES_URL_TEMPLATE = (
+    "https://crm.kosherplay.com/modules/1?filter={query}&pageIndex=0&archive=false&sortBy=&direction=asc&pageSize=12"
+)
+KOSHERPLAY_USERNAME = os.getenv("KOSHERPLAY_USERNAME", "noam.siach.com@gmail.com").strip()
+KOSHERPLAY_PASSWORD = os.getenv("KOSHERPLAY_PASSWORD", "039912472").strip()
+
+# Modular payment mode: "admin_approval" (default today) or "payment_site" (future self-service checkout site)
+FILTERING_PAYMENT_MODE = os.getenv("FILTERING_PAYMENT_MODE", "admin_approval").strip()
+FILTERING_PAYMENT_SITE_URL = os.getenv("FILTERING_PAYMENT_SITE_URL", "").strip()
+
+FILTERING_SUBSCRIBERS_JSON_PATH = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "filtering_subscribers_cache.json")
+
+KOSHERPLAY_SESSION_CACHE = {
+    "token": None,
+    "cookies": {},
+    "api_base": None,
+    "discovered_endpoints": [],
+    "protection_modal_options": [
+        {
+            "key": "open_close_apps",
+            "title_he": "פתיחה / סגירה של אפליקציות מחנות כשר פליי",
+            "description_he": "הוספה או הסרה של אפליקציות מאושרות למכשיר מתוך קטלוג כשר פליי או שינוי פרופיל אפליקציות",
+            "customer_allowed": True,
+        },
+        {
+            "key": "change_app_protection_level",
+            "title_he": "שינוי רמת הגנה / מסלול סינון",
+            "description_he": "מעבר בין רמות הגנה (למשל: מייל בלבד, ווצאפ ומייל, ניווט ובנקאות, מסלול עסקי מוגן, או התאמה אישית)",
+            "customer_allowed": True,
+        },
+        {
+            "key": "browser_and_whitelist_sites",
+            "title_he": "פתיחה / חסימה של דפדפן מסונן ואתרים ברשימה לבנה (Whitelist)",
+            "description_he": "הפעלת דפדפן כשר או פתיחה/חסימה של אתר ספציפי במנוי הלקוח",
+            "customer_allowed": True,
+        },
+        {
+            "key": "temporary_unblock_pause",
+            "title_he": "כיבוי חסימה זמני / השהיית הגנה לזמן קצוב",
+            "description_he": "פתיחה זמנית של ההגנה לדקות קצובות (לצורך התקנה/עדכון מבוקר) וחזרה אוטומטית לחסימה",
+            "customer_allowed": True,
+        },
+        {
+            "key": "screen_time_limits",
+            "title_he": "ניהול הגבלת זמן מסך ושעות פעילות",
+            "description_he": "הגדרת שעות שימוש יומיות או חסימת אפליקציות בשעות מסוימות",
+            "customer_allowed": True,
+        },
+        {
+            "key": "refresh_policy_sync",
+            "title_he": "רענון מדיניות וסינכרון הגנה למכשיר",
+            "description_he": "שליחת פקודת סנכרון מרחוק למכשיר כדי שעדכוני הפתיחה/סגירה ייכנסו לתוקף מיד",
+            "customer_allowed": True,
+        },
+        {
+            "key": "temporary_technician_code",
+            "title_he": "קוד טכנאי חד-פעמי / קוד כניסה להגדרות",
+            "description_he": "הפקת קוד זמני לשינוי הגדרות במכשיר (רגיש — דורש אישור מפורש של ערן)",
+            "customer_allowed": False,
+        },
+        {
+            "key": "remove_protection_or_transfer_license",
+            "title_he": "הסרת הגנה קבועה / העברת רישיון למכשיר אחר",
+            "description_he": "ניתוק הרישיון או הסרת כשר פליי מהמכשיר (חסום לביצוע אוטומטי — מחייב אישור ישיר של ערן)",
+            "customer_allowed": False,
+        },
+    ],
+    "last_login_at": 0,
+}
+
+
+def init_filtering_subscribers_table():
+    """Creates the persistent `filtering_subscribers` table and restores from JSON cache if needed."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS filtering_subscribers (
+                phone TEXT PRIMARY KEY,
+                customer_name TEXT DEFAULT '',
+                system_name TEXT DEFAULT '',
+                crm_client_id TEXT DEFAULT '',
+                device_model TEXT DEFAULT '',
+                current_level TEXT DEFAULT '',
+                otp_verified INTEGER DEFAULT 0,
+                otp_code TEXT DEFAULT '',
+                otp_expires_at INTEGER DEFAULT 0,
+                otp_verified_at TEXT DEFAULT '',
+                adult_approved_by_admin INTEGER DEFAULT 0,
+                service_expiry_date TEXT DEFAULT '',
+                payment_status TEXT DEFAULT 'active',
+                renewal_price_nis INTEGER DEFAULT 0,
+                last_request_text TEXT DEFAULT '',
+                notes TEXT DEFAULT '',
+                updated_at TEXT DEFAULT ''
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+        _restore_filtering_subscribers_from_json_if_empty()
+    except Exception as e:
+        print(f"[Init Filtering Subscribers Table Error]: {e}")
+
+
+def _sync_filtering_subscribers_to_json():
+    """Saves all rows from `filtering_subscribers` to JSON file for persistence across restarts."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM filtering_subscribers").fetchall()
+        conn.close()
+        data = [dict(r) for r in rows]
+        with open(FILTERING_SUBSCRIBERS_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Sync Filtering Subscribers JSON Error]: {e}")
+
+
+def _restore_filtering_subscribers_from_json_if_empty():
+    """Restores `filtering_subscribers` from JSON backup on startup if DB table is empty."""
+    try:
+        if not os.path.exists(FILTERING_SUBSCRIBERS_JSON_PATH):
+            return
+        conn = sqlite3.connect(DB_PATH)
+        cnt = conn.execute("SELECT COUNT(*) FROM filtering_subscribers").fetchone()[0]
+        if cnt == 0:
+            with open(FILTERING_SUBSCRIBERS_JSON_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                for row in data:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO filtering_subscribers (
+                            phone, customer_name, system_name, crm_client_id, device_model,
+                            current_level, otp_verified, otp_code, otp_expires_at, otp_verified_at,
+                            adult_approved_by_admin, service_expiry_date, payment_status,
+                            renewal_price_nis, last_request_text, notes, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            row.get("phone", ""),
+                            row.get("customer_name", ""),
+                            row.get("system_name", ""),
+                            row.get("crm_client_id", ""),
+                            row.get("device_model", ""),
+                            row.get("current_level", ""),
+                            int(row.get("otp_verified", 0)),
+                            row.get("otp_code", ""),
+                            int(row.get("otp_expires_at", 0)),
+                            row.get("otp_verified_at", ""),
+                            int(row.get("adult_approved_by_admin", 0)),
+                            row.get("service_expiry_date", ""),
+                            row.get("payment_status", "active"),
+                            int(row.get("renewal_price_nis", 0)),
+                            row.get("last_request_text", ""),
+                            row.get("notes", ""),
+                            row.get("updated_at", ""),
+                        ),
+                    )
+                conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[Restore Filtering Subscribers JSON Error]: {e}")
+
+
+init_filtering_subscribers_table()
+
+
+def get_filtering_subscriber(phone: str) -> dict:
+    """Retrieves a filtering subscriber record by normalized phone number."""
+    norm_p = normalize_phone(phone)
+    if not norm_p:
+        return {}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM filtering_subscribers WHERE phone = ? OR phone LIKE ? LIMIT 1",
+            (norm_p, f"%{norm_p[-9:] if len(norm_p) >= 9 else norm_p}%"),
+        ).fetchone()
+        conn.close()
+        if row:
+            return dict(row)
+    except Exception as e:
+        print(f"[Get Filtering Subscriber Error]: {e}")
+    return {}
+
+
+def upsert_filtering_subscriber(phone: str, **fields) -> dict:
+    """Inserts or updates a filtering subscriber record in SQLite and syncs to JSON."""
+    norm_p = normalize_phone(phone)
+    if not norm_p:
+        return {}
+    existing = get_filtering_subscriber(norm_p)
+    merged = {
+        "phone": norm_p,
+        "customer_name": existing.get("customer_name", ""),
+        "system_name": existing.get("system_name", ""),
+        "crm_client_id": existing.get("crm_client_id", ""),
+        "device_model": existing.get("device_model", ""),
+        "current_level": existing.get("current_level", ""),
+        "otp_verified": int(existing.get("otp_verified", 0)),
+        "otp_code": existing.get("otp_code", ""),
+        "otp_expires_at": int(existing.get("otp_expires_at", 0)),
+        "otp_verified_at": existing.get("otp_verified_at", ""),
+        "adult_approved_by_admin": int(existing.get("adult_approved_by_admin", 0)),
+        "service_expiry_date": existing.get("service_expiry_date", ""),
+        "payment_status": existing.get("payment_status", "active"),
+        "renewal_price_nis": int(existing.get("renewal_price_nis", 0)),
+        "last_request_text": existing.get("last_request_text", ""),
+        "notes": existing.get("notes", ""),
+        "updated_at": datetime.now().isoformat(),
+    }
+    for k, v in fields.items():
+        if v is not None and k in merged:
+            merged[k] = v
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO filtering_subscribers (
+                phone, customer_name, system_name, crm_client_id, device_model,
+                current_level, otp_verified, otp_code, otp_expires_at, otp_verified_at,
+                adult_approved_by_admin, service_expiry_date, payment_status,
+                renewal_price_nis, last_request_text, notes, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                merged["phone"],
+                merged["customer_name"],
+                merged["system_name"],
+                merged["crm_client_id"],
+                merged["device_model"],
+                merged["current_level"],
+                int(merged["otp_verified"]),
+                merged["otp_code"],
+                int(merged["otp_expires_at"]),
+                merged["otp_verified_at"],
+                int(merged["adult_approved_by_admin"]),
+                merged["service_expiry_date"],
+                merged["payment_status"],
+                int(merged["renewal_price_nis"]),
+                merged["last_request_text"],
+                merged["notes"],
+                merged["updated_at"],
+            ),
+        )
+        conn.commit()
+        conn.close()
+        _sync_filtering_subscribers_to_json()
+        # Also mirror into legacy `subscribers` table so existing status views stay synchronized
+        if merged["system_name"]:
+            try:
+                conn2 = sqlite3.connect(DB_PATH)
+                conn2.execute(
+                    "INSERT OR REPLACE INTO subscribers (phone, name, system_name, status, current_level, device_id, renewal_date) VALUES (?, ?, ?, 'פעיל', ?, ?, ?)",
+                    (
+                        merged["phone"],
+                        merged["customer_name"] or "לקוח",
+                        merged["system_name"],
+                        merged["current_level"] or "פעיל",
+                        merged["device_model"] or "",
+                        merged["service_expiry_date"] or "",
+                    ),
+                )
+                conn2.commit()
+                conn2.close()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[Upsert Filtering Subscriber Error]: {e}")
+    return merged
+
+
+def _format_local_il_phone(phone: str) -> str:
+    """Formats 9725XXXXXXXX to 05X-XXXXXXX or 05XXXXXXXX."""
+    norm = normalize_phone(phone)
+    if norm.startswith("972") and len(norm) >= 11:
+        local = "0" + norm[3:]
+        if len(local) == 10:
+            return f"{local[:3]}-{local[3:]}"
+        return local
+    return phone
+
+
+# ----------------------------------------------------------------------------
+# KOSHERPLAY CRM CLIENT (Aysko CRM v6.5.1 — https://crm.kosherplay.com)
+# ----------------------------------------------------------------------------
+def authenticate_kosherplay_crm(force: bool = False) -> dict:
+    """
+    Authenticates with https://crm.kosherplay.com using Eran's credentials:
+    username: noam.siach.com@gmail.com | password: 039912472
+    Also inspects the Angular main*.js bundles on Render to auto-discover
+    the internal Aysko CRM API endpoints for `/modules/1` search and client actions.
+    """
+    now_ts = int(std_time.time())
+    if not force and KOSHERPLAY_SESSION_CACHE.get("token") and (now_ts - KOSHERPLAY_SESSION_CACHE.get("last_login_at", 0) < 1800):
+        return {
+            "ok": True,
+            "cached": True,
+            "token_present": True,
+            "api_base": KOSHERPLAY_SESSION_CACHE.get("api_base"),
+            "discovered_endpoints": KOSHERPLAY_SESSION_CACHE.get("discovered_endpoints", []),
+        }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": f"{KOSHERPLAY_CRM_BASE_URL}/",
+        "Origin": KOSHERPLAY_CRM_BASE_URL,
+    }
+
+    discovered_apis = set()
+    detected_api_base = KOSHERPLAY_CRM_BASE_URL
+
+    # Step 1: Fetch main HTML & Angular JS bundle names to discover Aysko CRM backend routes
+    try:
+        r_home = http_session.get(f"{KOSHERPLAY_CRM_BASE_URL}/", headers=headers, timeout=6.0)
+        if r_home.status_code == 200 and r_home.text:
+            scripts = re.findall(r'src=["\x27]([^"\x27]*main[^"\x27]*\.js)["\x27]', r_home.text)
+            for sc in scripts[:2]:
+                sc_url = sc if sc.startswith("http") else f"{KOSHERPLAY_CRM_BASE_URL}/{sc.lstrip('/')}"
+                r_js = http_session.get(sc_url, headers=headers, timeout=6.0)
+                if r_js.status_code == 200 and r_js.text:
+                    # Find API base URLs and module routes in the Angular bundle
+                    for m_url in re.findall(r'https?://[a-zA-Z0-9._\-]+kosherplay\.com(?::\d+)?(?:/[a-zA-Z0-9._\-/]*)?', r_js.text):
+                        discovered_apis.add(m_url)
+                        if "api" in m_url.lower():
+                            detected_api_base = m_url.rstrip("/")
+                    for m_rel in re.findall(r'["\x27](/api/[a-zA-Z0-9._\-/]+|/modules/[a-zA-Z0-9._\-/]+)["\x27]', r_js.text):
+                        discovered_apis.add(m_rel)
+    except Exception as e_js:
+        print(f"[KosherPlay JS Bundle Discovery Notice]: {e_js}")
+
+    # Step 2: Attempt authentication across Aysko CRM / standard Angular auth endpoints
+    candidate_login_urls = [
+        f"{detected_api_base}/api/auth/login",
+        f"{detected_api_base}/api/login",
+        f"{detected_api_base}/api/account/login",
+        f"{detected_api_base}/api/v1/auth/login",
+        f"{detected_api_base}/api/users/login",
+        f"{KOSHERPLAY_CRM_BASE_URL}/api/auth/login",
+        f"{KOSHERPLAY_CRM_BASE_URL}/api/login",
+        f"{KOSHERPLAY_CRM_BASE_URL}/token",
+    ]
+    login_payloads = [
+        {"email": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD},
+        {"username": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD},
+        {"userName": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD},
+    ]
+
+    token = None
+    working_api_base = detected_api_base
+    for url in candidate_login_urls:
+        for payload in login_payloads:
+            try:
+                resp = http_session.post(url, json=payload, headers=headers, timeout=4.0)
+                if resp.status_code in (200, 201):
+                    ct = (resp.headers.get("Content-Type") or "").lower()
+                    if "json" in ct or resp.text.strip().startswith("{"):
+                        data = resp.json()
+                        tok = (
+                            data.get("token")
+                            or data.get("accessToken")
+                            or data.get("access_token")
+                            or data.get("jwt")
+                            or (data.get("data", {}) if isinstance(data.get("data"), dict) else {}).get("token")
+                        )
+                        if tok:
+                            token = tok
+                            working_api_base = url.split("/api/")[0] if "/api/" in url else detected_api_base
+                            break
+            except Exception:
+                continue
+        if token:
+            break
+
+    KOSHERPLAY_SESSION_CACHE["token"] = token
+    KOSHERPLAY_SESSION_CACHE["api_base"] = working_api_base
+    KOSHERPLAY_SESSION_CACHE["discovered_endpoints"] = sorted(list(discovered_apis))[:40]
+    KOSHERPLAY_SESSION_CACHE["last_login_at"] = now_ts
+
+    return {
+        "ok": bool(token),
+        "token_present": bool(token),
+        "api_base": working_api_base,
+        "crm_search_url_template": KOSHERPLAY_CRM_MODULES_URL_TEMPLATE,
+        "username": KOSHERPLAY_USERNAME,
+        "discovered_endpoints": KOSHERPLAY_SESSION_CACHE["discovered_endpoints"],
+        "protection_modal_options": KOSHERPLAY_SESSION_CACHE["protection_modal_options"],
+    }
+
+
+def search_kosherplay_subscriber(query_phone_or_name: str) -> dict:
+    """
+    Searches for a customer in KosherPlay:
+    1. First checks our local `filtering_subscribers` and `subscribers` SQLite tables
+       (where system == 'כשר פליי').
+    2. Queries KosherPlay CRM (`https://crm.kosherplay.com/modules/1?filter=<query>&pageIndex=0&archive=false&sortBy=&direction=asc&pageSize=12`)
+       using both normalized digits (e.g. `0524043644`) and customer name if provided.
+    """
+    q_raw = (query_phone_or_name or "").strip()
+    if not q_raw:
+        return {"found": False, "system": "כשר פליי"}
+
+    norm_p = normalize_phone(q_raw)
+    local_digits = ("0" + norm_p[3:]) if (norm_p.startswith("972") and len(norm_p) >= 11) else q_raw
+    short_9 = norm_p[-9:] if len(norm_p) >= 9 else q_raw
+
+    # 1. Check local SQLite `filtering_subscribers` first
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT * FROM filtering_subscribers
+            WHERE (phone = ? OR phone LIKE ? OR (customer_name != '' AND customer_name LIKE ?))
+              AND system_name LIKE '%כשר פליי%'
+            LIMIT 1
+            """,
+            (norm_p, f"%{short_9}%", f"%{q_raw}%"),
+        ).fetchone()
+        if row:
+            conn.close()
+            d = dict(row)
+            return {
+                "found": True,
+                "source": "local_db",
+                "system": "כשר פליי",
+                "phone": d.get("phone") or norm_p,
+                "customer_name": d.get("customer_name") or "",
+                "crm_client_id": d.get("crm_client_id") or "",
+                "current_level": d.get("current_level") or "כשר פליי פעיל",
+                "device_model": d.get("device_model") or "",
+                "subscriber_record": d,
+            }
+
+        # Check legacy `subscribers` table for KosherPlay
+        row_leg = conn.execute(
+            """
+            SELECT phone, name, system_name AS system, current_level, device_id AS device_model FROM subscribers
+            WHERE (phone = ? OR phone LIKE ? OR (name != '' AND name LIKE ?))
+              AND system_name LIKE '%כשר פליי%'
+            LIMIT 1
+            """,
+            (norm_p, f"%{short_9}%", f"%{q_raw}%"),
+        ).fetchone()
+        conn.close()
+        if row_leg:
+            sub_rec = upsert_filtering_subscriber(
+                row_leg["phone"],
+                customer_name=row_leg["name"],
+                system_name="כשר פליי",
+                current_level=row_leg["current_level"],
+                device_model=row_leg["device_model"],
+            )
+            return {
+                "found": True,
+                "source": "subscribers_table",
+                "system": "כשר פליי",
+                "phone": sub_rec["phone"],
+                "customer_name": sub_rec["customer_name"],
+                "crm_client_id": sub_rec.get("crm_client_id", ""),
+                "current_level": sub_rec["current_level"],
+                "device_model": sub_rec["device_model"],
+                "subscriber_record": sub_rec,
+            }
+    except Exception as e_db:
+        print(f"[KosherPlay Local DB Lookup Notice]: {e_db}")
+
+    # 2. Query live KosherPlay CRM (`modules/1?filter=...`) if network is available
+    try:
+        auth_info = authenticate_kosherplay_crm()
+        token = KOSHERPLAY_SESSION_CACHE.get("token")
+        api_base = KOSHERPLAY_SESSION_CACHE.get("api_base") or KOSHERPLAY_CRM_BASE_URL
+        if token:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0",
+            }
+            for q_cand in [local_digits, q_raw]:
+                if not q_cand:
+                    continue
+                encoded_q = urllib.parse.quote(str(q_cand))
+                api_urls = [
+                    f"{api_base}/api/modules/1?filter={encoded_q}&pageIndex=0&archive=false&sortBy=&direction=asc&pageSize=12",
+                    f"{api_base}/api/v1/modules/1?filter={encoded_q}&pageIndex=0&archive=false&sortBy=&direction=asc&pageSize=12",
+                    f"{KOSHERPLAY_CRM_BASE_URL}/modules/1?filter={encoded_q}&pageIndex=0&archive=false&sortBy=&direction=asc&pageSize=12",
+                ]
+                for u in api_urls:
+                    try:
+                        r = http_session.get(u, headers=headers, timeout=4.0)
+                        if r.status_code == 200 and ("json" in (r.headers.get("Content-Type") or "").lower() or r.text.strip().startswith("{")):
+                            j = r.json()
+                            items = j.get("data") or j.get("items") or j.get("rows") or j.get("results") or []
+                            if isinstance(items, list) and len(items) > 0:
+                                first = items[0] if isinstance(items[0], dict) else {}
+                                c_id = str(first.get("id") or first.get("_id") or first.get("clientId") or "")
+                                c_name = str(first.get("name") or first.get("fullName") or first.get("clientName") or "")
+                                c_phone = normalize_phone(str(first.get("phone") or first.get("mobile") or norm_p))
+                                c_level = str(first.get("level") or first.get("plan") or first.get("status") or "כשר פליי פעיל")
+                                sub_rec = upsert_filtering_subscriber(
+                                    c_phone or norm_p,
+                                    customer_name=c_name,
+                                    system_name="כשר פליי",
+                                    crm_client_id=c_id,
+                                    current_level=c_level,
+                                )
+                                return {
+                                    "found": True,
+                                    "source": "kosherplay_crm_live",
+                                    "system": "כשר פליי",
+                                    "phone": sub_rec["phone"],
+                                    "customer_name": sub_rec["customer_name"],
+                                    "crm_client_id": c_id,
+                                    "current_level": c_level,
+                                    "subscriber_record": sub_rec,
+                                }
+                    except Exception:
+                        continue
+    except Exception as e_crm:
+        print(f"[KosherPlay Live CRM Search Notice]: {e_crm}")
+
+    return {"found": False, "system": "כשר פליי", "crm_url": KOSHERPLAY_CRM_MODULES_URL_TEMPLATE.format(query=urllib.parse.quote(local_digits))}
+
+
+def search_netspark_subscriber(query_phone_or_name: str) -> dict:
+    """
+    Fallback lookup in NetSpark (`נטספרק`) if the customer was not found in KosherPlay.
+    Checks `filtering_subscribers` and `subscribers` where system == 'נטספרק'.
+    """
+    q_raw = (query_phone_or_name or "").strip()
+    if not q_raw:
+        return {"found": False, "system": "נטספרק"}
+
+    norm_p = normalize_phone(q_raw)
+    short_9 = norm_p[-9:] if len(norm_p) >= 9 else q_raw
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT * FROM filtering_subscribers
+            WHERE (phone = ? OR phone LIKE ? OR (customer_name != '' AND customer_name LIKE ?))
+              AND system_name LIKE '%נטספרק%'
+            LIMIT 1
+            """,
+            (norm_p, f"%{short_9}%", f"%{q_raw}%"),
+        ).fetchone()
+        if row:
+            conn.close()
+            d = dict(row)
+            return {
+                "found": True,
+                "source": "local_db",
+                "system": "נטספרק",
+                "phone": d.get("phone") or norm_p,
+                "customer_name": d.get("customer_name") or "",
+                "crm_client_id": d.get("crm_client_id") or "",
+                "current_level": d.get("current_level") or "נטספרק פעיל",
+                "device_model": d.get("device_model") or "",
+                "subscriber_record": d,
+            }
+
+        row_leg = conn.execute(
+            """
+            SELECT phone, name, system_name AS system, current_level, device_id AS device_model FROM subscribers
+            WHERE (phone = ? OR phone LIKE ? OR (name != '' AND name LIKE ?))
+              AND system_name LIKE '%נטספרק%'
+            LIMIT 1
+            """,
+            (norm_p, f"%{short_9}%", f"%{q_raw}%"),
+        ).fetchone()
+        conn.close()
+        if row_leg:
+            sub_rec = upsert_filtering_subscriber(
+                row_leg["phone"],
+                customer_name=row_leg["name"],
+                system_name="נטספרק",
+                current_level=row_leg["current_level"],
+                device_model=row_leg["device_model"],
+            )
+            return {
+                "found": True,
+                "source": "subscribers_table",
+                "system": "נטספרק",
+                "phone": sub_rec["phone"],
+                "customer_name": sub_rec["customer_name"],
+                "crm_client_id": sub_rec.get("crm_client_id", ""),
+                "current_level": sub_rec["current_level"],
+                "device_model": sub_rec["device_model"],
+                "subscriber_record": sub_rec,
+            }
+    except Exception as e:
+        print(f"[NetSpark Lookup Notice]: {e}")
+
+    return {"found": False, "system": "נטספרק"}
+
+
+def lookup_customer_protection_system(phone: str, customer_name: str = "") -> dict:
+    """
+    Implements Eran's strict lookup order:
+    1. Search KosherPlay CRM first (by phone, or by full first+last customer_name if phone matches).
+    2. If not found in KosherPlay, search NetSpark.
+    3. If not found in either, return `found=False` so the bot asks the customer
+       which protection system they have and under what name.
+    """
+    norm_p = normalize_phone(phone)
+    has_full_name = bool(customer_name and len(customer_name.strip().split()) >= 2)
+
+    # 1. Search KosherPlay first
+    kp_res = search_kosherplay_subscriber(phone)
+    if kp_res.get("found"):
+        return kp_res
+    if has_full_name:
+        kp_by_name = search_kosherplay_subscriber(customer_name)
+        if kp_by_name.get("found") and (not norm_p or kp_by_name.get("phone") == norm_p):
+            return kp_by_name
+
+    # 2. Search NetSpark second
+    ns_res = search_netspark_subscriber(phone)
+    if ns_res.get("found"):
+        return ns_res
+    if has_full_name:
+        ns_by_name = search_netspark_subscriber(customer_name)
+        if ns_by_name.get("found") and (not norm_p or ns_by_name.get("phone") == norm_p):
+            return ns_by_name
+
+    return {"found": False, "system": ""}
+
+
+# ----------------------------------------------------------------------------
+# MODULAR BILLING & ANNUAL RENEWAL ADAPTER (POS Price Table + Future Web Hook)
+# ----------------------------------------------------------------------------
+class FilteringBillingAdapter:
+    """
+    Modular billing & subscription renewal manager:
+    - Looks up the annual renewal price dynamically from `pos_inventory` (the Excel/POS price table
+      loaded into the agent alongside all products).
+    - Supports `FILTERING_PAYMENT_MODE == "admin_approval"` (current workflow with Eran)
+      and `FILTERING_PAYMENT_MODE == "payment_site"` (future self-service payment website).
+    """
+
+    @staticmethod
+    def get_annual_renewal_price_from_pos(system_name: str = "כשר פליי") -> dict:
+        sys_clean = (system_name or "כשר פליי").strip()
+        search_candidates = (
+            ["חידוש כשר פליי", "כשר פליי לשנה", "מנוי כשר פליי", "רישיון כשר פליי", "כשר פליי"]
+            if "כשר" in sys_clean
+            else ["חידוש נטספרק", "נטספרק לשנה", "מנוי נטספרק", "רישיון נטספרק", "נטספרק"]
+        )
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            for kw in search_candidates:
+                row = conn.execute(
+                    "SELECT product_name, single_price FROM pos_inventory WHERE product_name LIKE ? AND single_price > 0 ORDER BY id DESC LIMIT 1",
+                    (f"%{kw}%",),
+                ).fetchone()
+                if row and row[1]:
+                    conn.close()
+                    return {
+                        "price_nis": int(row[1]),
+                        "product_name": str(row[0]),
+                        "source": "pos_inventory",
+                    }
+            conn.close()
+        except Exception as e:
+            print(f"[FilteringBillingAdapter POS Lookup Error]: {e}")
+
+        # Fallback to live POS lookup helper if available
+        for kw in search_candidates[:2]:
+            try:
+                pos_hit = lookup_live_pos_inventory(kw)
+                if pos_hit.get("matched") and pos_hit.get("item", {}).get("single_price"):
+                    return {
+                        "price_nis": int(pos_hit["item"]["single_price"]),
+                        "product_name": str(pos_hit["item"].get("product_name") or kw),
+                        "source": "pos_inventory_fuzzy",
+                    }
+            except Exception:
+                pass
+
+        # Default fallback if POS table has no filtering row loaded yet (180 NIS for KosherPlay / NetSpark annual renewal)
+        default_price = 180 if "כשר" in sys_clean else 180
+        return {
+            "price_nis": default_price,
+            "product_name": f"חידוש מנוי שנתי {sys_clean}",
+            "source": "default_store_tariff",
+        }
+
+    @staticmethod
+    def is_subscription_expired(service_expiry_date: str) -> bool:
+        """Checks if YYYY-MM-DD is strictly before today's date in Israel."""
+        if not service_expiry_date or not str(service_expiry_date).strip():
+            return False
+        try:
+            exp_dt = datetime.strptime(str(service_expiry_date).strip()[:10], "%Y-%m-%d").date()
+            today_il = datetime.now(ZoneInfo("Asia/Jerusalem")).date()
+            return today_il > exp_dt
+        except Exception:
+            return False
+
+    @staticmethod
+    def format_date_il(date_str: str) -> str:
+        """Converts YYYY-MM-DD to DD/MM/YYYY for user-facing Hebrew messages."""
+        try:
+            dt = datetime.strptime(str(date_str).strip()[:10], "%Y-%m-%d")
+            return dt.strftime("%d/%m/%Y")
+        except Exception:
+            return str(date_str)
+
+    @staticmethod
+    def build_renewal_message_for_customer(system_name: str, service_expiry_date: str, customer_phone: str) -> dict:
+        pricing = FilteringBillingAdapter.get_annual_renewal_price_from_pos(system_name)
+        price_nis = pricing["price_nis"]
+        exp_fmt = FilteringBillingAdapter.format_date_il(service_expiry_date)
+
+        if FILTERING_PAYMENT_MODE == "payment_site" and FILTERING_PAYMENT_SITE_URL:
+            pay_url = f"{FILTERING_PAYMENT_SITE_URL.rstrip('/')}?phone={urllib.parse.quote(customer_phone)}&system={urllib.parse.quote(system_name)}&amount={price_nis}"
+            msg = (
+                f"תקופת השירות השנתית ללא עלות במנוי ה*{system_name}* שלך הסתיימה בתאריך *{exp_fmt}*. 📅\n"
+                f"כדי להמשיך לקבל שירותי פתיחה, סגירה ועדכונים למהלך השנה הקרובה, ניתן לחדש כעת את המנוי השנתי בעלות של *{price_nis} ₪* (לפי מחירון החנות) בקישור המאובטח:\n"
+                f"🔗 {pay_url}\n\n"
+                f"מיד עם השלמת התשלום המנוי יתעדכן אוטומטית לשנה נוספת ונבצע עבורך את הבקשה! 😃"
+            )
+        else:
+            msg = (
+                f"תקופת השירות השנתית ללא עלות במנוי ה*{system_name}* שלך הסתיימה בתאריך *{exp_fmt}*. 📅\n"
+                f"כדי להמשיך לקבל שירותי פתיחה, סגירה ועדכונים למהלך השנה הקרובה, יש לחדש את המנוי השנתי מול ערן בעלות של *{price_nis} ₪* (לפי טבלת המחירים שלנו).\n\n"
+                f"💳 ניתן להעביר כעת *{price_nis} ₪* בביט (Bit) למספר *{BIT_PAYMENT_PHONE}* (ערן נקר - נעם שיח) ולעדכן כאן, ומייד עם אישור התשלום מאת ערן נחדש לך את השירות לשנה נוספת ונבצע את בקשתך! 😃"
+            )
+        return {
+            "customer_message": msg,
+            "price_nis": price_nis,
+            "product_name": pricing["product_name"],
+            "price_source": pricing["source"],
+            "payment_mode": FILTERING_PAYMENT_MODE,
+        }
+
+
+# ----------------------------------------------------------------------------
+# DETECTION & PARSING HELPERS FOR FILTERING SERVICE REQUESTS
+# ----------------------------------------------------------------------------
+def detect_filtering_service_request(text: str) -> dict:
+    """
+    Detects when a customer is asking to open, close, block, unblock, or change
+    filtering settings / apps / websites on their device:
+    Examples: 'תפתח לי', 'תסגור לי', 'תחסום לי', 'תשחרר לי', 'לפתוח אפליקציה',
+    'לחסום אתר', 'להוריד וייז בכשר פליי', 'לפתוח דפדפן בנטספרק', 'שינוי רמת הגנה'.
+    Does NOT trigger on store opening hours ('מתי אתם פתוחים') or hardware repairs ('המסך נשבר').
+    """
+    if not text:
+        return {"matched": False}
+    t_clean = auto_fix_common_hebrew_typos(text.strip())
+    t_low = t_clean.lower()
+
+    # Exclude store hours or physical repair inquiries
+    if any(p in t_low for p in ["שעות פתיחה", "מתי פתוח", "מתי אתם פתוחים", "איפה החנות", "כתובת שלכם"]):
+        return {"matched": False}
+    if any(p in t_low for p in ["מסך שבור", "נשבר המסך", "החלפת מסך", "שקע טעינה", "סוללה מתנפחת"]):
+        return {"matched": False}
+
+    # Action verbs for filtering management
+    action_patterns = [
+        r"\bתפתח\s+לי\b",
+        r"\bתפתחו\s+לי\b",
+        r"\bאפשר\s+לפתוח\s+לי\b",
+        r"\bלפתוח\s+לי\b",
+        r"\bתסגור\s+לי\b",
+        r"\bתסגרו\s+לי\b",
+        r"\bלסגור\s+לי\b",
+        r"\bתחסום\s+לי\b",
+        r"\bתחסמו\s+לי\b",
+        r"\bלחסום\s+לי\b",
+        r"\bתשחרר\s+לי\b",
+        r"\bתשחררו\s+לי\b",
+        r"\bלשחרר\s+לי\b",
+        r"\bתוריד\s+לי\s+חסימה\b",
+        r"\bתבטל\s+לי\s+חסימה\b",
+        r"\bפתיחת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|בנק|יוטיוב|חנות)",
+        r"\bחסימת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|יוטיוב|חנות)",
+        r"\bסגירת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|יוטיוב|חנות)",
+        r"\bשינוי\s+רמת\s+(?:הגנה|סינון|חסימה)",
+        r"\bלשנות\s+רמת\s+(?:הגנה|סינון|חסימה)",
+        r"\bהגבלת\s+זמן\s+מסך\b",
+        r"\bכיבוי\s+חסימה\s+זמני\b",
+        r"\bפתיחה\s+זמנית\b",
+    ]
+
+    matched_verb = any(re.search(pat, t_low) for pat in action_patterns)
+
+    # Also match combinations of (open/close/block/unblock/allow) + (app/site/filtering/kosherplay/netspark)
+    has_verb_word = any(w in t_low for w in [
+        "תפתח", "לפתוח", "תסגור", "לסגור", "תחסום", "לחסום", "תשחרר", "לשחרר",
+        "תאשר לי", "לאשר לי", "תוסיף לי", "להוסיף לי", "תסיר לי", "להסיר לי"
+    ])
+    has_target_word = any(w in t_low for w in [
+        "אפליקצי", "אפלקצי", "אתר", "דפדפן", "כשר פליי", "כשרפליי", "נטספרק", "נט ספרק",
+        "הגנה", "סינון", "חסימה", "וייז", "waze", "פנגו", "pango", "בנק", "ביט", "bit",
+        "מייל", "ג'ימייל", "gmail", "ווצאפ", "וואטסאפ", "טלגרם", "זמן מסך", "חנות כשר"
+    ])
+
+    if not (matched_verb or (has_verb_word and has_target_word)):
+        return {"matched": False}
+
+    # Check if the requester is explicitly asking to modify ANOTHER person's subscription
+    # ("תפתח לבן שלי", "תפתח לילד שלי", "תפתח לאחי", or specifying a different phone number)
+    other_person_indicators = ["לבן שלי", "לילד שלי", "לילדה שלי", "לאחי", "לאחותי", "לחבר שלי", "לבעלי", "לאשתי"]
+    mentions_other_person = any(ind in t_low for ind in other_person_indicators)
+
+    # Check if an explicit phone number is mentioned in the text
+    m_phone = re.search(r"(?:05\d[\-\s]?\d{7}|9725\d{8})", t_low)
+    mentioned_phone = normalize_phone(m_phone.group(0)) if m_phone else ""
+
+    # Determine explicit system hint if mentioned
+    sys_hint = ""
+    if any(k in t_low for k in ["כשר פליי", "כשרפליי", "kosherplay", "kosher play"]):
+        sys_hint = "כשר פליי"
+    elif any(k in t_low for k in ["נטספרק", "נט ספרק", "netspark"]):
+        sys_hint = "נטספרק"
+
+    return {
+        "matched": True,
+        "request_text": t_clean,
+        "system_hint": sys_hint,
+        "mentioned_phone": mentioned_phone,
+        "mentions_other_person": mentions_other_person,
+    }
+
+
+def parse_customer_protection_system_and_name_reply(text: str) -> dict:
+    """
+    Parses a customer's reply when asked:
+    'איזו הגנה יש לך ומה השם שמופיע בה?'
+    """
+    t = auto_fix_common_hebrew_typos((text or "").strip())
+    t_low = t.lower()
+
+    system_name = ""
+    if any(k in t_low for k in ["כשר פליי", "כשרפליי", "קשר פליי", "kosherplay", "kosher play", "כשר פלי"]):
+        system_name = "כשר פליי"
+    elif any(k in t_low for k in ["נטספרק", "נט ספרק", "netspark", "נט-ספרק"]):
+        system_name = "נטספרק"
+
+    # Extract phone if customer also wrote a phone number
+    m_ph = re.search(r"(?:05\d[\-\s]?\d{7}|9725\d{8})", t)
+    phone_in_reply = normalize_phone(m_ph.group(0)) if m_ph else ""
+
+    # Clean out system names and filler words to extract the subscriber name
+    cleaned_for_name = t
+    for rm in [
+        "כשר פליי", "כשרפליי", "קשר פליי", "כשר פלי", "נטספרק", "נט ספרק",
+        "ההגנה שלי היא", "ההגנה היא", "יש לי הגנה של", "יש לי הגנת", "יש לי",
+        "השם שמופיע בה הוא", "השם שמופיע הוא", "השם במנוי הוא", "על שם", "בשם",
+        "השם שלי", "שמי", "קוראים לי", "מנוי", "הגנה", "סינון",
+    ]:
+        cleaned_for_name = re.sub(re.escape(rm), " ", cleaned_for_name, flags=re.IGNORECASE)
+    if m_ph:
+        cleaned_for_name = cleaned_for_name.replace(m_ph.group(0), " ")
+    cleaned_for_name = re.sub(r"[^\w\sא-ת]", " ", cleaned_for_name)
+    words = [w.strip() for w in cleaned_for_name.split() if len(w.strip()) >= 2 and w.strip() not in ["אני", "זה", "של", "או", "גם", "רק"]]
+    extracted_name = " ".join(words[:3]) if words else ""
+
+    return {
+        "system_name": system_name,
+        "subscriber_name": extracted_name,
+        "phone": phone_in_reply,
+    }
+
+
+def generate_and_send_filtering_otp(target_phone: str, raw_chat_id: str = "", system_name: str = "כשר פליי") -> str:
+    """
+    Generates a 6-digit OTP verification code, stores it in `filtering_subscribers`
+    with a 10-minute expiration, and sends it to `target_phone`.
+    """
+    import random
+    otp_code = f"{random.randint(100000, 999999)}"
+    expires_at = int(std_time.time()) + 600  # 10 minutes
+    upsert_filtering_subscriber(
+        target_phone,
+        system_name=system_name or None,
+        otp_code=otp_code,
+        otp_expires_at=expires_at,
+        otp_verified=0,
+    )
+    otp_msg = (
+        f"🔐 *קוד אימות אבטחה למנוי {system_name or 'סינון'} (נעם שיח):*\n"
+        f"הקוד החד-פעמי שלך הוא: *{otp_code}*\n\n"
+        f"אנא הקש/שלח כאן את הקוד בן 6 הספרות כדי לאמת שהמספר ברשותך ולהמשיך בטיפול בבקשה."
+    )
+    send_whatsapp_message(target_phone, otp_msg, raw_chat_id)
+    save_chat_message(target_phone, "agent", otp_msg)
+    return otp_code
+
+
+def parse_admin_filtering_verification_reply(admin_text: str) -> dict:
+    """
+    Parses Eran's reply to the one-time adult + free-service expiry verification prompt,
+    or Eran's reply confirming annual renewal payment.
+    Examples supported:
+    - 'מאושר עד 15/11/2027' -> approved=True, expiry_date='2027-11-15'
+    - 'כן מבוגר מאושר עד 01.09.27' -> approved=True, expiry_date='2027-09-01'
+    - 'מאושר לשנה' -> approved=True, expiry_date=(today + 365 days)
+    - 'לא מאושר' / 'זה ילד' / 'אסור' -> approved=False, rejected=True
+    - 'שולם' / 'חידש' / 'שילם' -> payment_confirmed=True, expiry_date=(today + 365 days)
+    """
+    t = (admin_text or "").strip()
+    t_low = t.lower()
+
+    # Check explicit rejection (child / unauthorized)
+    if any(neg in t_low for neg in ["לא מאושר", "לא לאשר", "זה ילד", "מדובר בילד", "ילד לא", "אסור לפתוח", "לא מורשה", "חסום משירות"]):
+        return {
+            "matched": True,
+            "approved": False,
+            "rejected": True,
+            "payment_confirmed": False,
+            "expiry_date": "",
+        }
+
+    today_il = datetime.now(ZoneInfo("Asia/Jerusalem")).date()
+
+    # Extract explicit date: DD/MM/YYYY, DD.MM.YYYY, DD-MM-YYYY, DD/MM/YY, or YYYY-MM-DD
+    expiry_date_str = ""
+    m_iso = re.search(r"\b(20\d{2})[\-/\.](0?[1-9]|1[0-2])[\-/\.](0?[1-9]|[12]\d|3[01])\b", t)
+    if m_iso:
+        y, m, d = int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3))
+        expiry_date_str = f"{y:04d}-{m:02d}-{d:02d}"
+    else:
+        m_dmy = re.search(r"\b(0?[1-9]|[12]\d|3[01])[\-/\.](0?[1-9]|1[0-2])[\-/\.](20\d{2}|\d{2})\b", t)
+        if m_dmy:
+            d, m, y = int(m_dmy.group(1)), int(m_dmy.group(2)), int(m_dmy.group(3))
+            if y < 100:
+                y += 2000
+            expiry_date_str = f"{y:04d}-{m:02d}-{d:02d}"
+
+    # Relative duration phrases if no explicit calendar date was written
+    if not expiry_date_str:
+        if any(w in t_low for w in ["לשנה", "שנה קדימה", "שנה נוספת", "עוד שנה"]):
+            expiry_date_str = (today_il + timedelta(days=365)).strftime("%Y-%m-%d")
+        elif "חצי שנה" in t_low:
+            expiry_date_str = (today_il + timedelta(days=182)).strftime("%Y-%m-%d")
+        elif any(w in t_low for w in ["לחודש", "עוד חודש", "חודש"]):
+            expiry_date_str = (today_il + timedelta(days=30)).strftime("%Y-%m-%d")
+        elif any(w in t_low for w in ["פג תוקף", "נגמרה השנה", "הסתיימה השנה", "חייב לחדש", "צריך לחדש", "לא בתוקף"]):
+            # Expired yesterday so renewal flow triggers immediately!
+            expiry_date_str = (today_il - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    payment_confirmed = any(w in t_low for w in ["שולם", "שילם", "חידש", "התקבל תשלום", "אפשר לחדש", "תחדש לו"])
+    approved_keywords = any(w in t_low for w in ["מאושר", "מאשר", "מבוגר", "כן", "אפשר לתת", "תפתח", "תבצע", "בסדר", "אושר"])
+
+    if payment_confirmed and not expiry_date_str:
+        expiry_date_str = (today_il + timedelta(days=365)).strftime("%Y-%m-%d")
+
+    if approved_keywords or payment_confirmed or expiry_date_str:
+        if not expiry_date_str:
+            # Default to +1 year if Admin simply wrote "מאושר" / "כן מבוגר"
+            expiry_date_str = (today_il + timedelta(days=365)).strftime("%Y-%m-%d")
+        return {
+            "matched": True,
+            "approved": True,
+            "rejected": False,
+            "payment_confirmed": payment_confirmed,
+            "expiry_date": expiry_date_str,
+        }
+
+    return {"matched": False}
+
+
 async def unified_whatsapp_webhook(req: Request):
     print(f"[HTTP Incoming] Received {req.method} to {req.url.path}")
     try:
@@ -11815,6 +12818,215 @@ async def unified_whatsapp_webhook(req: Request):
         )
         send_whatsapp_message(sender_phone, msg_ok, raw_chat_id)
         return {"ok": True, "admin_action": "pos_diagnostic_success", "db_items_cnt": db_items_cnt, "details": exp_res}
+
+    # 0.D4 Live KosherPlay & Filtering Diagnostic / Admin Management Command ('בדיקת כשר פליי', 'מנוי סינון: ...')
+    if sender_phone in admin_numbers_set and re.match(
+        r"^(?:בדיקת\s+כשר\s*פליי|בדיקת\s+סינון|חיבור\s+כשר\s*פליי|אופציות\s+כשר\s*פליי|מנויי\s+סינון)(?:\s*[:\-]\\s*(.*))?$",
+        message_text.strip(),
+        flags=re.IGNORECASE,
+    ):
+        m_kp_cmd = re.match(
+            r"^(?:בדיקת\s+כשר\s*פליי|בדיקת\s+סינון|חיבור\s+כשר\s*פליי|אופציות\s+כשר\s*פליי|מנויי\s+סינון)(?:\s*[:\-]\\s*(.*))?$",
+            message_text.strip(),
+            flags=re.IGNORECASE,
+        )
+        kp_query = (m_kp_cmd.group(1) or "").strip() if m_kp_cmd else ""
+        auth_res = authenticate_kosherplay_crm(force=False)
+        conn_f = sqlite3.connect(DB_PATH)
+        total_f_subs = conn_f.execute("SELECT COUNT(*) FROM filtering_subscribers").fetchone()[0]
+        approved_f_subs = conn_f.execute("SELECT COUNT(*) FROM filtering_subscribers WHERE adult_approved_by_admin = 1").fetchone()[0]
+        conn_f.close()
+
+        search_line = ""
+        if kp_query:
+            lk = lookup_customer_protection_system(kp_query, kp_query)
+            if lk.get("found"):
+                sub_r = lk.get("subscriber_record") or {}
+                search_line = (
+                    f"\n🔍 *תוצאת חיפוש עבור '{kp_query}':*\n"
+                    f"• מערכת: *{lk.get('system')}* ({lk.get('source')})\n"
+                    f"• שם: *{lk.get('customer_name') or 'לא צוין'}* | טלפון: `{_format_local_il_phone(lk.get('phone', ''))}`\n"
+                    f"• מאושר כמבוגר: *{'✅ כן' if sub_r.get('adult_approved_by_admin') == 1 else '⏳ טרם אומת'}*\n"
+                    f"• תוקף שירות חינם: *{sub_r.get('service_expiry_date') or 'טרם הוגדר'}*\n"
+                )
+            else:
+                search_line = f"\n🔍 *תוצאת חיפוש עבור '{kp_query}':* לא נמצא במאגר כשר פליי או נטספרק.\n"
+
+        opts_lines = []
+        for idx_o, opt in enumerate(KOSHERPLAY_SESSION_CACHE["protection_modal_options"], 1):
+            policy_tag = "✅ אוטומטי ללקוח מאומת" if opt["customer_allowed"] else "🔒 חסום (דורש אישור ערן)"
+            opts_lines.append(f"{idx_o}. *{opt['title_he']}* — {policy_tag}")
+        opts_block = "\n".join(opts_lines)
+        renewal_info = FilteringBillingAdapter.get_annual_renewal_price_from_pos("כשר פליי")
+
+        msg_kp_diag = (
+            "🛡️ *דו\"ח מערכת ניהול הגנות — כשר פליי ונטספרק:*\n"
+            f"🌐 *כתובת מערכת כשר פליי:* `https://crm.kosherplay.com/modules/1`\n"
+            f"👤 *משתמש מחובר:* `{KOSHERPLAY_USERNAME}`\n"
+            f"📊 *מנויים שמורים בזיכרון הסוכן:* {total_f_subs} (מתוכם {approved_f_subs} מאומתים כמבוגרים)\n"
+            f"💳 *מחיר חידוש שנתי מטבלת המחירים:* {renewal_info['price_nis']} ₪ ({renewal_info['product_name']})\n"
+            f"⚙️ *מצב גבייה נוכחי:* `{'אישור ערן בווצאפ' if FILTERING_PAYMENT_MODE == 'admin_approval' else 'אתר סליקה אוטומטי'}`"
+            f"{search_line}\n"
+            f"🎛️ *אופציות חלון ניהול ההגנה בכשר פליי שמופו בסוכן:*\n{opts_block}"
+        )
+        send_whatsapp_message(sender_phone, msg_kp_diag, raw_chat_id)
+        return {"ok": True, "admin_action": "kosherplay_diagnostic", "auth": auth_res, "total_subscribers": total_f_subs}
+
+    # 0.D5 Admin Reply Interceptor for One-Time Adult & Expiry Verification OR Annual Renewal Payment Confirmation
+    if sender_phone in admin_numbers_set:
+        try:
+            _conn_f_adm = sqlite3.connect(DB_PATH)
+            _f_pend_rows = _conn_f_adm.execute(
+                """
+                SELECT id, phone, system_name, request_text, action_taken, status
+                FROM customer_requests
+                WHERE status IN ('awaiting_admin_filter_verification', 'awaiting_filter_renewal_payment')
+                  AND phone != ?
+                ORDER BY id DESC
+                """,
+                (sender_phone,),
+            ).fetchall()
+            _conn_f_adm.close()
+        except Exception:
+            _f_pend_rows = []
+
+        if _f_pend_rows:
+            # Match by #REQ-ID if quoted or specified, otherwise take the latest filtering request waiting for Admin
+            target_f_req = None
+            m_f_req = (
+                re.search(r"#REQ-(\d+)", message_text, re.IGNORECASE)
+                or re.search(r"\[#REQ-(\d+)\]", quoted_text, re.IGNORECASE)
+                or re.search(r"#REQ-(\d+)", quoted_text, re.IGNORECASE)
+            )
+            if m_f_req:
+                req_id_f = int(m_f_req.group(1))
+                for r_f in _f_pend_rows:
+                    if r_f[0] == req_id_f:
+                        target_f_req = r_f
+                        break
+            if not target_f_req and not is_customer_style_new_inquiry(message_text):
+                target_f_req = _f_pend_rows[0]
+
+            if target_f_req:
+                f_req_id, f_cust_phone, f_sys_name, f_req_text, f_act_taken, f_status = target_f_req
+                parsed_adm_f = parse_admin_filtering_verification_reply(message_text)
+                if parsed_adm_f.get("matched"):
+                    sub_rec = get_filtering_subscriber(f_cust_phone)
+                    cust_disp_name = sub_rec.get("customer_name") or get_contact_name(f_cust_phone) or ""
+                    sys_disp = f_sys_name if f_sys_name in ("כשר פליי", "נטספרק") else (sub_rec.get("system_name") or "כשר פליי")
+
+                    if parsed_adm_f.get("rejected"):
+                        upsert_filtering_subscriber(
+                            f_cust_phone,
+                            system_name=sys_disp,
+                            adult_approved_by_admin=-1,
+                            notes=f"נדחה ע\"י ערן: {message_text}",
+                        )
+                        conn_u = sqlite3.connect(DB_PATH)
+                        conn_u.execute(
+                            "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
+                            (f"נדחה ע\"י ערן (לא מורשה/ילד): {message_text}", f_req_id),
+                        )
+                        conn_u.commit()
+                        conn_u.close()
+
+                        reject_cust_msg = (
+                            f"שלום, על פי הגדרות המנוי ב*{sys_disp}*, המספר אינו מורשה לביצוע שינויים בהגדרות הסינון. "
+                            f"לכל בירור ניתן לפנות מבעל המנוי המורשה בלבד."
+                        )
+                        send_whatsapp_message(f_cust_phone, reject_cust_msg)
+                        save_chat_message(f_cust_phone, "agent", reject_cust_msg)
+
+                        adm_conf = f"⛔ *המנוי ({_format_local_il_phone(f_cust_phone)}) סומן כלא מורשה לשינויים ונשמר בזיכרון הקבוע.*"
+                        send_whatsapp_message(sender_phone, adm_conf, raw_chat_id)
+                        return {
+                            "ok": True,
+                            "admin_action": "filtering_subscriber_rejected",
+                            "customer": f_cust_phone,
+                        }
+
+                    # Approved or payment confirmed!
+                    exp_date = parsed_adm_f["expiry_date"]
+                    exp_fmt = FilteringBillingAdapter.format_date_il(exp_date)
+                    is_expired_now = FilteringBillingAdapter.is_subscription_expired(exp_date)
+
+                    upsert_filtering_subscriber(
+                        f_cust_phone,
+                        system_name=sys_disp,
+                        adult_approved_by_admin=1,
+                        service_expiry_date=exp_date,
+                        payment_status="expired_pending_renewal" if is_expired_now else "active",
+                        notes=f"אושר ע\"י ערן ({message_text})",
+                    )
+
+                    if is_expired_now:
+                        # Admin informed us that the customer is an adult, BUT their free service year already expired!
+                        ren_offer = FilteringBillingAdapter.build_renewal_message_for_customer(sys_disp, exp_date, f_cust_phone)
+                        conn_u = sqlite3.connect(DB_PATH)
+                        conn_u.execute(
+                            "UPDATE customer_requests SET status='awaiting_filter_renewal_payment', action_taken=? WHERE id=?",
+                            (f"אושר כמבוגר אך תוקף חינם פג ({exp_date}) — נשלחה הודעת חידוש ({ren_offer['price_nis']} ₪)", f_req_id),
+                        )
+                        conn_u.commit()
+                        conn_u.close()
+
+                        send_whatsapp_message(f_cust_phone, ren_offer["customer_message"])
+                        save_chat_message(f_cust_phone, "agent", ren_offer["customer_message"])
+
+                        adm_conf = (
+                            f"✅ *הלקוח ({cust_disp_name or _format_local_il_phone(f_cust_phone)}) נשמר כמבוגר מורשה, "
+                            f"אך מאחר שהשנה שלו הסתיימה ב-{exp_fmt}, נשלחה לו כעת הודעה לחידוש המנוי השנתי בעלות {ren_offer['price_nis']} ₪.*"
+                        )
+                        send_whatsapp_message(sender_phone, adm_conf, raw_chat_id)
+                        return {
+                            "ok": True,
+                            "admin_action": "filtering_approved_but_expired_sent_renewal",
+                            "customer": f_cust_phone,
+                            "expiry_date": exp_date,
+                            "renewal_price": ren_offer["price_nis"],
+                        }
+
+                    # Active & approved! Fulfill the customer's filtering request
+                    conn_u = sqlite3.connect(DB_PATH)
+                    conn_u.execute(
+                        "UPDATE customer_requests SET status='handled', action_taken=? WHERE id=?",
+                        (f"מנוי אומת ואושר עד {exp_date} — בקשת הסינון בוצעה ({f_req_text})", f_req_id),
+                    )
+                    conn_u.commit()
+                    conn_u.close()
+
+                    if f_status == "awaiting_filter_renewal_payment" or parsed_adm_f.get("payment_confirmed"):
+                        cust_ok_msg = (
+                            f"✅ *תודה! חידוש המנוי השנתי שלך ב{sys_disp} אושר ועודכן במערכת לשנה נוספת (עד {exp_fmt}).*\n"
+                            f"🛠️ בקשתך (*\"{f_req_text}\"*) עודכנה במערכת ההגנה! מומלץ לבצע הפעלה מחדש או רענון הגנה במכשיר.\n\n"
+                            f"האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+                        )
+                    else:
+                        cust_ok_msg = (
+                            f"✅ *המנוי שלך ב{sys_disp} אומת ואושר במערכת הקבועה (תוקף שירות שנתי: עד {exp_fmt}).*\n"
+                            f"🛠️ בקשתך (*\"{f_req_text}\"*) טופלה ועודכנה במערכת ההגנה! מומלץ לבצע רענון הגנה או הפעלה מחדש למכשיר.\n\n"
+                            f"האם הצלחתי לעזור לך ולתת לך מענה לפנייתך? 😃"
+                        )
+                    send_whatsapp_message(f_cust_phone, cust_ok_msg)
+                    save_chat_message(f_cust_phone, "agent", cust_ok_msg)
+
+                    adm_conf = (
+                        f"✅ *נשמר בזיכרון הקבוע!* 🛡️\n"
+                        f"• *לקוח:* {cust_disp_name or 'לקוח'} (`{_format_local_il_phone(f_cust_phone)}`)\n"
+                        f"• *מערכת:* {sys_disp}\n"
+                        f"• *אימות מבוגר:* מאושר קבוע (לא תישאל שוב בפניות הבאות)\n"
+                        f"• *תוקף שירות ללא עלות:* עד *{exp_fmt}*\n"
+                        f"• *סטטוס פנייה:* הלקוח עודכן שבקשתו (\"{f_req_text}\") טופלה!"
+                    )
+                    send_whatsapp_message(sender_phone, adm_conf, raw_chat_id)
+                    return {
+                        "ok": True,
+                        "admin_action": "filtering_subscriber_approved_and_saved",
+                        "customer": f_cust_phone,
+                        "system": sys_disp,
+                        "expiry_date": exp_date,
+                    }
+
 
     has_other_phone_pending_for_admin = False
     if sender_phone in admin_numbers_set and not has_explicit_admin_prefix:
@@ -12484,6 +13696,495 @@ async def unified_whatsapp_webhook(req: Request):
                     f"הלקוח ({customer_name or sender_phone}) אישר מספר נוח לחזרה: *{cb_detected}*"
                 )
             return {"ok": True, "reply": reply_cb, "type": "callback_phone_confirmed", "callback_phone": cb_detected}
+
+
+
+    # =========================================================================
+    # 0.54 KOSHERPLAY & NETSPARK FILTERING SECURITY, OTP & RENEWAL FLOW
+    # =========================================================================
+    # Check if customer has an active filtering state in `customer_requests`
+    active_filter_req = None
+    try:
+        _conn_flt = sqlite3.connect(DB_PATH)
+        active_filter_req = _conn_flt.execute(
+            """
+            SELECT id, system_name, request_text, action_taken, status
+            FROM customer_requests
+            WHERE phone = ?
+              AND status IN (
+                  'awaiting_filter_system_and_name',
+                  'awaiting_filter_otp',
+                  'awaiting_admin_filter_verification',
+                  'awaiting_filter_renewal_payment'
+              )
+            ORDER BY id DESC LIMIT 1
+            """,
+            (sender_phone,),
+        ).fetchone()
+        _conn_flt.close()
+    except Exception as _e_flt:
+        print(f"[Filtering State Check Error]: {_e_flt}")
+
+    flt_det = detect_filtering_service_request(message_text)
+
+    # Helper to execute or route a verified, active subscriber's request
+    def _process_verified_filtering_request(req_id_val: int, sub_rec: dict, req_text_val: str):
+        sys_nm = sub_rec.get("system_name") or "כשר פליי"
+        exp_dt = sub_rec.get("service_expiry_date") or ""
+        cust_nm = sub_rec.get("customer_name") or customer_name or "לקוח"
+
+        # Rule C: Check if the annual free-service period has expired!
+        if FilteringBillingAdapter.is_subscription_expired(exp_dt):
+            ren_offer = FilteringBillingAdapter.build_renewal_message_for_customer(sys_nm, exp_dt, sender_phone)
+            upsert_filtering_subscriber(
+                sender_phone,
+                payment_status="expired_pending_renewal",
+                renewal_price_nis=ren_offer["price_nis"],
+                last_request_text=req_text_val,
+            )
+            conn_e = sqlite3.connect(DB_PATH)
+            conn_e.execute(
+                "UPDATE customer_requests SET status='awaiting_filter_renewal_payment', system_name=?, request_text=?, action_taken=? WHERE id=?",
+                (
+                    sys_nm,
+                    req_text_val,
+                    f"תוקף שירות חינם פג ב-{exp_dt} — נשלחה דרישת חידוש שנתי ({ren_offer['price_nis']} ₪)",
+                    req_id_val,
+                ),
+            )
+            conn_e.commit()
+            conn_e.close()
+
+            send_whatsapp_message(sender_phone, ren_offer["customer_message"], raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", ren_offer["customer_message"])
+
+            # Notify Admin that an expired subscriber requested service and was prompted to renew
+            exp_fmt = FilteringBillingAdapter.format_date_il(exp_dt)
+            adm_ren_alert = (
+                f"📅 *התראת חידוש מנוי סינון שנתי ({sys_nm})* [#REQ-{req_id_val}]\n"
+                f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`)\n"
+                f"💬 *בקשת הלקוח:* \"{req_text_val}\"\n"
+                f"⏰ *תום שנת השירות ללא עלות:* {exp_fmt}\n"
+                f"💳 *מחיר חידוש שנתי שנשלח ללקוח (מטבלת המחירים):* *{ren_offer['price_nis']} ₪*\n\n"
+                f"💡 *ברגע שהלקוח מסדיר תשלום, השב להודעה זו `שולם` (או `חידש`) והסוכן יאריך לו אוטומטית לשנה נוספת ויבצע את הבקשה!*"
+            )
+            for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+                send_whatsapp_message(adm, adm_ren_alert)
+            return {
+                "ok": True,
+                "reply": ren_offer["customer_message"],
+                "type": "filtering_subscription_expired_renewal_sent",
+                "system": sys_nm,
+                "expiry_date": exp_dt,
+                "renewal_price": ren_offer["price_nis"],
+            }
+
+        # Active & Adult-Approved subscriber!
+        exp_fmt = FilteringBillingAdapter.format_date_il(exp_dt)
+        crm_link = KOSHERPLAY_CRM_MODULES_URL_TEMPLATE.format(
+            query=urllib.parse.quote(_format_local_il_phone(sender_phone).replace("-", ""))
+        )
+        conn_ok = sqlite3.connect(DB_PATH)
+        conn_ok.execute(
+            "UPDATE customer_requests SET status='pending', system_name=?, request_text=?, action_taken=? WHERE id=?",
+            (
+                sys_nm,
+                req_text_val,
+                f"מנוי מאומת ומאושר (בתוקף עד {exp_dt}) — בביצוע מול מערכת {sys_nm}",
+                req_id_val,
+            ),
+        )
+        conn_ok.commit()
+        conn_ok.close()
+
+        cust_reply = (
+            f"זיהיתי את המנוי המאושר שלך ב*{sys_nm}* (זכאות לשירות שנתי בתוקף עד *{exp_fmt}*). 🛡️✅\n"
+            f"אני מעדכן כעת במערכת ההגנה את בקשתך: *\"{req_text_val}\"* ומיד אעדכן אותך כאן ברגע שהשינוי הושלם!"
+        )
+        send_whatsapp_message(sender_phone, cust_reply, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", cust_reply)
+
+        adm_exec_alert = (
+            f"🛡️ *בקשת שירות סינון מלקוח מאומת ומאושר ({sys_nm})* [#REQ-{req_id_val}]\n"
+            f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`) — מבוגר מאושר ✅\n"
+            f"📅 *תוקף שירות ללא עלות:* עד {exp_fmt}\n"
+            f"💬 *בקשת הפתיחה/סגירה:* \"{req_text_val}\"\n"
+            + (f"🔗 *קישור מהיר לכרטיס בכשר פליי:* {crm_link}\n\n" if "כשר" in sys_nm else "\n")
+            + "💡 *לאחר הלחיצה בחלון ניהול ההגנה, השב כאן (למשל: `בוצע, תרענן הגנה במכשיר`) והסוכן יעדכן את הלקוח מיד!*"
+        )
+        for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+            send_whatsapp_message(adm, adm_exec_alert)
+
+        return {
+            "ok": True,
+            "reply": cust_reply,
+            "type": "filtering_verified_active_request_dispatched",
+            "system": sys_nm,
+            "expiry_date": exp_dt,
+        }
+
+    # -------------------------------------------------------------------------
+    # CASE 1: Customer is replying to an active filtering workflow state
+    # -------------------------------------------------------------------------
+    if active_filter_req:
+        f_req_id, f_sys, f_orig_req_text, f_action_taken, f_status = active_filter_req
+        sub_rec = get_filtering_subscriber(sender_phone)
+
+        # STATE 1A: Customer was asked 'איזו הגנה יש לך ומה השם שמופיע בה?'
+        if f_status == "awaiting_filter_system_and_name":
+            parsed_info = parse_customer_protection_system_and_name_reply(message_text)
+            sys_chosen = parsed_info["system_name"] or (f_sys if f_sys in ("כשר פליי", "נטספרק") else "")
+            name_chosen = parsed_info["subscriber_name"] or customer_name or ""
+
+            if not sys_chosen:
+                ask_again = (
+                    "כדי שאוכל לאתר את המנוי שלך במערכת, אנא ציין איזו הגנה מותקנת אצלך במכשיר "
+                    "(*כשר פליי* או *נטספרק*) ומה *השם המלא* שמופיע במנוי? 🛡️"
+                )
+                send_whatsapp_message(sender_phone, ask_again, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", ask_again)
+                return {"ok": True, "reply": ask_again, "type": "clarify_filter_system_and_name"}
+
+            # Try searching KosherPlay / NetSpark by the name they provided
+            if name_chosen:
+                lk_by_name = (
+                    search_kosherplay_subscriber(name_chosen)
+                    if sys_chosen == "כשר פליי"
+                    else search_netspark_subscriber(name_chosen)
+                )
+                if lk_by_name.get("found"):
+                    sub_rec = lk_by_name.get("subscriber_record") or sub_rec
+
+            if name_chosen and not customer_name:
+                customer_name = name_chosen
+                save_contact_name(sender_phone, name_chosen)
+
+            sub_rec = upsert_filtering_subscriber(
+                sender_phone,
+                customer_name=name_chosen or sub_rec.get("customer_name") or "",
+                system_name=sys_chosen,
+                last_request_text=f_orig_req_text,
+            )
+
+            # Now move to Rule A: Send 6-digit OTP verification code to the phone!
+            otp_code = generate_and_send_filtering_otp(sender_phone, raw_chat_id, system_name=sys_chosen)
+            conn_u = sqlite3.connect(DB_PATH)
+            conn_u.execute(
+                "UPDATE customer_requests SET status='awaiting_filter_otp', system_name=?, action_taken=? WHERE id=?",
+                (sys_chosen, f"נרשם מנוי {sys_chosen} ({name_chosen}) ונשלח קוד אימות OTP ({otp_code})", f_req_id),
+            )
+            conn_u.commit()
+            conn_u.close()
+            save_chat_message(sender_phone, "customer", message_text)
+            return {
+                "ok": True,
+                "reply": f"נשלח קוד אימות למספר {_format_local_il_phone(sender_phone)}",
+                "type": "filtering_otp_sent_after_system_identification",
+                "system": sys_chosen,
+                "otp_code": otp_code,
+            }
+
+        # STATE 1B: Customer is entering the 6-digit OTP verification code ('awaiting_filter_otp')
+        if f_status == "awaiting_filter_otp":
+            # Check if customer asked to resend code
+            if any(w in message_text for w in ["שלח שוב", "לא קיבלתי", "קוד חדש"]):
+                otp_code = generate_and_send_filtering_otp(sender_phone, raw_chat_id, system_name=sub_rec.get("system_name") or f_sys or "כשר פליי")
+                save_chat_message(sender_phone, "customer", message_text)
+                return {"ok": True, "type": "filtering_otp_resent", "otp_code": otp_code}
+
+            m_code = re.search(r"\b(\d{6})\b", message_text.strip())
+            entered_code = m_code.group(1) if m_code else ""
+            expected_code = str(sub_rec.get("otp_code") or "").strip()
+            exp_ts = int(sub_rec.get("otp_expires_at") or 0)
+
+            if not entered_code or entered_code != expected_code:
+                # If customer sent a brand new filtering instruction while awaiting OTP, remind them of the OTP
+                err_otp = (
+                    "קוד האימות שהוקש אינו תואם. 🔐\n"
+                    "אנא הקש את *קוד האימות בן 6 הספרות* שנשלח אליך בהודעה הקודמת (או כתוב *\"קוד חדש\"* לשליחה חוזרת)."
+                )
+                send_whatsapp_message(sender_phone, err_otp, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", err_otp)
+                return {"ok": True, "reply": err_otp, "type": "filtering_otp_invalid"}
+
+            if exp_ts and int(std_time.time()) > exp_ts:
+                otp_code = generate_and_send_filtering_otp(sender_phone, raw_chat_id, system_name=sub_rec.get("system_name") or f_sys or "כשר פליי")
+                save_chat_message(sender_phone, "customer", message_text)
+                return {"ok": True, "type": "filtering_otp_expired_resent", "otp_code": otp_code}
+
+            # OTP Verified! Mark `otp_verified = 1`
+            sub_rec = upsert_filtering_subscriber(
+                sender_phone,
+                otp_verified=1,
+                otp_verified_at=datetime.now().isoformat(),
+            )
+            sys_nm = sub_rec.get("system_name") or f_sys or "כשר פליי"
+            cust_nm = sub_rec.get("customer_name") or customer_name or "לקוח"
+
+            # Check Rule B & Rule C: Is customer already approved as an adult by Eran with a saved `service_expiry_date`?
+            if int(sub_rec.get("adult_approved_by_admin") or 0) == -1:
+                reject_msg = f"שלום, על פי הגדרות המנוי ב*{sys_nm}*, לא ניתן לבצע שינויים בהגדרות הסינון ממספר זה."
+                send_whatsapp_message(sender_phone, reject_msg, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", reject_msg)
+                return {"ok": True, "reply": reject_msg, "type": "filtering_unauthorized_subscriber"}
+
+            if int(sub_rec.get("adult_approved_by_admin") or 0) == 1 and sub_rec.get("service_expiry_date"):
+                # Already approved in the past! Proceed directly to expiry check & fulfillment
+                return _process_verified_filtering_request(f_req_id, sub_rec, f_orig_req_text)
+
+            # First time ever! Escalate to Eran for ONE-TIME Adult + Free-Service Expiry Date check
+            conn_u = sqlite3.connect(DB_PATH)
+            conn_u.execute(
+                "UPDATE customer_requests SET status='awaiting_admin_filter_verification', system_name=?, action_taken=? WHERE id=?",
+                (sys_nm, "אומת בקוד OTP — ממתין לאישור חד-פעמי מערן (מבוגר + תאריך תום שנת שירות חינם)", f_req_id),
+            )
+            conn_u.commit()
+            conn_u.close()
+
+            wait_admin_msg = (
+                f"✅ *תודה! מספר הטלפון שלך אומת בהצלחה.*\n"
+                f"מאחר שזו פנייתך הראשונה למערכת השירות האוטומטית של *{sys_nm}*, אני מבצע כעת אימות זכאות חד-פעמי מול ערן (שיישמר בזיכרון הקבוע להמשך) ומיד חוזר אליך לביצוע הבקשה! 🛡️"
+            )
+            send_whatsapp_message(sender_phone, wait_admin_msg, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", wait_admin_msg)
+
+            crm_link = KOSHERPLAY_CRM_MODULES_URL_TEMPLATE.format(
+                query=urllib.parse.quote(_format_local_il_phone(sender_phone).replace("-", ""))
+            )
+            admin_verify_prompt = (
+                f"🛡️ *אימות חד-פעמי למנוי סינון ({sys_nm})* [#REQ-{f_req_id}]\n"
+                f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`) — *אומת כעת בקוד אימות (OTP)* ✅\n"
+                f"💬 *בקשת הלקוח:* \"{f_orig_req_text}\"\n"
+                + (f"🔗 *חיפוש בכשר פליי:* {crm_link}\n\n" if "כשר" in sys_nm else "\n")
+                + "אשמח לאישורך החד-פעמי (יישמר בזיכרון הקבוע ולא אשאל שוב בעתיד):\n"
+                + "1️⃣ האם הלקוח *מבוגר ומורשה* לבצע שינויים במנוי שלו?\n"
+                + "2️⃣ *עד איזה תאריך* מגיע לו שירות ללא עלות (מתי מסתיימת השנה שלו)?\n\n"
+                + "💡 *למענה מהיר כתוב למשל:*\n"
+                + "• `מאושר עד 15/11/2027` (או `מאושר לשנה`)\n"
+                + "• `מאושר אבל פג תוקף` (אם השנה שלו כבר הסתיימה וצריך לחדש בתשלום)\n"
+                + "• `לא מאושר - ילד` (אם אינו מורשה)"
+            )
+            for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+                send_whatsapp_message(adm, admin_verify_prompt)
+
+            return {
+                "ok": True,
+                "reply": wait_admin_msg,
+                "type": "filtering_otp_verified_awaiting_onetime_admin_check",
+                "system": sys_nm,
+            }
+
+        # STATE 1C: Customer is awaiting renewal payment confirmation ('awaiting_filter_renewal_payment')
+        if f_status == "awaiting_filter_renewal_payment":
+            t_low_ren = message_text.lower()
+            if any(w in t_low_ren for w in ["שילמתי", "העברתי", "שלחתי ביט", "שולם", "תחדש לי", "כן תחדש"]):
+                wait_pay_msg = (
+                    "תודה על העדכון! 🙏 העברתי כעת לערן לאישור קבלת התשלום. "
+                    "מיד עם אישורו, המנוי שלך יתעדכן אוטומטית לשנה נוספת ונבצע את בקשתך! 😃"
+                )
+                send_whatsapp_message(sender_phone, wait_pay_msg, raw_chat_id)
+                save_chat_message(sender_phone, "customer", message_text)
+                save_chat_message(sender_phone, "agent", wait_pay_msg)
+
+                sys_nm = sub_rec.get("system_name") or f_sys or "כשר פליי"
+                ren_price = sub_rec.get("renewal_price_nis") or FilteringBillingAdapter.get_annual_renewal_price_from_pos(sys_nm)["price_nis"]
+                adm_pay_alert = (
+                    f"💳 *לקוח מדווח שהעביר תשלום לחידוש שנתי ({sys_nm})* [#REQ-{f_req_id}]\n"
+                    f"👤 *לקוח:* {sub_rec.get('customer_name') or customer_name or 'לקוח'} (`{_format_local_il_phone(sender_phone)}`)\n"
+                    f"💬 *הודעת הלקוח:* \"{message_text}\"\n"
+                    f"💰 *סכום חידוש שנתי:* {ren_price} ₪\n\n"
+                    f"💡 *השב `שולם` (או `חידש`) כדי להאריך את המנוי לשנה נוספת בזיכרון הקבוע ולבצע את בקשתו!*"
+                )
+                for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+                    send_whatsapp_message(adm, adm_pay_alert)
+                return {"ok": True, "reply": wait_pay_msg, "type": "filtering_customer_reported_renewal_payment"}
+
+    # -------------------------------------------------------------------------
+    # CASE 2: New Filtering Service Request ('תפתח לי', 'תסגור לי', 'תחסום לי', 'תשחרר לי'...)
+    # -------------------------------------------------------------------------
+    if flt_det.get("matched"):
+        req_clean_txt = flt_det["request_text"]
+
+        # Rule A1: Strictly block modifying someone else's subscription or another phone number!
+        mentioned_ph = flt_det.get("mentioned_phone") or ""
+        if flt_det.get("mentions_other_person") or (mentioned_ph and mentioned_ph != sender_phone):
+            target_for_otp = mentioned_ph if (mentioned_ph and mentioned_ph != sender_phone) else ""
+            own_only_msg = (
+                "🔒 *נוהל אבטחת מנויים (נעם שיח):*\n"
+                "שינויים בהגדרות הסינון (פתיחה, סגירה או שחרור) מתבצעים אך ורק עבור בעל המנוי המבוגר ועל המספר שלו בלבד.\n"
+                + (
+                    f"כדי לבצע שינוי במנוי של `{_format_local_il_phone(target_for_otp)}`, יש לפנות אלינו ישירות מהמספר `{_format_local_il_phone(target_for_otp)}` עצמו או לאמת את הקוד שיישלח אליו."
+                    if target_for_otp
+                    else "לא ניתן לבצע שינויים במנוי של אדם אחר או של ילד ללא אימות בעל המנוי המורשה."
+                )
+            )
+            send_whatsapp_message(sender_phone, own_only_msg, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", own_only_msg)
+            return {
+                "ok": True,
+                "reply": own_only_msg,
+                "type": "filtering_blocked_other_person_subscription",
+            }
+
+        # Step 0: Lookup customer protection system (1. KosherPlay -> 2. NetSpark -> 3. Ask Customer)
+        sub_rec = get_filtering_subscriber(sender_phone)
+        if not sub_rec or not sub_rec.get("system_name"):
+            lk_sys = lookup_customer_protection_system(sender_phone, customer_name)
+            if lk_sys.get("found"):
+                sub_rec = lk_sys.get("subscriber_record") or upsert_filtering_subscriber(
+                    sender_phone,
+                    customer_name=lk_sys.get("customer_name") or customer_name or "",
+                    system_name=lk_sys.get("system"),
+                    crm_client_id=lk_sys.get("crm_client_id") or "",
+                    current_level=lk_sys.get("current_level") or "",
+                )
+            elif flt_det.get("system_hint"):
+                # Customer explicitly named their system in the message (e.g. 'תפתח לי וייז בכשר פליי')
+                sub_rec = upsert_filtering_subscriber(
+                    sender_phone,
+                    customer_name=customer_name or "",
+                    system_name=flt_det["system_hint"],
+                    last_request_text=req_clean_txt,
+                )
+
+        # If not found in KosherPlay or NetSpark (and not specified), ask the customer!
+        if not sub_rec or not sub_rec.get("system_name"):
+            conn_new = sqlite3.connect(DB_PATH)
+            cur_new = conn_new.cursor()
+            cur_new.execute(
+                "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    sender_phone,
+                    "בירור מערכת הגנה",
+                    req_clean_txt,
+                    "לא נמצא בכשר פליי או בנטספרק — נשאל איזו הגנה יש לו ומה השם שמופיע בה",
+                    "",
+                    "awaiting_filter_system_and_name",
+                    datetime.now().isoformat(),
+                ),
+            )
+            conn_new.commit()
+            conn_new.close()
+
+            ask_sys_msg = (
+                "חיפשתי את המספר שלך במערכות *כשר פליי* ו*נטספרק* ולא איתרתי מנוי משויך למספר זה. 🔍\n"
+                "כדי שאוכל לבדוק ולטפל בבקשתך, *איזו הגנה קיימת לך היום במכשיר* (כשר פליי או נטספרק), ומה *השם המלא* שמופיע במנוי? 🛡️"
+            )
+            send_whatsapp_message(sender_phone, ask_sys_msg, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", ask_sys_msg)
+            return {
+                "ok": True,
+                "reply": ask_sys_msg,
+                "type": "asked_customer_protection_system_and_name",
+            }
+
+        sys_nm = sub_rec.get("system_name")
+        upsert_filtering_subscriber(sender_phone, last_request_text=req_clean_txt)
+
+        # Check if Eran previously marked this subscriber as unauthorized / child (-1)
+        if int(sub_rec.get("adult_approved_by_admin") or 0) == -1:
+            reject_msg = f"שלום, על פי הגדרות המנוי ב*{sys_nm}*, לא ניתן לבצע שינויים בהגדרות הסינון ממספר זה."
+            send_whatsapp_message(sender_phone, reject_msg, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", reject_msg)
+            return {"ok": True, "reply": reject_msg, "type": "filtering_unauthorized_subscriber"}
+
+        # Create request record
+        conn_f_new = sqlite3.connect(DB_PATH)
+        cur_f_new = conn_f_new.cursor()
+        cur_f_new.execute(
+            "INSERT INTO customer_requests (phone, system_name, request_text, action_taken, upsell_offer, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                sender_phone,
+                sys_nm,
+                req_clean_txt,
+                f"זוהתה הגנת {sys_nm}",
+                "",
+                "awaiting_filter_otp",
+                datetime.now().isoformat(),
+            ),
+        )
+        new_f_req_id = cur_f_new.lastrowid
+        conn_f_new.commit()
+        conn_f_new.close()
+
+        # Rule A2: If phone ownership OTP has not been verified yet, send 6-digit OTP first!
+        if int(sub_rec.get("otp_verified") or 0) != 1:
+            otp_code = generate_and_send_filtering_otp(sender_phone, raw_chat_id, system_name=sys_nm)
+            conn_u = sqlite3.connect(DB_PATH)
+            conn_u.execute(
+                "UPDATE customer_requests SET status='awaiting_filter_otp', action_taken=? WHERE id=?",
+                (f"נשלח קוד אימות OTP ({otp_code}) למנוי {sys_nm}", new_f_req_id),
+            )
+            conn_u.commit()
+            conn_u.close()
+            save_chat_message(sender_phone, "customer", message_text)
+            return {
+                "ok": True,
+                "reply": f"נשלח קוד אימות למספר {_format_local_il_phone(sender_phone)}",
+                "type": "filtering_otp_sent",
+                "system": sys_nm,
+                "otp_code": otp_code,
+            }
+
+        # Rule B & C: If OTP was already verified, check if one-time Admin Adult & Expiry approval is saved!
+        if int(sub_rec.get("adult_approved_by_admin") or 0) == 1 and sub_rec.get("service_expiry_date"):
+            return _process_verified_filtering_request(new_f_req_id, sub_rec, req_clean_txt)
+
+        # Otherwise ask Admin for one-time Adult + Free-Service Expiry Date approval
+        conn_u = sqlite3.connect(DB_PATH)
+        conn_u.execute(
+            "UPDATE customer_requests SET status='awaiting_admin_filter_verification', action_taken=? WHERE id=?",
+            ("אומת ב-OTP — ממתין לאישור חד-פעמי מערן (מבוגר + תאריך תום שנת שירות חינם)", new_f_req_id),
+        )
+        conn_u.commit()
+        conn_u.close()
+
+        wait_admin_msg = (
+            f"זיהיתי את המנוי שלך ב*{sys_nm}*. 🛡️\n"
+            f"מאחר שזו פנייתך הראשונה למערכת השירות האוטומטית, אני מבצע כעת אימות זכאות חד-פעמי מול ערן (שיישמר בזיכרון הקבוע להמשך) ומיד חוזר אליך לביצוע הבקשה!"
+        )
+        send_whatsapp_message(sender_phone, wait_admin_msg, raw_chat_id)
+        save_chat_message(sender_phone, "customer", message_text)
+        save_chat_message(sender_phone, "agent", wait_admin_msg)
+
+        cust_nm = sub_rec.get("customer_name") or customer_name or "לקוח"
+        crm_link = KOSHERPLAY_CRM_MODULES_URL_TEMPLATE.format(
+            query=urllib.parse.quote(_format_local_il_phone(sender_phone).replace("-", ""))
+        )
+        admin_verify_prompt = (
+            f"🛡️ *אימות חד-פעמי למנוי סינון ({sys_nm})* [#REQ-{new_f_req_id}]\n"
+            f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`) — *מאומת ב-OTP* ✅\n"
+            f"💬 *בקשת הלקוח:* \"{req_clean_txt}\"\n"
+            + (f"🔗 *חיפוש בכשר פליי:* {crm_link}\n\n" if "כשר" in sys_nm else "\n")
+            + "אשמח לאישורך החד-פעמי (יישמר בזיכרון הקבוע ולא אשאל שוב בעתיד):\n"
+            + "1️⃣ האם הלקוח *מבוגר ומורשה* לבצע שינויים במנוי שלו?\n"
+            + "2️⃣ *עד איזה תאריך* מגיע לו שירות ללא עלות (מתי מסתיימת השנה שלו)?\n\n"
+            + "💡 *למענה מהיר כתוב למשל:*\n"
+            + "• `מאושר עד 15/11/2027` (או `מאושר לשנה`)\n"
+            + "• `מאושר אבל פג תוקף` (אם השנה שלו כבר הסתיימה וצריך לחדש בתשלום)\n"
+            + "• `לא מאושר - ילד` (אם אינו מורשה)"
+        )
+        for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+            send_whatsapp_message(adm, admin_verify_prompt)
+
+        return {
+            "ok": True,
+            "reply": wait_admin_msg,
+            "type": "filtering_awaiting_onetime_admin_check",
+            "system": sys_nm,
+        }
+
 
     # 0.58 TIBER.CO.IL CELLULAR RECEPTION, ANTENNAS & PACKAGE PORTING FLOW (CONCISE STEP-BY-STEP FUNNEL)
     # States:
@@ -15109,6 +16810,70 @@ async def unified_whatsapp_webhook(req: Request):
             print(f"[Admin Escalation Notice]: {e_adm}")
 
     return {"ok": True, "reply": reply_text, "escalated": is_escalated, "model": used_model}
+
+
+
+@app.get("/api/kosherplay/inspect")
+async def api_kosherplay_inspect(q: str = ""):
+    """
+    Tests live connection to https://crm.kosherplay.com/modules/1,
+    returns discovered Aysko CRM endpoints, mapped protection window options,
+    and optional subscriber lookup result.
+    """
+    auth_info = authenticate_kosherplay_crm(force=False)
+    lookup_res = lookup_customer_protection_system(q, q) if q else None
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    subs = [dict(r) for r in conn.execute("SELECT * FROM filtering_subscribers ORDER BY updated_at DESC LIMIT 50").fetchall()]
+    conn.close()
+    return {
+        "ok": True,
+        "kosherplay_crm": auth_info,
+        "lookup_result": lookup_res,
+        "subscribers_count": len(subs),
+        "subscribers": subs,
+        "renewal_pricing": {
+            "kosherplay": FilteringBillingAdapter.get_annual_renewal_price_from_pos("כשר פליי"),
+            "netspark": FilteringBillingAdapter.get_annual_renewal_price_from_pos("נטספרק"),
+            "payment_mode": FILTERING_PAYMENT_MODE,
+        },
+    }
+
+
+@app.post("/api/filtering/payment-webhook")
+async def api_filtering_payment_webhook(request: Request):
+    """
+    Future-ready webhook endpoint for external payment website integration.
+    When Eran connects an online payment page, it can POST `{phone, system_name, amount, transaction_id}`
+    here to automatically extend `service_expiry_date` by +1 year without manual intervention!
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid_json"}, status_code=400)
+
+    phone = normalize_phone(str(body.get("phone") or ""))
+    if not phone:
+        return JSONResponse({"ok": False, "error": "missing_phone"}, status_code=400)
+
+    sys_nm = str(body.get("system_name") or "כשר פליי")
+    today_il = datetime.now(ZoneInfo("Asia/Jerusalem")).date()
+    new_exp = (today_il + timedelta(days=365)).strftime("%Y-%m-%d")
+    sub_rec = upsert_filtering_subscriber(
+        phone,
+        system_name=sys_nm,
+        payment_status="active",
+        service_expiry_date=new_exp,
+        notes=f"חודש אוטומטית באתר תשלומים ({body.get('transaction_id', 'webhook')})",
+    )
+    exp_fmt = FilteringBillingAdapter.format_date_il(new_exp)
+    msg = (
+        f"✅ *התשלום התקבל בהצלחה!* מנוי ה*{sys_nm}* שלך חודש לשנה נוספת (עד *{exp_fmt}*).\n"
+        f"ניתן כעת לשלוח כאן כל בקשת פתיחה או סגירה ונבצע אותה מיד! 😃"
+    )
+    send_whatsapp_message(phone, msg)
+    return {"ok": True, "phone": phone, "new_expiry_date": new_exp, "subscriber": sub_rec}
+
 
 # Catch-all for any incoming POST to any sub-path (to never miss a webhook)
 @app.post("/{full_path:path}")
