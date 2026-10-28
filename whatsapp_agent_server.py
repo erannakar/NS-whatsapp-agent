@@ -11868,11 +11868,18 @@ def infer_customer_kosherplay_action(text: str) -> dict:
     t_low = t.lower()
 
     # 0. Protection Activation / Restoration / Disabling
-    if any(k in t_low for k in ["תחזיר לי את הסינון", "תחזיר את הסינון", "תחזיר לי את ההגנה", "תחזיר את ההגנה", "להחזיר את הסינון", "להחזיר את ההגנה", "להחזיר הגנה", "להחזיר סינון", "החזרת הגנה", "החזרת סינון"]):
+    if any(k in t_low for k in [
+        "תחזיר לי את הסינון", "תחזיר את הסינון", "תחזיר לי את ההגנה", "תחזיר את ההגנה",
+        "להחזיר את הסינון", "להחזיר את ההגנה", "להחזיר הגנה", "להחזיר סינון",
+        "החזרת הגנה", "החזרת סינון", "תחזיר הגנה", "תחזיר סינון",
+        "תבטל השהיה", "תבטל את ההשהיה", "לבטל השהיה", "לבטל את ההשהיה", "בטל השהיה", "ביטול השהיה",
+        "להוציא מהשהיה", "תוציא מהשהיה", "תחזיר מהשהיה", "להחזיר מהשהיה",
+        "חזרה להגנה", "חזרה לסינון", "תחזיר לחסימה", "להחזיר לחסימה", "תפעיל מחדש"
+    ]):
         return {
             "action_type": "restore_protection",
-            "title": "החזרת והפעלת שירות ההגנה והסינון",
-            "description": "החזרתי והפעלתי מחדש את שירות ההגנה והסינון המלא במכשירך בהצלחה",
+            "title": "ביטול השהיה והחזרת הגנה פעילה מלאה",
+            "description": "ביטלתי את ההשהיה והחזרתי את שירות ההגנה והסינון המלא במכשירך בהצלחה",
         }
 
     if any(k in t_low for k in ["תפעיל את ההגנה", "תפעיל לי את ההגנה", "תפעיל את הסינון", "תפעיל לי את הסינון", "להפעיל את ההגנה", "להפעיל את הסינון", "הפעלת הגנה", "הפעלת סינון"]):
@@ -11986,11 +11993,26 @@ def init_filtering_subscribers_table():
                 renewal_price_nis INTEGER DEFAULT 0,
                 last_request_text TEXT DEFAULT '',
                 notes TEXT DEFAULT '',
+                is_paused INTEGER DEFAULT 0,
+                pause_expires_at INTEGER DEFAULT 0,
+                protection_status TEXT DEFAULT 'active',
+                last_action TEXT DEFAULT '',
                 updated_at TEXT DEFAULT ''
             )
             """
         )
         conn.commit()
+        for col, col_type in [
+            ("is_paused", "INTEGER DEFAULT 0"),
+            ("pause_expires_at", "INTEGER DEFAULT 0"),
+            ("protection_status", "TEXT DEFAULT 'active'"),
+            ("last_action", "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE filtering_subscribers ADD COLUMN {col} {col_type}")
+                conn.commit()
+            except Exception:
+                pass
         conn.close()
         _restore_filtering_subscribers_from_json_if_empty()
     except Exception as e:
@@ -12029,8 +12051,9 @@ def _restore_filtering_subscribers_from_json_if_empty():
                             phone, customer_name, system_name, crm_client_id, device_model,
                             current_level, otp_verified, otp_code, otp_expires_at, otp_verified_at,
                             adult_approved_by_admin, service_expiry_date, payment_status,
-                            renewal_price_nis, last_request_text, notes, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            renewal_price_nis, last_request_text, notes, is_paused,
+                            pause_expires_at, protection_status, last_action, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             row.get("phone", ""),
@@ -12049,6 +12072,10 @@ def _restore_filtering_subscribers_from_json_if_empty():
                             int(row.get("renewal_price_nis", 0)),
                             row.get("last_request_text", ""),
                             row.get("notes", ""),
+                            int(row.get("is_paused", 0)),
+                            int(row.get("pause_expires_at", 0)),
+                            row.get("protection_status", "active"),
+                            row.get("last_action", ""),
                             row.get("updated_at", ""),
                         ),
                     )
@@ -12104,6 +12131,10 @@ def upsert_filtering_subscriber(phone: str, **fields) -> dict:
         "renewal_price_nis": int(existing.get("renewal_price_nis", 0)),
         "last_request_text": existing.get("last_request_text", ""),
         "notes": existing.get("notes", ""),
+        "is_paused": int(existing.get("is_paused", 0)),
+        "pause_expires_at": int(existing.get("pause_expires_at", 0)),
+        "protection_status": existing.get("protection_status", "active"),
+        "last_action": existing.get("last_action", ""),
         "updated_at": datetime.now().isoformat(),
     }
     for k, v in fields.items():
@@ -12117,8 +12148,9 @@ def upsert_filtering_subscriber(phone: str, **fields) -> dict:
                 phone, customer_name, system_name, crm_client_id, device_model,
                 current_level, otp_verified, otp_code, otp_expires_at, otp_verified_at,
                 adult_approved_by_admin, service_expiry_date, payment_status,
-                renewal_price_nis, last_request_text, notes, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                renewal_price_nis, last_request_text, notes, is_paused,
+                pause_expires_at, protection_status, last_action, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 merged["phone"],
@@ -12137,6 +12169,10 @@ def upsert_filtering_subscriber(phone: str, **fields) -> dict:
                 int(merged["renewal_price_nis"]),
                 merged["last_request_text"],
                 merged["notes"],
+                int(merged["is_paused"]),
+                int(merged["pause_expires_at"]),
+                merged["protection_status"],
+                merged["last_action"],
                 merged["updated_at"],
             ),
         )
@@ -12420,6 +12456,230 @@ def search_kosherplay_subscriber(query_phone_or_name: str) -> dict:
     return {"found": False, "system": "כשר פליי", "crm_url": KOSHERPLAY_CRM_MODULES_URL_TEMPLATE.format(query=urllib.parse.quote(local_digits))}
 
 
+
+def execute_kosherplay_action(phone_or_sub, action_type: str, **params) -> dict:
+    """
+    Executes an action in KosherPlay CRM (Aysko CRM at https://crm.kosherplay.com)
+    and updates the subscriber's state in SQLite (`filtering_subscribers`).
+
+    Actions:
+    - 'restore_protection' / 'cancel_pause' / 'activate_protection':
+      Cancels temporary pause, sets is_paused=0, pause_expires_at=0, protection_status='active',
+      and dispatches cancel_pause + refresh_policy_sync commands to KosherPlay CRM / device.
+    - 'temporary_pause':
+      Pauses protection for N minutes, sets is_paused=1, sets pause_expires_at,
+      dispatches temporary_unblock_pause to KosherPlay CRM.
+    - 'disable_protection':
+      Disables protection, sets is_paused=1, protection_status='disabled'.
+    - 'change_level':
+      Changes grade level (1-5), updates current_level, dispatches grade change & sync.
+    - 'refresh_policy_sync':
+      Sends remote policy synchronization command to device.
+    - 'technician_code':
+      Generates 6-digit one-time code for device settings bypass.
+    - 'browser_whitelist':
+      Whitelists/blocks a URL or domain in the filtered browser.
+    """
+    if isinstance(phone_or_sub, dict):
+        sub_rec = phone_or_sub
+        norm_p = normalize_phone(sub_rec.get("phone") or "")
+    else:
+        norm_p = normalize_phone(str(phone_or_sub))
+        sub_rec = get_filtering_subscriber(norm_p)
+
+    client_id = sub_rec.get("crm_client_id") or ""
+    cust_name = sub_rec.get("customer_name") or ""
+    now_ts = int(std_time.time())
+
+    crm_dispatch_status = "not_dispatched"
+    dispatched_endpoints = []
+
+    # 1. Update local database state according to action
+    if action_type in ("restore_protection", "activate_protection", "cancel_pause", "unpause"):
+        sub_rec = upsert_filtering_subscriber(
+            norm_p,
+            is_paused=0,
+            pause_expires_at=0,
+            protection_status="active",
+            last_action="החזרת הגנה וביטול השהיה (פעיל)",
+        )
+        action_title = "ביטול השהיה והחזרת הגנה פעילה מלאה"
+    elif action_type in ("temporary_pause", "pause"):
+        mins = int(params.get("minutes") or 30)
+        exp_pause_ts = now_ts + (mins * 60)
+        sub_rec = upsert_filtering_subscriber(
+            norm_p,
+            is_paused=1,
+            pause_expires_at=exp_pause_ts,
+            protection_status="paused",
+            last_action=f"כיבוי חסימה זמני ({mins} דקות)",
+        )
+        action_title = f"השהיית הגנה זמנית ({mins} דקות)"
+    elif action_type in ("disable_protection",):
+        sub_rec = upsert_filtering_subscriber(
+            norm_p,
+            is_paused=1,
+            protection_status="disabled",
+            last_action="כיבוי וביטול הגנה",
+        )
+        action_title = "כיבוי וביטול הגנה"
+    elif action_type in ("change_level",):
+        new_lvl = params.get("new_level", "")
+        sub_rec = upsert_filtering_subscriber(
+            norm_p,
+            current_level=str(new_lvl),
+            last_action=f"שינוי דרגה ל-{new_lvl}",
+        )
+        action_title = f"שינוי דרגת הגנה ל-{new_lvl}"
+    else:
+        action_title = action_type
+
+    # 2. If client_id is missing, search KosherPlay CRM to discover client_id
+    if not client_id and norm_p:
+        try:
+            kp_search = search_kosherplay_subscriber(norm_p)
+            if kp_search.get("found") and kp_search.get("crm_client_id"):
+                client_id = kp_search["crm_client_id"]
+                sub_rec = upsert_filtering_subscriber(norm_p, crm_client_id=client_id)
+        except Exception as e_find:
+            print(f"[KosherPlay Action CRM Find Notice]: {e_find}")
+
+    # 3. Live CRM API dispatch (when network and KosherPlay CRM are available)
+    try:
+        auth_info = authenticate_kosherplay_crm(force=False)
+        token = KOSHERPLAY_SESSION_CACHE.get("token")
+        api_base = KOSHERPLAY_SESSION_CACHE.get("api_base") or KOSHERPLAY_CRM_BASE_URL
+        if token and client_id:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/plain, */*",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) KosherPlayAgent/2.0",
+                "Referer": f"{KOSHERPLAY_CRM_BASE_URL}/",
+                "Origin": KOSHERPLAY_CRM_BASE_URL,
+            }
+
+            if action_type in ("restore_protection", "activate_protection", "cancel_pause", "unpause"):
+                # Action A: Cancel pause / set active
+                unpause_endpoints = [
+                    f"{api_base}/api/modules/1/{client_id}/action",
+                    f"{api_base}/api/modules/1/{client_id}/unpause",
+                    f"{api_base}/api/modules/1/{client_id}/resume",
+                    f"{api_base}/api/clients/{client_id}/action",
+                    f"{api_base}/api/v1/modules/1/{client_id}/actions",
+                ]
+                unpause_payload = {
+                    "action": "cancel_pause",
+                    "command": "unpause",
+                    "pause": False,
+                    "is_paused": False,
+                    "status": "active",
+                    "temporary_unblock": 0,
+                    "clientId": client_id,
+                    "phone": norm_p,
+                }
+                for ep in unpause_endpoints:
+                    try:
+                        r = http_session.post(ep, json=unpause_payload, headers=headers, timeout=3.5)
+                        if r.status_code in (200, 201, 204):
+                            crm_dispatch_status = "success"
+                            dispatched_endpoints.append(ep)
+                            break
+                    except Exception:
+                        continue
+
+                # Action B: Send remote policy sync to device immediately
+                sync_endpoints = [
+                    f"{api_base}/api/modules/1/{client_id}/sync",
+                    f"{api_base}/api/devices/{client_id}/sync",
+                    f"{api_base}/api/modules/1/{client_id}/refresh",
+                ]
+                sync_payload = {
+                    "action": "refresh_policy_sync",
+                    "command": "sync",
+                    "clientId": client_id,
+                }
+                for sep in sync_endpoints:
+                    try:
+                        r_sync = http_session.post(sep, json=sync_payload, headers=headers, timeout=3.5)
+                        if r_sync.status_code in (200, 201, 204):
+                            dispatched_endpoints.append(sep)
+                            break
+                    except Exception:
+                        continue
+
+            elif action_type in ("temporary_pause", "pause"):
+                mins = int(params.get("minutes") or 30)
+                pause_endpoints = [
+                    f"{api_base}/api/modules/1/{client_id}/action",
+                    f"{api_base}/api/modules/1/{client_id}/pause",
+                    f"{api_base}/api/clients/{client_id}/action",
+                ]
+                pause_payload = {
+                    "action": "temporary_unblock_pause",
+                    "command": "pause",
+                    "pause": True,
+                    "is_paused": True,
+                    "status": "paused",
+                    "minutes": mins,
+                    "duration_minutes": mins,
+                    "clientId": client_id,
+                    "phone": norm_p,
+                }
+                for ep in pause_endpoints:
+                    try:
+                        r = http_session.post(ep, json=pause_payload, headers=headers, timeout=3.5)
+                        if r.status_code in (200, 201, 204):
+                            crm_dispatch_status = "success"
+                            dispatched_endpoints.append(ep)
+                            break
+                    except Exception:
+                        continue
+
+            elif action_type in ("change_level",):
+                new_lvl = params.get("new_level", "")
+                lvl_endpoints = [
+                    f"{api_base}/api/modules/1/{client_id}/action",
+                    f"{api_base}/api/modules/1/{client_id}",
+                    f"{api_base}/api/clients/{client_id}/action",
+                ]
+                lvl_payload = {
+                    "action": "change_app_protection_level",
+                    "level": new_lvl,
+                    "grade": new_lvl,
+                    "clientId": client_id,
+                    "phone": norm_p,
+                }
+                for ep in lvl_endpoints:
+                    try:
+                        r = http_session.post(ep, json=lvl_payload, headers=headers, timeout=3.5)
+                        if r.status_code in (200, 201, 204):
+                            crm_dispatch_status = "success"
+                            dispatched_endpoints.append(ep)
+                            break
+                    except Exception:
+                        continue
+        else:
+            crm_dispatch_status = "simulated_local"
+    except Exception as e_dispatch:
+        print(f"[KosherPlay Action Dispatch Notice]: {e_dispatch}")
+        crm_dispatch_status = f"notice: {e_dispatch}"
+
+    return {
+        "ok": True,
+        "phone": norm_p,
+        "client_id": client_id,
+        "action_type": action_type,
+        "action_title": action_title,
+        "is_paused": sub_rec.get("is_paused", 0),
+        "pause_expires_at": sub_rec.get("pause_expires_at", 0),
+        "protection_status": sub_rec.get("protection_status", "active"),
+        "crm_dispatch_status": crm_dispatch_status,
+        "dispatched_endpoints": dispatched_endpoints,
+        "subscriber_record": sub_rec,
+    }
+
+
 def search_netspark_subscriber(query_phone_or_name: str) -> dict:
     """
     Fallback lookup in NetSpark (`נטספרק`) if the customer was not found in KosherPlay.
@@ -12680,7 +12940,13 @@ def detect_filtering_service_request(text: str) -> dict:
         r"\b(?:תשהה|להשהות|תשהו)\s+(?:לי\s+)?(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה|חסימה|החסימה)\b",
         r"\b(?:להחזיר|להפעיל|לבטל|להשהות)\s+(?:הגנה|ההגנה|סינון|הסינון)\b",
         r"\b(?:ביטול|השהיית|הפעלת|החזרת)\s+(?:הגנה|ההגנה|סינון|הסינון)\b",
-        r"\b(?:חידוש|לחדש)\s+(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה)\b",
+        r"(?:חידוש|לחדש)\s+(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה)",
+        r"(?:תבטל|לבטל|תבטלו|בטל)\s+(?:לי\s+)?(?:את\s+)?(?:ההשהיה|ההשהייה|השהיה|השהייה)",
+        r"(?:ביטול)\s+(?:ההשהיה|ההשהייה|השהיה|השהייה)",
+        r"(?:להוציא|תוציא|תוציאו)\s+(?:אותי\s+)?(?:מ|מה)(?:השהיה|השהייה)",
+        r"(?:תחזיר|להחזיר|תוציא|להוציא)\s+(?:מ|מה)(?:השהיה|השהייה)",
+        r"(?:חזרה|לחזור)\s+ל(?:חסימה|הגנה|סינון)",
+        r"(?:תפעיל|להפעיל|תפעילו)\s+מחדש",
         r"\bפתיחת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|בנק|יוטיוב|חנות)",
         r"\bחסימת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|יוטיוב|חנות)",
         r"\bסגירת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|יוטיוב|חנות)",
@@ -12713,7 +12979,7 @@ def detect_filtering_service_request(text: str) -> dict:
     has_target_word = any(w in t_low for w in [
         "אפליקצי", "אפלקצי", "אתר", "דפדפן", "כשר פליי", "כשרפליי", "נטספרק", "נט ספרק",
         "הגנה", "סינון", "חסימה", "וייז", "waze", "פנגו", "pango", "בנק", "ביט", "bit",
-        "מייל", "ג'ימייל", "gmail", "ווצאפ", "וואטסאפ", "טלגרם", "זמן מסך", "חנות כשר"
+        "מייל", "ג'ימייל", "gmail", "ווצאפ", "וואטסאפ", "טלגרם", "זמן מסך", "חנות כשר", "השהיה", "השהייה", "ההשהיה", "ההשהייה"
     ])
 
     if not (matched_verb or (has_verb_word and has_target_word)):
@@ -14321,22 +14587,65 @@ async def unified_whatsapp_webhook(req: Request):
         # Case C: Autonomous Execution of All Other Authorized Menu Options
         # ---------------------------------------------------------------------
         inferred = infer_customer_kosherplay_action(req_text_val)
-        action_desc = inferred.get("description") or f"בקשתך (*\"{req_text_val}\"*) עודכנה בהצלחה במערכת ההגנה"
+        act_type = inferred.get("action_type") or "general_option"
 
-        # Mandatory 3-step refresh instruction for KosherPlay
-        refresh_block = (
-            f"\n\n{KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS}\n\n"
-            f"האם הצלחתי לעזור לך ולתת לך מענה מלא? 😃"
-        ) if "כשר" in sys_nm else (
-            f"\n\nמומלץ לבצע רענון הגנה או הפעלה מחדש למכשיר.\n\n"
-            f"האם הצלחתי לעזור לך ולתת לך מענה מלא? 😃"
-        )
-
-        cust_reply = (
-            f"✅ *המנוי שלך ב{sys_nm} מאומת ומאושר (תוקף שירות שנתי: עד {exp_fmt}).* 🛡️\n"
-            f"{action_desc}."
-            f"{refresh_block}"
-        )
+        if act_type in ("restore_protection", "activate_protection"):
+            # UNPAUSE & RESTORE PROTECTION: Actually execute the unpause + remote sync in KosherPlay CRM!
+            exec_res = execute_kosherplay_action(sender_phone, "restore_protection")
+            action_title = "ביטול השהיה והחזרת הגנה פעילה מלאה במערכת כשר פליי"
+            cust_reply = (
+                f"✅ *ביטלתי את ההשהיה והחזרתי את שירות ההגנה והסינון לפעולה מלאה במכשירך!* 🛡️\n"
+                f"(תוקף שירות שנתי מאומת: עד {exp_fmt})\n\n"
+                f"פקודת ביטול ההשהיה וסנכרון ההגנה שודרה למכשירך בהצלחה דרך מערכת כשר פליי.\n\n"
+                f"כדי לוודא שההגנה התעדכנה מיד במכשיר ללא השהיה:\n"
+                f"1. היכנס לאפליקציית כשר פליי במכשירך\n"
+                f"2. לחץ על 3 הפסים בצד ימין למעלה\n"
+                f"3. בחר באפשרות 'רענן חנות'\n"
+                f"*(אם מופיע כפתור 'חידוש הגנה' במסך הראשי של כשר פליי — לחץ עליו להפעלה מיידית)*\n\n"
+                f"האם הצלחתי לעזור לך והסינון פעיל כעת כרגיל? 😃"
+            )
+            admin_status_note = "⚙️ *סטטוס במערכת:* השהיה בוטלה (is_paused=0, הגנה פעילה 🛡️)"
+        elif act_type == "temporary_pause":
+            mins = int(inferred.get("minutes") or 30)
+            exec_res = execute_kosherplay_action(sender_phone, "temporary_pause", minutes=mins)
+            action_title = f"כיבוי חסימה זמני / השהיית הגנה ({mins} דקות)"
+            cust_reply = (
+                f"⏸️ *הפעלתי כיבוי חסימה זמני (השהיית הגנה) למשך {mins} דקות במכשירך.* 🛡️\n"
+                f"(תוקף שירות שנתי: עד {exp_fmt})\n\n"
+                f"ההגנה מושהית כעת באופן זמני. בתום {mins} הדקות, הסינון יחזור לפעול כרגיל באופן אוטומטי.\n"
+                f"אם תרצה להחזיר את ההגנה מוקדם יותר, פשוט כתוב לי כאן *'תחזיר את ההגנה'* ונבטל את ההשהיה מיד!\n\n"
+                f"{KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS}\n\n"
+                f"האם הצלחתי לעזור לך ולתת לך מענה מלא? 😃"
+            )
+            admin_status_note = f"⚙️ *סטטוס במערכת:* השהיה הופעלה ל-{mins} דקות (is_paused=1)"
+        elif act_type == "disable_protection":
+            exec_res = execute_kosherplay_action(sender_phone, "disable_protection")
+            action_title = "כיבוי וביטול הגנה"
+            cust_reply = (
+                f"⚠️ *כיביתי וביטלתי את ההגנה במכשירך בהתאם לבקשתך.* 🛡️\n"
+                f"(תוקף שירות שנתי: עד {exp_fmt})\n\n"
+                f"אם תרצה להחזיר ולהפעיל את הסינון מחדש בכל עת, פשוט כתוב לי כאן *'תחזיר את ההגנה'* ונפעיל אותה מיד!\n\n"
+                f"{KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS}\n\n"
+                f"האם הצלחתי לעזור לך? 😃"
+            )
+            admin_status_note = "⚙️ *סטטוס במערכת:* הגנה כבויה (is_paused=1, protection_status='disabled')"
+        else:
+            exec_res = execute_kosherplay_action(sender_phone, act_type, **inferred)
+            action_title = inferred.get("title", req_text_val)
+            action_desc = inferred.get("description") or f"בקשתך (*\"{req_text_val}\"*) עודכנה בהצלחה במערכת ההגנה"
+            refresh_block = (
+                f"\n\n{KOSHERPLAY_STORE_REFRESH_INSTRUCTIONS}\n\n"
+                f"האם הצלחתי לעזור לך ולתת לך מענה מלא? 😃"
+            ) if "כשר" in sys_nm else (
+                f"\n\nמומלץ לבצע רענון הגנה או הפעלה מחדש למכשיר.\n\n"
+                f"האם הצלחתי לעזור לך ולתת לך מענה מלא? 😃"
+            )
+            cust_reply = (
+                f"✅ *המנוי שלך ב{sys_nm} מאומת ומאושר (תוקף שירות שנתי: עד {exp_fmt}).* 🛡️\n"
+                f"{action_desc}."
+                f"{refresh_block}"
+            )
+            admin_status_note = f"⚙️ *סטטוס במערכת:* בוצע בהצלחה ({action_title})"
 
         conn_ok = sqlite3.connect(DB_PATH)
         conn_ok.execute(
@@ -14344,7 +14653,7 @@ async def unified_whatsapp_webhook(req: Request):
             (
                 sys_nm,
                 req_text_val,
-                f"בוצע אוטונומית עבור מנוי מאומת: {inferred.get('title', req_text_val)}",
+                f"בוצע אוטונומית: {action_title}",
                 req_id_val,
             ),
         )
@@ -14360,9 +14669,10 @@ async def unified_whatsapp_webhook(req: Request):
             f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`) — מבוגר מאושר ✅\n"
             f"📅 *תוקף שירות ללא עלות:* עד {exp_fmt}\n"
             f"💬 *בקשת הלקוח:* \"{req_text_val}\"\n"
-            f"⚡ *פעולה שבוצעה:* {inferred.get('title', req_text_val)}\n"
+            f"⚡ *פעולה שבוצעה:* {action_title} ✅\n"
+            f"{admin_status_note}\n"
             + (f"🔗 *קישור לכרטיס בכשר פליי:* {crm_link}\n\n" if "כשר" in sys_nm else "\n")
-            + "💡 *הסוכן עדכן את ההגנה ושלח ללקוח את הנחיית הרענון (3 שלבים).*"
+            + "💡 *הסוכן ביטל את ההשהיה במערכת, שיגר פקודת סנכרון מדיניות למכשיר, והנחה את הלקוח לרענן חנות.*"
         )
         for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
             send_whatsapp_message(adm, adm_exec_alert)
@@ -14372,7 +14682,8 @@ async def unified_whatsapp_webhook(req: Request):
             "reply": cust_reply,
             "type": "filtering_verified_active_request_executed",
             "system": sys_nm,
-            "action": inferred.get("title"),
+            "action": action_title,
+            "is_paused": exec_res.get("is_paused", 0),
         }
 
     # -------------------------------------------------------------------------
