@@ -13129,13 +13129,14 @@ def authenticate_kosherplay_crm(force: bool = False) -> dict:
             candidate_targets.append((db_u, {}))
 
     for std_b, extra_h in [
-        (f"{KOSHERPLAY_CRM_BASE_URL}/api", {}),
-        ("https://kosherplay.aysko.net/api", {}),
-        ("https://crm.aysko.net/api", {}),
-        ("https://kosherplay.aysko.com/api", {}),
+        (f"{KOSHERPLAY_CRM_BASE_URL}/api", {"Host": "crm.kosherplay.com", "Origin": KOSHERPLAY_CRM_BASE_URL}),
+        ("https://kosherplay.aysko.net/api", {"Origin": KOSHERPLAY_CRM_BASE_URL}),
+        ("https://crm.aysko.net/api", {"Origin": KOSHERPLAY_CRM_BASE_URL}),
+        ("https://kosherplay.aysko.com/api", {"Origin": KOSHERPLAY_CRM_BASE_URL}),
         (
             "https://aysko.net/api",
             {
+                "Host": "crm.kosherplay.com",
                 "X-Forwarded-Host": "crm.kosherplay.com",
                 "x-tenant": "kosherplay",
                 "tenant": "kosherplay",
@@ -13143,6 +13144,15 @@ def authenticate_kosherplay_crm(force: bool = False) -> dict:
                 "subDomain": "kosherplay",
                 "subdomain": "kosherplay",
                 "client": "kosherplay",
+                "Origin": KOSHERPLAY_CRM_BASE_URL,
+            },
+        ),
+        (
+            "https://aysko.net/api",
+            {
+                "Host": "kosherplay.aysko.net",
+                "X-Forwarded-Host": "kosherplay.aysko.net",
+                "Origin": KOSHERPLAY_CRM_BASE_URL,
             },
         ),
     ]:
@@ -13257,7 +13267,9 @@ def search_kosherplay_subscriber(query_phone_or_name: str, require_live_crm: boo
     if not q_raw:
         return {"found": False, "system": "כשר פליי"}
 
-    norm_p = normalize_phone(q_raw)
+    # Strip any accidental Hebrew letters or non-digits (e.g. "0553164770ש")
+    clean_digits = re.sub(r"\D", "", q_raw)
+    norm_p = normalize_phone(clean_digits if clean_digits else q_raw)
     local_digits = ("0" + norm_p[3:]) if (norm_p.startswith("972") and len(norm_p) >= 11) else q_raw
     formatted_hyphen = _format_local_il_phone(norm_p)
     short_9 = norm_p[-9:] if len(norm_p) >= 9 else re.sub(r"\D", "", q_raw)[-9:]
@@ -15744,21 +15756,35 @@ async def unified_whatsapp_webhook(req: Request):
         act_type = inferred.get("action_type") or "general_option"
 
         if act_type in ("restore_protection", "activate_protection"):
-            # UNPAUSE & RESTORE PROTECTION: Actually execute the unpause + remote sync in KosherPlay CRM!
             exec_res = execute_kosherplay_action(sender_phone, "restore_protection")
-            action_title = "ביטול השהיה והחזרת הגנה פעילה מלאה במערכת כשר פליי"
-            cust_reply = (
-                f"✅ *ביטלתי את ההשהיה והחזרתי את שירות ההגנה והסינון לפעולה מלאה במכשירך!* 🛡️\n"
-                f"(תוקף שירות שנתי מאומת: עד {exp_fmt})\n\n"
-                f"פקודת ביטול ההשהיה וסנכרון ההגנה שודרה למכשירך בהצלחה דרך מערכת כשר פליי.\n\n"
-                f"כדי לוודא שההגנה התעדכנה מיד במכשיר ללא השהיה:\n"
-                f"1. היכנס לאפליקציית כשר פליי במכשירך\n"
-                f"2. לחץ על 3 הפסים בצד ימין למעלה\n"
-                f"3. בחר באפשרות 'רענן חנות'\n"
-                f"*(אם מופיע כפתור 'חידוש הגנה' במסך הראשי של כשר פליי — לחץ עליו להפעלה מיידית)*\n\n"
-                f"האם הצלחתי לעזור לך והסינון פעיל כעת כרגיל? 😃"
-            )
-            admin_status_note = "⚙️ *סטטוס במערכת:* השהיה בוטלה (is_paused=0, הגנה פעילה 🛡️)"
+            crm_st_exec = exec_res.get("crm_dispatch_status") or "not_dispatched"
+            if crm_st_exec == "success":
+                action_title = "ביטול השהיה והחזרת הגנה פעילה מלאה (סטטוס המשתמש שונה ל'פעיל' ונשמר בשרת)"
+                cust_reply = (
+                    f"✅ *ביטלתי את ההשהיה והחזרתי את שירות ההגנה והסינון לפעולה מלאה במכשירך!* 🛡️\n"
+                    f"(תוקף שירות שנתי מאומת: עד {exp_fmt})\n\n"
+                    f"סטטוס המשתמש שונה ל'פעיל' ופקודת סנכרון ההגנה שודרה למכשירך בהצלחה דרך מערכת כשר פליי.\n\n"
+                    f"כדי לוודא שההגנה התעדכנה מיד במכשיר ללא השהיה:\n"
+                    f"1. היכנס לאפליקציית כשר פליי במכשירך\n"
+                    f"2. לחץ על 3 הפסים בצד ימין למעלה\n"
+                    f"3. בחר באפשרות 'רענן חנות'\n"
+                    f"*(אם מופיע כפתור 'חידוש הגנה' במסך הראשי של כשר פליי — לחץ עליו להפעלה מיידית)*\n\n"
+                    f"האם הצלחתי לעזור לך והסינון פעיל כעת כרגיל? 😃"
+                )
+                admin_status_note = "⚙️ *סטטוס במערכת:* סטטוס המשתמש שונה ל'פעיל' ונשמר בשרת (is_paused=0, הגנה פעילה 🛡️)"
+            else:
+                action_title = "בקשת החזרת הגנה נקלטה (ממתין לשמירה בשרת כשר פליי)"
+                cust_reply = (
+                    f"בקשתך לביטול ההשהיה והחזרת ההגנה נקלטה בהצלחה! 🛡️\n"
+                    f"(תוקף שירות שנתי מאומת: עד {exp_fmt})\n\n"
+                    f"אנו מעדכנים כעת את סטטוס המנוי מול שרת כשר פליי.\n"
+                    f"כדי לעדכן את המכשיר:\n"
+                    f"1. היכנס לאפליקציית כשר פליי\n"
+                    f"2. לחץ על 3 הפסים בצד ימין למעלה\n"
+                    f"3. בחר 'רענן חנות' (או לחץ 'חידוש הגנה' במסך הראשי)\n\n"
+                    f"האם הצלחתי לעזור לך ולתת מענה? 😃"
+                )
+                admin_status_note = f"⚙️ *סטטוס במערכת:* ממתין לשמירה סופית בשרת כשר פליי ({crm_st_exec})"
         elif act_type == "temporary_pause":
             mins = int(inferred.get("minutes") or 30)
             exec_res = execute_kosherplay_action(sender_phone, "temporary_pause", minutes=mins)
