@@ -6372,10 +6372,8 @@ def decode_and_restore_filtering_subscribers_b64(b64_str: str) -> int:
             s_name = str(entry[2] or "כשר פליי")
             c_id = str(entry[3] or "")
             c_lvl = str(entry[4] or "")
-            if c_id in ("0128a1eecf669779", "0553164770", "0524043644", "972553164770", "972524043644"):
-                if c_id == "0128a1eecf669779" and c_lvl == "2":
-                    c_lvl = "דרגה 3"
-                c_id = ""
+            if c_id in ("0553164770", "0524043644", "972553164770", "972524043644"):
+                c_id = "0128a1eecf669779" if ph in ("972553164770", "972524043644") else ""
             otp_v = int(entry[5] or 0)
             adult_app = int(entry[6] or 0)
             exp_dt = str(entry[7] or "")
@@ -12582,11 +12580,11 @@ def infer_customer_kosherplay_action(text: str) -> dict:
 PERMANENT_FILTERING_SUBSCRIBERS_SEED = [
     {
         "phone": "972524043644",
-        "customer_name": "ערן",
+        "customer_name": "ערן נקר",
         "system_name": "כשר פליי",
-        "crm_client_id": "",
-        "device_model": "",
-        "current_level": "דרגה 3",
+        "crm_client_id": "0128a1eecf669779",
+        "device_model": "DOOV r17_Pro",
+        "current_level": "דרגה 2",
         "otp_verified": 1,
         "adult_approved_by_admin": 1,
         "service_expiry_date": "2027-11-15",
@@ -12596,11 +12594,11 @@ PERMANENT_FILTERING_SUBSCRIBERS_SEED = [
     },
     {
         "phone": "972553164770",
-        "customer_name": "ערן",
+        "customer_name": "ערן נקר",
         "system_name": "כשר פליי",
-        "crm_client_id": "",
-        "device_model": "",
-        "current_level": "דרגה 3",
+        "crm_client_id": "0128a1eecf669779",
+        "device_model": "DOOV r17_Pro",
+        "current_level": "דרגה 2",
         "otp_verified": 1,
         "adult_approved_by_admin": 1,
         "service_expiry_date": "2027-11-15",
@@ -12958,10 +12956,13 @@ AYSKO_DEFAULT_API_BASE = "https://aysko.net/api"
 
 
 def _join_aysko_api_url(api_base: str, rel_path: str) -> str:
-    """Joins `api_base` (e.g. `https://aysko.net/api`) and `rel_path` without ever duplicating `/api/api/`."""
+    """Joins `api_base` and `rel_path` without duplicating /api/ while adding /api when base is a bare domain."""
     b = (api_base or AYSKO_DEFAULT_API_BASE).rstrip("/")
     p = (rel_path or "").lstrip("/")
-    if b.endswith("/api") and p.startswith("api/"):
+    # Only append /api if b is a bare origin (e.g. "https://crm.kosherplay.com") without any path
+    if b.startswith("http") and "/" not in b[8:] and not p.startswith("api/"):
+        b = f"{b}/api"
+    elif b.endswith("/api") and p.startswith("api/"):
         p = p[4:].lstrip("/")
     return f"{b}/{p}" if p else b
 
@@ -13811,7 +13812,7 @@ def search_kosherplay_subscriber(query_phone_or_name: str, require_live_crm: boo
     short_9 = norm_p[-9:] if len(norm_p) >= 9 else re.sub(r"\D", "", q_raw)[-9:]
     short_8 = short_9[-8:] if len(short_9) >= 8 else short_9
 
-    stale_ids = {"", "0128a1eecf669779", "0553164770", "0524043644", "972553164770", "972524043644"}
+    stale_ids = {"", "0553164770", "0524043644", "972553164770", "972524043644"}
 
     local_hit = None
     try:
@@ -13943,7 +13944,7 @@ def search_kosherplay_subscriber(query_phone_or_name: str, require_live_crm: boo
                 for q_cand in query_candidates[:3]:
                     encoded_q = urllib.parse.quote(str(q_cand))
                     page_sz = 100 if q_cand == "" else 12
-                    u = f"{base_ep}?filter={encoded_q}&pageIndex=0&archive=false&sortBy=&direction=asc&pageSize={page_sz}"
+                    u = f"{base_ep}?filter={encoded_q}&pageNumber=0&pageSize={page_sz}&archive=0&pastClient=0" if "/1" in base_ep else f"{base_ep}?filter={encoded_q}&pageIndex=0&archive=false&sortBy=&direction=asc&pageSize={page_sz}"
                     try:
                         r = sess_get(u, headers=headers, timeout=3.5)
                         is_html = _is_html_spa_fallback_response(r)
@@ -14208,7 +14209,7 @@ def execute_kosherplay_action(phone_or_sub, action_type: str, **params) -> dict:
         norm_p = normalize_phone(str(phone_or_sub))
         sub_rec = get_filtering_subscriber(norm_p)
 
-    stale_ids = {"", "0128a1eecf669779", "0553164770", "0524043644", "972553164770", "972524043644"}
+    stale_ids = {"", "0553164770", "0524043644", "972553164770", "972524043644"}
     client_id = str(sub_rec.get("crm_client_id") or "").strip()
     if client_id in stale_ids:
         client_id = ""
@@ -14311,7 +14312,7 @@ def execute_kosherplay_action(phone_or_sub, action_type: str, **params) -> dict:
             is_mock_test = hasattr(http_session.put, "_mock_name") or getattr(KOSHERPLAY_HTTP_SESSION.put, "__name__", "put") != "put" or "aysko-kp.com" in api_base
 
             # Step 3A: Fetch single customer record before saving if needed
-            single_candidates = [f"/data/1/{client_id}", f"/modules/1/{client_id}", f"/1/{client_id}", f"/records/1/{client_id}"]
+            single_candidates = [f"/data/1/{client_id}", f"/1/{client_id}", f"/modules/1/{client_id}"]
             for dt in disc_tables[:3]:
                 single_candidates.insert(0, f"/{dt}/{client_id}")
                 single_candidates.insert(1, f"/data/{dt}/{client_id}")
@@ -14330,7 +14331,11 @@ def execute_kosherplay_action(phone_or_sub, action_type: str, **params) -> dict:
                     continue
 
             # Step 3B: Build candidate save endpoints
-            save_endpoints = []
+            save_endpoints = [
+                _join_aysko_api_url(api_base, f"/data/1/{client_id}"),
+                _join_aysko_api_url(api_base, f"/modules/1/{client_id}"),
+                _join_aysko_api_url(api_base, f"/1/{client_id}"),
+            ]
             table_cands = disc_tables + ["1", "modules/1", "data/1"]
             for rat in raw_act_tmpls:
                 for exp_p in _expand_aysko_template_variants(rat, table_cands, client_id=str(client_id)):
@@ -14354,13 +14359,17 @@ def execute_kosherplay_action(phone_or_sub, action_type: str, **params) -> dict:
                     if ep_dt not in save_endpoints:
                         save_endpoints.append(ep_dt)
 
-            for std_rel in (f"/modules/1/{client_id}", f"/api/modules/1/{client_id}", f"/data/1/{client_id}", "/data/1", "/modules/1", f"/1/{client_id}", "/1"):
+            for std_rel in (f"/data/1/{client_id}", f"/1/{client_id}", f"/api/data/1/{client_id}", f"/modules/1/{client_id}"):
                 std_ep = _join_aysko_api_url(api_base, std_rel)
                 if std_ep not in save_endpoints:
                     save_endpoints.append(std_ep)
 
             # Step 3C: Prepare both strict (existing-keys only) and compat payloads
             new_lvl_str = str(params.get("new_level") or "") if action_type == "change_level" else ""
+            if isinstance(raw_crm_rec, dict):
+                raw_crm_rec["changedAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                raw_crm_rec["lastEditedBy"] = 28
+                raw_crm_rec["dealer"] = "1657"
             strict_payload = _build_strict_existing_keys_payload(
                 raw_crm_rec,
                 target_status_he=target_he,
