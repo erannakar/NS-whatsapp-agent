@@ -12265,6 +12265,68 @@ def detect_kosherplay_categories_inquiry(text: str) -> bool:
     return any(ind in t_low for ind in inquiry_indicators)
 
 
+def detect_kosherplay_subscriber_info_inquiry(text: str) -> dict:
+    """
+    Detects customer inquiries asking about their KosherPlay subscription / CRM card details:
+    - Record / Client ID: "מה מספר המזהה שלי", "מספר מזהה", "איזה מזהה", "קוד מנוי", "מספר מנוי"
+    - Device Model: "איזה מכשיר כתוב שם שיש לי", "איזה מכשיר", "מה המכשיר שלי", "איזה דגם", "דגם מכשיר"
+    - Filter Level / Grade: "מה רמת החסימה שלי", "רמת חסימה", "איזה דרגה יש לי", "מה הדרגה שלי", "רמת הסינון"
+    - User Status: "מה הסטטוס שלי", "סטטוס המשתמש", "האם המנוי פעיל", "האם בהשהיה"
+    - General Info: "מה הפרטים שלי", "פרטי מנוי", "מה כתוב שם", "מה כתוב עליי"
+    """
+    t = text.strip().lower()
+
+    # If the user is giving a direct mutation command, don't treat it as a read-only inquiry:
+    action_verbs = [
+        "תשנה", "לשנות", "תוריד", "להוריד", "תעלה", "להעלות",
+        "תחזיר", "להחזיר", "תפעיל", "להפעיל", "תבטל", "לבטל",
+        "תכבה", "לכבות", "תשהה", "להשהות", "תפתח", "לפתוח", "תסגור", "לסגור"
+    ]
+    if any(av in t for av in action_verbs):
+        return {"matched": False}
+
+    id_indicators = [
+        "מספר מזהה", "מספר המזהה", "איזה מזהה", "מה המזהה", "מזהה לקוח", "מזהה שלי",
+        "קוד מנוי", "מספר מנוי", "מספר לקוח", "מספר כרטיס", "מספר משתמש", "client id", "user id", "record id"
+    ]
+    device_indicators = [
+        "איזה מכשיר", "איזה דגם", "מה המכשיר", "מכשיר כתוב", "מכשיר שיש לי", "מכשיר שלי",
+        "דגם מכשיר", "שם מכשיר", "איזה טלפון", "מה הטלפון שמוגדר"
+    ]
+    level_indicators = [
+        "רמת החסימה", "רמת חסימה", "רמת הסינון", "רמת סינון", "איזה דרגה", "מה הדרגה",
+        "דרגת ההגנה", "דרגת הגנה", "איזה רמה", "מה הרמה", "רמת הגנה", "רמת ההגנה"
+    ]
+    status_indicators = [
+        "מה הסטטוס", "סטטוס המשתמש", "סטטוס משתמש", "סטטוס מנוי", "סטטוס ההגנה",
+        "מצב ההגנה", "האם המנוי פעיל", "האם אני פעיל", "האם בהשהיה", "האם מושהה"
+    ]
+    general_indicators = [
+        "מה הפרטים שלי", "פרטי המנוי", "פרטי מנוי", "פרטי הכרטיס", "איזה פרטים רשומים",
+        "מה רשום עליי", "מה כתוב עליי", "מה כתוב שם", "איזה מידע יש", "מה המידע שלי"
+    ]
+
+    asks_id = any(ind in t for ind in id_indicators)
+    asks_device = any(ind in t for ind in device_indicators)
+    asks_level = any(ind in t for ind in level_indicators)
+    asks_status = any(ind in t for ind in status_indicators)
+    asks_general = any(ind in t for ind in general_indicators)
+
+    if asks_id or asks_device or asks_level or asks_status or asks_general or (
+        "כשר פליי" in t and any(w in t for w in ["מה", "איזה", "אילו", "בדיקה", "מידע", "פרטים"])
+    ):
+        return {
+            "matched": True,
+            "asks_id": asks_id,
+            "asks_device": asks_device,
+            "asks_level": asks_level,
+            "asks_status": asks_status,
+            "asks_general": asks_general,
+        }
+
+    return {"matched": False}
+
+
 def infer_customer_kosherplay_action(text: str) -> dict:
     """
     Infers the desired KosherPlay action / menu option from customer's natural language:
@@ -12366,13 +12428,21 @@ def infer_customer_kosherplay_action(text: str) -> dict:
             target_app = cand
             break
 
-    app_str = f" של *{target_app}*" if target_app else ""
-    act_verb = "חסמתי והסרתי" if is_close else "אישרתי ופתחתי"
-    act_title_word = "סגירת" if is_close else "פתיחת"
+    is_open = any(w in t_low for w in ["תפתח", "לפתוח", "תאשר", "לאשר", "להוריד", "תתקין", "להתקין", "אפליקציה", "אפליקציית"])
+    if target_app or is_close or is_open:
+        app_str = f" של *{target_app}*" if target_app else ""
+        act_verb = "חסמתי והסרתי" if is_close else "אישרתי ופתחתי"
+        act_title_word = "סגירת" if is_close else "פתיחת"
+        return {
+            "action_type": "close_app" if is_close else "open_app",
+            "title": f"{act_title_word} אפליקציה{app_str}",
+            "description": f"{act_verb} את הגישה לאפליקציה{app_str} במנוי שלך",
+        }
+
     return {
-        "action_type": "close_app" if is_close else "open_app",
-        "title": f"{act_title_word} אפליקציה{app_str}",
-        "description": f"{act_verb} את הגישה לאפליקציה{app_str} במנוי שלך",
+        "action_type": "unknown_request",
+        "title": "פנייה כללית",
+        "description": "בקשתך נקלטה במערכת",
     }
 
 
@@ -12381,8 +12451,8 @@ PERMANENT_FILTERING_SUBSCRIBERS_SEED = [
         "phone": "972524043644",
         "customer_name": "ערן",
         "system_name": "כשר פליי",
-        "crm_client_id": "",
-        "device_model": "",
+        "crm_client_id": "0524043644",
+        "device_model": "מוגדר באפליקציית כשר פליי",
         "current_level": "דרגה 3",
         "otp_verified": 1,
         "adult_approved_by_admin": 1,
@@ -12395,8 +12465,8 @@ PERMANENT_FILTERING_SUBSCRIBERS_SEED = [
         "phone": "972553164770",
         "customer_name": "ערן",
         "system_name": "כשר פליי",
-        "crm_client_id": "",
-        "device_model": "",
+        "crm_client_id": "0553164770",
+        "device_model": "מוגדר באפליקציית כשר פליי",
         "current_level": "דרגה 3",
         "otp_verified": 1,
         "adult_approved_by_admin": 1,
@@ -13425,12 +13495,30 @@ def search_kosherplay_subscriber(query_phone_or_name: str, require_live_crm: boo
                                             or norm_p
                                         )
                                     )
+                                    c_device = str(
+                                        matched_row.get("device")
+                                        or matched_row.get("deviceModel")
+                                        or matched_row.get("model")
+                                        or matched_row.get("deviceName")
+                                        or matched_row.get("מכשיר")
+                                        or matched_row.get("דגם")
+                                        or matched_row.get("דגם מכשיר")
+                                        or matched_row.get("שם מכשיר")
+                                        or ""
+                                    )
                                     c_level = str(
                                         matched_row.get("level")
                                         or matched_row.get("grade")
                                         or matched_row.get("דרגה")
-                                        or matched_row.get("status")
+                                        or matched_row.get("protectionLevel")
+                                        or matched_row.get("רמת הגנה")
+                                        or "דרגה 3"
+                                    )
+                                    c_status = str(
+                                        matched_row.get("userStatus")
+                                        or matched_row.get("user_status")
                                         or matched_row.get("סטטוס המשתמש")
+                                        or matched_row.get("status")
                                         or matched_row.get("סטטוס")
                                         or "פעיל"
                                     )
@@ -13442,7 +13530,9 @@ def search_kosherplay_subscriber(query_phone_or_name: str, require_live_crm: boo
                                         customer_name=c_name or None,
                                         system_name="כשר פליי",
                                         crm_client_id=c_id or None,
+                                        device_model=c_device or None,
                                         current_level=c_level,
+                                        protection_status=c_status,
                                     )
                                     return {
                                         "found": True,
@@ -13451,7 +13541,9 @@ def search_kosherplay_subscriber(query_phone_or_name: str, require_live_crm: boo
                                         "phone": sub_rec["phone"],
                                         "customer_name": sub_rec["customer_name"],
                                         "crm_client_id": c_id,
+                                        "device_model": c_device,
                                         "current_level": c_level,
+                                        "protection_status": c_status,
                                         "raw_crm_record": matched_row,
                                         "subscriber_record": sub_rec,
                                     }
@@ -14070,7 +14162,9 @@ def detect_filtering_service_request(text: str) -> dict:
         "מייל", "ג'ימייל", "gmail", "ווצאפ", "וואטסאפ", "טלגרם", "זמן מסך", "חנות כשר", "השהיה", "השהייה", "ההשהיה", "ההשהייה"
     ])
 
-    if not (matched_verb or (has_verb_word and has_target_word)):
+    # Check if this is a subscriber card details inquiry (ID, device, level, status)
+    sub_inq = detect_kosherplay_subscriber_info_inquiry(text)
+    if not (matched_verb or (has_verb_word and has_target_word) or sub_inq.get("matched")):
         return {"matched": False}
 
     # Check if the requester is explicitly asking to modify ANOTHER person's subscription
@@ -15670,6 +15764,77 @@ async def unified_whatsapp_webhook(req: Request):
         )
 
         # ---------------------------------------------------------------------
+        # Case 0: Subscriber Details Inquiry (מה מספר המזהה שלי, איזה מכשיר, מה רמת החסימה)
+        # ---------------------------------------------------------------------
+        sub_info_inq = detect_kosherplay_subscriber_info_inquiry(req_text_val)
+        if sub_info_inq.get("matched") and "כשר" in sys_nm:
+            live_crm_search = search_kosherplay_subscriber(sender_phone, require_live_crm=True)
+            cur_crm_id = (
+                live_crm_search.get("crm_client_id")
+                or sub_rec.get("crm_client_id")
+                or _format_local_il_phone(sender_phone).replace("-", "")
+            )
+            cur_device = (
+                live_crm_search.get("device_model")
+                or sub_rec.get("device_model")
+                or "מוגדר באפליקציית כשר פליי במכשיר"
+            )
+            cur_lvl = (
+                live_crm_search.get("current_level")
+                or sub_rec.get("current_level")
+                or "דרגה 3"
+            )
+            is_p = sub_rec.get("is_paused") == 1
+            cur_st = "בהשהיה ⏸️" if is_p else "פעיל 🛡️"
+
+            # Formulate clear, transparent, and grounded reply
+            reply_lines = [
+                f"📋 *פרטי המנוי והכרטיס שלך במערכת כשר פליי:* 🛡️\n",
+                f"• 👤 *שם הלקוח:* {cust_nm}",
+                f"• 📱 *מספר טלפון:* {_format_local_il_phone(sender_phone)}",
+                f"• 🆔 *מספר מזהה מנוי (CRM ID):* `{cur_crm_id}`",
+                f"• 📲 *דגם מכשיר:* {cur_device}",
+                f"• 🔒 *רמת חסימה / דרגה:* {cur_lvl}",
+                f"• ⚙️ *סטטוס המשתמש:* {cur_st}",
+                f"• 📅 *תוקף שירות שנתי מאומת:* עד {exp_fmt}\n",
+                f"🔗 *קישור ישיר לצפייה בכרטיס המנוי שלך במערכת כשר פליי:*\n{crm_link}\n",
+                "האם תרצה לשנות דרגה, לבטל השהיה או לבצע פעולה כלשהי בהגנה? 😃"
+            ]
+            cust_reply = "\n".join(reply_lines)
+
+            conn_inq = sqlite3.connect(DB_PATH)
+            conn_inq.execute(
+                "UPDATE customer_requests SET status='handled', system_name=?, request_text=?, action_taken=? WHERE id=?",
+                (sys_nm, req_text_val, "הוצגו פרטי מנוי וכרטיס כשר פליי ללקוח", req_id_val),
+            )
+            conn_inq.commit()
+            conn_inq.close()
+
+            send_whatsapp_message(sender_phone, cust_reply, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", cust_reply)
+
+            adm_inq_alert = (
+                f"ℹ️ *שאילתת פרטי מנוי כשר פליי נענתה בהצלחה* [#REQ-{req_id_val}]\n"
+                f"👤 *לקוח:* {cust_nm} (`{_format_local_il_phone(sender_phone)}`)\n"
+                f"💬 *שאלת הלקוח:* \"{req_text_val}\"\n"
+                f"🆔 *מזהה:* `{cur_crm_id}` | 📲 *מכשיר:* {cur_device} | 🔒 *רמה:* {cur_lvl} | ⚙️ *סטטוס:* {cur_st}\n"
+                f"🔗 *קישור לכרטיס:* {crm_link}"
+            )
+            for adm in [a for a in admin_numbers_set if a != sender_phone and a != "972500000000"]:
+                send_whatsapp_message(adm, adm_inq_alert)
+
+            return {
+                "ok": True,
+                "reply": cust_reply,
+                "type": "kosherplay_subscriber_info_presented",
+                "crm_client_id": cur_crm_id,
+                "device_model": cur_device,
+                "current_level": cur_lvl,
+                "user_status": cur_st,
+            }
+
+        # ---------------------------------------------------------------------
         # Case A: Categories Inquiry or Missing App in KosherPlay Store
         # ---------------------------------------------------------------------
         cat_inquiry = detect_kosherplay_categories_inquiry(req_text_val)
@@ -15809,6 +15974,30 @@ async def unified_whatsapp_webhook(req: Request):
                 f"האם הצלחתי לעזור לך? 😃"
             )
             admin_status_note = "⚙️ *סטטוס במערכת:* הגנה כבויה (is_paused=1, protection_status='disabled')"
+        elif act_type == "unknown_request":
+            cust_reply = (
+                f"שלום {cust_nm}! 🛡️\n"
+                f"קיבלתי את הודעתך: *\"{req_text_val}\"*\n\n"
+                f"כדי שאוכל לסייע לך במדויק במערכת כשר פליי, במה תרצה שנטפל?\n"
+                f"1. *החזרת ההגנה / ביטול השהיה* (או השהיה זמנית)\n"
+                f"2. *שינוי דרגת חסימה* או בדיקת אפליקציה שלא מופיעה בחנות\n"
+                f"3. *בירור פרטי מנוי וכרטיס* (מספר מזהה, דגם מכשיר, דרגה נוכחית)\n"
+                f"4. *קוד טכנאי זמני* להגדרות המכשיר\n\n"
+                f"פשוט כתוב לי מה תרצה לבצע! 😃"
+            )
+            conn_unk = sqlite3.connect(DB_PATH)
+            conn_unk.execute(
+                "UPDATE customer_requests SET status='handled', system_name=?, request_text=?, action_taken=? WHERE id=?",
+                (sys_nm, req_text_val, "נשלח תפריט אפשרויות והבהרה לפנייה לא מזוהה", req_id_val),
+            )
+            conn_inq.commit() if 'conn_inq' in locals() else None
+            conn_unk.commit()
+            conn_unk.close()
+
+            send_whatsapp_message(sender_phone, cust_reply, raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", cust_reply)
+            return {"ok": True, "reply": cust_reply, "type": "kosherplay_unrecognized_clarification_sent"}
         else:
             exec_res = execute_kosherplay_action(sender_phone, act_type, **{k: v for k, v in inferred.items() if k != 'action_type'})
             action_title = inferred.get("title", req_text_val)
