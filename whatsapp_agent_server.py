@@ -12466,20 +12466,82 @@ def infer_customer_kosherplay_action(text: str) -> dict:
     """
     t = text.strip()
     t_low = t.lower()
+    t_clean = re.sub(r"[^\w\sא-ת]", " ", t_low).strip()
 
-    # 0. Protection Activation / Restoration / Disabling
-    if any(k in t_low for k in [
+    # 0. Menu Numbers & Exact Menu Option Selections
+    if t_clean in (
+        "1", "אפשרות 1", "אופציה 1", "מספר 1", "בחר 1", "סעיף 1",
+        "החזרת ההגנה", "החזרת הגנה", "החזרת הסינון", "החזרת סינון",
+        "החזרת החסימה", "החזרת חסימה", "ביטול השהיה", "ביטול ההשהיה",
+        "החזרה", "להחזיר", "תחזיר", "תחזירו", "נחזיר", "תפעיל"
+    ):
+        return {
+            "action_type": "restore_protection",
+            "title": "ביטול השהיה והחזרת הגנה פעילה מלאה",
+            "description": "ביטלתי את ההשהיה והחזרתי את שירות ההגנה והסינון המלא במכשירכם בהצלחה",
+        }
+
+    if t_clean in (
+        "2", "אפשרות 2", "אופציה 2", "מספר 2", "בחר 2", "סעיף 2",
+        "שינוי דרגת חסימה", "שינוי דרגה", "הורדת דרגה", "תפריט דרגה", "דרגה"
+    ):
+        return {
+            "action_type": "change_level",
+            "title": "שינוי דרגת חסימה ובדיקת אפליקציה",
+        }
+
+    if t_clean in (
+        "3", "אפשרות 3", "אופציה 3", "מספר 3", "בחר 3", "סעיף 3",
+        "בירור פרטי מנוי וכרטיס", "בירור פרטי מנוי", "פרטי מנוי", "פרטי כרטיס"
+    ):
+        return {
+            "action_type": "subscriber_info",
+            "title": "בירור פרטי מנוי וכרטיס",
+        }
+
+    if t_clean in (
+        "4", "אפשרות 4", "אופציה 4", "מספר 4", "בחר 4", "סעיף 4",
+        "קוד טכנאי זמני", "קוד טכנאי", "קוד הגדרות", "קוד כניסה", "קוד פריצה"
+    ):
+        code = str(random.randint(100000, 999999))
+        return {
+            "action_type": "technician_code",
+            "title": "הפקת קוד טכנאי חד-פעמי להגדרות",
+            "description": f"הפקתי עבורכם קוד טכנאי חד-פעמי לכניסה להגדרות המכשיר: *{code}* (הקוד בתוקף לשעתיים הקרובות)",
+            "code": code,
+        }
+
+    # Robust matching for any combination of restore verbs + targets (including "חסימה", "ההגנה", etc.)
+    restore_verbs = [
+        "תחזיר", "להחזיר", "החזרת", "החזרה", "תחזירו", "נחזיר",
+        "תפעיל", "להפעיל", "הפעלת", "הפעלה", "תפעילו",
+        "תבטל", "לבטל", "ביטול", "בטל", "תבטלו",
+        "תוציא", "להוציא", "הוצאת", "תוציאו",
+        "חזרה", "לחזור", "שחרר", "לשחרר", "תשחרר"
+    ]
+    restore_targets = [
+        "הגנה", "ההגנה", "סינון", "הסינון", "חסימה", "החסימה",
+        "השהיה", "ההשהיה", "השהייה", "ההשהייה", "מהשהיה", "מההשהיה", "מהשהייה", "מההשהייה",
+        "פעיל", "לפעיל", "מחדש"
+    ]
+    has_rv = any(rv in t_clean for rv in restore_verbs)
+    has_rt = any(rt in t_clean for rt in restore_targets)
+    is_pause_kw = any(w in t_low for w in ["להשהות", "תשהה", "כיבוי חסימה זמני", "פתיחה זמנית", "השהיית הגנה", "ביטול חסימה זמני", "לכבות חסימה", "דקות", "דק"])
+    is_close_kw = any(w in t_low for w in ["לכבות", "תכבה", "לסגור", "תסגור", "למחוק", "תמחק", "תחסום", "לחסום"])
+
+    if (has_rv and has_rt and not is_pause_kw and not is_close_kw) or any(k in t_low for k in [
+        "תחזיר לי את החסימה", "תחזיר את החסימה", "להחזיר את החסימה", "החזרת החסימה", "החזרת חסימה",
         "תחזיר לי את הסינון", "תחזיר את הסינון", "תחזיר לי את ההגנה", "תחזיר את ההגנה",
         "להחזיר את הסינון", "להחזיר את ההגנה", "להחזיר הגנה", "להחזיר סינון",
-        "החזרת הגנה", "החזרת סינון", "תחזיר הגנה", "תחזיר סינון",
+        "החזרת הגנה", "החזרת ההגנה", "החזרת סינון", "החזרת הסינון", "תחזיר הגנה", "תחזיר סינון",
         "תבטל השהיה", "תבטל את ההשהיה", "לבטל השהיה", "לבטל את ההשהיה", "בטל השהיה", "ביטול השהיה",
-        "להוציא מהשהיה", "תוציא מהשהיה", "תחזיר מהשהיה", "להחזיר מהשהיה",
+        "להוציא מהשהיה", "תוציא מהשהיה", "תוציא אותי מהשהיה", "תחזיר מהשהיה", "להחזיר מהשהיה",
         "חזרה להגנה", "חזרה לסינון", "תחזיר לחסימה", "להחזיר לחסימה", "תפעיל מחדש"
     ]):
         return {
             "action_type": "restore_protection",
             "title": "ביטול השהיה והחזרת הגנה פעילה מלאה",
-            "description": "ביטלתי את ההשהיה והחזרתי את שירות ההגנה והסינון המלא במכשירך בהצלחה",
+            "description": "ביטלתי את ההשהיה והחזרתי את שירות ההגנה והסינון המלא במכשירכם בהצלחה",
         }
 
     if any(k in t_low for k in ["תפעיל את ההגנה", "תפעיל לי את ההגנה", "תפעיל את הסינון", "תפעיל לי את הסינון", "להפעיל את ההגנה", "להפעיל את הסינון", "הפעלת הגנה", "הפעלת סינון"]):
@@ -14780,9 +14842,22 @@ def detect_filtering_service_request(text: str) -> dict:
         "מייל", "ג'ימייל", "gmail", "ווצאפ", "וואטסאפ", "טלגרם", "זמן מסך", "חנות כשר", "השהיה", "השהייה", "ההשהיה", "ההשהייה"
     ])
 
+    # Check if user sent a menu number (1, 2, 3, 4) or menu title
+    t_clean_num = t_clean.strip()
+    is_menu_num_or_title = t_clean_num in (
+        "1", "2", "3", "4", "אפשרות 1", "אפשרות 2", "אפשרות 3", "אפשרות 4",
+        "אופציה 1", "אופציה 2", "אופציה 3", "אופציה 4", "מספר 1", "מספר 2", "מספר 3", "מספר 4",
+        "החזרת ההגנה", "החזרת הגנה", "החזרת הסינון", "החזרת סינון", "החזרת החסימה", "החזרת חסימה",
+        "ביטול השהיה", "ביטול ההשהיה", "שינוי דרגת חסימה", "שינוי דרגה",
+        "בירור פרטי מנוי וכרטיס", "בירור פרטי מנוי", "קוד טכנאי", "קוד טכנאי זמני"
+    )
+
     # Check if this is a subscriber card details inquiry (ID, device, level, status)
     sub_inq = detect_kosherplay_subscriber_info_inquiry(text)
-    if not (matched_verb or (has_verb_word and has_target_word) or sub_inq.get("matched")):
+    inferred_fast = infer_customer_kosherplay_action(text)
+    is_known_action = inferred_fast.get("action_type") not in (None, "", "unknown_request")
+
+    if not (matched_verb or (has_verb_word and has_target_word) or sub_inq.get("matched") or is_menu_num_or_title or is_known_action):
         return {"matched": False}
 
     # Check if the requester is explicitly asking to modify ANOTHER person's subscription
@@ -16392,7 +16467,8 @@ async def _unified_whatsapp_webhook_inner(req: Request):
         # Case 0: Subscriber Details Inquiry (מה מספר המזהה שלי, איזה מכשיר, מה רמת החסימה)
         # ---------------------------------------------------------------------
         sub_info_inq = detect_kosherplay_subscriber_info_inquiry(req_text_val)
-        if sub_info_inq.get("matched") and "כשר" in sys_nm:
+        inferred_early = infer_customer_kosherplay_action(req_text_val)
+        if (sub_info_inq.get("matched") or inferred_early.get("action_type") == "subscriber_info") and "כשר" in sys_nm:
             live_crm_search = search_kosherplay_subscriber(sender_phone, require_live_crm=True)
             cur_crm_id = (
                 live_crm_search.get("display_id")
@@ -16464,7 +16540,7 @@ async def _unified_whatsapp_webhook_inner(req: Request):
         # ---------------------------------------------------------------------
         # Case A: Categories Inquiry or Missing App in KosherPlay Store
         # ---------------------------------------------------------------------
-        cat_inquiry = detect_kosherplay_categories_inquiry(req_text_val)
+        cat_inquiry = detect_kosherplay_categories_inquiry(req_text_val) or (inferred_early.get("action_type") == "change_level" and "שינוי" in req_text_val)
         if cat_inquiry and "כשר" in sys_nm:
             cats_lines = [num_tit + ": " + desc for num_tit, desc in KOSHERPLAY_STORE_CATEGORIES]
             cats_formatted = "\n".join(cats_lines)
