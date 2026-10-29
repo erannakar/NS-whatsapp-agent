@@ -12845,17 +12845,45 @@ def _extract_valid_auth_token_from_response(resp, cookies_before: set) -> str:
     return ""
 
 
+def _substitute_aysko_template_path(template_path: str, module_id: str = "1", client_id: str = "") -> str:
+    """
+    Replaces Angular template literal placeholders (`${...}`) in a discovered Aysko API path.
+    In Aysko CRM, the 1st placeholder in a module route is `moduleId` ('1'),
+    and the 2nd placeholder (if present in the path before '?') is `client_id` / `recordId`.
+    """
+    path_only = (template_path or "").split("?")[0].strip()
+    if not path_only:
+        return "/modules/1"
+    placeholders = list(re.finditer(r"\$\{[^\}]+\}", path_only))
+    if not placeholders:
+        return "/" + path_only.lstrip("/")
+    result = path_only
+    # Replace first placeholder with module_id ('1'), second with client_id
+    for idx_p, m_p in enumerate(placeholders):
+        token_str = m_p.group(0)
+        t_low = token_str.lower()
+        if idx_p == 0 and ("mod" in t_low or "/modules/$" in result or len(placeholders) >= 1):
+            rep = str(module_id)
+        else:
+            rep = str(client_id) if client_id else "{id}"
+        result = result.replace(token_str, rep, 1)
+    return "/" + result.lstrip("/")
+
+
 def _discover_aysko_js_metadata_once(headers: dict) -> None:
     """
-    Downloads ONLY `main*.js` ONCE per process lifetime and uses fast string `.find()` loops
-    across ALL occurrences of `setHeaders`, `headers.set`, `intercept(`, `.baseUrl`, `/auth/login`,
-    and `saveAndBack` so we capture Aysko's custom `HttpInterceptor` (not just Angular's built-in
-    `HttpXsrfInterceptor` at the top of the bundle!) in < 0.05s.
+    Downloads ONLY `main*.js` ONCE per process lifetime and extracts:
+    1. `getBaseUrl()` implementation from `AuthService` (`get_base_url_js`) — which `IntJS` calls
+       via `${this.auth.getBaseUrl()}/api${q.url}`!
+    2. Full `setHeaders` / `intercept(` body (`interceptor_js_snippet`) — starting AT `intercept(`
+       so nothing after `setHeaders:{Authoriz` is ever cut off!
+    3. All real Angular `HttpClient` calls whose URL starts with `/` (`.get("/...")`, `.post("/...")`,
+       `.put(\`/...\`)`) — ignoring `Map.get("offset")` / `Map.get("easing")`!
     """
     if KOSHERPLAY_SESSION_CACHE.get("js_bundle_parsed"):
         return
 
-    KOSHERPLAY_SESSION_CACHE.setdefault("api_base", AYSKO_DEFAULT_API_BASE)
+    KOSHERPLAY_SESSION_CACHE.setdefault("api_base", f"{KOSHERPLAY_CRM_BASE_URL}/api")
 
     try:
         sess_get = http_session.get if hasattr(http_session.get, "_mock_name") else KOSHERPLAY_HTTP_SESSION.get
@@ -12875,149 +12903,153 @@ def _discover_aysko_js_metadata_once(headers: dict) -> None:
 
         js_txt = r_js.text
         KOSHERPLAY_SESSION_CACHE["js_bundle_parsed"] = True
-        discovered_apis = set(KOSHERPLAY_SESSION_CACHE.get("discovered_endpoints") or [])
+
+        discovered_apis = set()
+        discovered_base_urls = []
         discovered_login_paths = []
-        discovered_module_paths = list(KOSHERPLAY_SESSION_CACHE.get("discovered_module_paths") or ["/modules/1"])
-        discovered_action_paths = list(KOSHERPLAY_SESSION_CACHE.get("discovered_action_paths") or ["/modules/1"])
+        discovered_module_paths = []
+        discovered_action_paths = []
         js_api_snippets = []
         interceptor_headers = {}
-        env_props = {}
-        login_form_fields = []
 
-        # 1. Fast slice around `baseUrl` / `apiUrl` (capturing 200 chars before and 700 chars after!)
-        idx_base = js_txt.find("baseUrl")
-        if idx_base == -1:
-            idx_base = js_txt.find("apiUrl")
-        if idx_base != -1:
-            env_slice = js_txt[max(0, idx_base - 200) : min(len(js_txt), idx_base + 700)]
-            KOSHERPLAY_SESSION_CACHE["env_config_raw"] = " ".join(env_slice.split())[:450]
-            m_burl = re.search(r'(?:baseUrl|apiUrl)\s*:\s*["\x27\x60](https?://[^"\x27\x60\s]+)["\x27\x60]', env_slice)
-            if m_burl:
-                KOSHERPLAY_SESSION_CACHE["api_base"] = m_burl.group(1).rstrip("/")
-                discovered_apis.add(KOSHERPLAY_SESSION_CACHE["api_base"])
-            # Extract all string/number properties inside the environment block
-            for m_ep in re.finditer(r'([a-zA-Z0-9_]+)\s*:\s*["\x27]([^"\x27]+)["\x27]', env_slice):
-                env_props[m_ep.group(1)] = m_ep.group(2)
+        ignored_domains = (
+            "w3.org", "angular.io", "googleapis.com", "gstatic.com", "google.com",
+            "mozilla.org", "facebook.com", "twitter.com", "github.com", "npmjs.com",
+            "momentjs.com", "sweetalert", "bootstrap", "fontawesome", "cloudflare",
+            "jsdelivr", "unpkg", "cdnjs", "creativecommons", "ietf.org", "whatwg.org",
+            "reactjs", "tinymce", "ckeditor", "quilljs", "pdfmake", "chartjs", "ag-grid",
+            "primefaces", "material.angular.io", "schema.org", "example.com", "magen365"
+        )
 
-        # 2. Fast loop over ALL occurrences of `/auth/login` and `זכור אותי`
-        for kw_login in ("/auth/login", "זכור אותי"):
-            pos = 0
-            while True:
-                idx_l = js_txt.find(kw_login, pos)
-                if idx_l == -1:
-                    break
-                pos = idx_l + len(kw_login)
-                l_slice = js_txt[max(0, idx_l - 450) : min(len(js_txt), idx_l + 500)]
-                clean_l_slice = " ".join(l_slice.split())
-                if kw_login == "/auth/login":
-                    KOSHERPLAY_SESSION_CACHE["login_js_snippet"] = clean_l_slice[:420]
-                else:
-                    KOSHERPLAY_SESSION_CACHE["login_form_snippet"] = clean_l_slice[:420]
-                for m_fc in re.finditer(r'(?:formControlName|ngModel|name)\s*[=:]\s*["\x27]([a-zA-Z0-9_]+)["\x27]', l_slice):
-                    fn = m_fc.group(1)
-                    if fn not in login_form_fields:
-                        login_form_fields.append(fn)
-                for m_fg in re.finditer(r'([a-zA-Z0-9_]{3,20})\s*:\s*\[\s*["\x27]{2}', l_slice):
-                    fn = m_fg.group(1)
-                    if fn not in login_form_fields:
-                        login_form_fields.append(fn)
+        # 1. Extract `getBaseUrl(` implementation in AuthService (starts AT `getBaseUrl(` so we see the full body!)
+        gbu_snippets = []
+        pos = 0
+        while len(gbu_snippets) < 4:
+            idx_g = js_txt.find("getBaseUrl(", pos)
+            if idx_g == -1:
+                break
+            pos = idx_g + 11
+            # Grab 60 chars before and 550 chars AFTER `getBaseUrl(`
+            g_slice = js_txt[max(0, idx_g - 60) : min(len(js_txt), idx_g + 550)]
+            clean_g = " ".join(g_slice.split())
+            gbu_snippets.append(clean_g[:350])
+            for m_u in re.findall(r'https?://[a-zA-Z0-9._\-]+(?::\d+)?(?:/[a-zA-Z0-9._\-/]*)?', g_slice):
+                u_c = m_u.rstrip("/")
+                if not any(ign in u_c.lower() for ign in ignored_domains):
+                    api_u = u_c if u_c.endswith("/api") else f"{u_c}/api"
+                    if api_u not in discovered_base_urls:
+                        discovered_base_urls.append(api_u)
+                    discovered_apis.add(api_u)
 
-        # 3. Fast loop over ALL occurrences of `setHeaders`, `.baseUrl`, and `intercept(`
-        #    (Skipping Angular's built-in XSRF interceptor by scanning ALL matches through the end of main.js!)
+        if gbu_snippets:
+            KOSHERPLAY_SESSION_CACHE["get_base_url_js"] = " || ".join(gbu_snippets)[:450]
+
+        # 2. Extract `/auth/login` context (starting 40 chars before `/auth/login` and 500 chars after!)
+        idx_l = js_txt.find("/auth/login")
+        if idx_l != -1:
+            l_slice = js_txt[max(0, idx_l - 80) : min(len(js_txt), idx_l + 550)]
+            KOSHERPLAY_SESSION_CACHE["login_js_snippet"] = " ".join(l_slice.split())[:420]
+
+        # 3. Extract `intercept(` and `setHeaders` (starting AT `intercept(` / `setHeaders` so nothing after `setHeaders:{Authoriz` is cut off!)
         int_snippets = []
-        for kw_int in ("setHeaders", ".baseUrl", "intercept("):
+        for kw_int in ("/api${", "setHeaders"):
             pos = 0
-            count_kw = 0
-            while count_kw < 12:
+            while len(int_snippets) < 4:
                 idx_i = js_txt.find(kw_int, pos)
                 if idx_i == -1:
                     break
                 pos = idx_i + len(kw_int)
-                count_kw += 1
-                i_slice = js_txt[max(0, idx_i - 180) : min(len(js_txt), idx_i + 450)]
+                # Start 40 chars before kw_int and take 500 chars AFTER kw_int!
+                i_slice = js_txt[max(0, idx_i - 40) : min(len(js_txt), idx_i + 500)]
                 if "XSRF" in i_slice or "xsrf" in i_slice:
                     continue
                 clean_i = " ".join(i_slice.split())
-                if len(int_snippets) < 4:
-                    int_snippets.append(clean_i[:250])
-                # Extract any `setHeaders: { ... }` block
-                for m_sh in re.finditer(r'setHeaders\s*:\s*\{([^}]{1,350})\}', i_slice):
+                int_snippets.append(clean_i[:380])
+                for m_sh in re.finditer(r'setHeaders\s*:\s*\{([^}]{1,400})\}', i_slice):
                     sh_body = m_sh.group(1)
-                    for m_kv in re.finditer(r'["\x27]?([a-zA-Z0-9_\-]{2,30})["\x27]?\s*:\s*([^,}]{1,100})', sh_body):
+                    for m_kv in re.finditer(r'["\x27]?([a-zA-Z0-9_\-]{2,30})["\x27]?\s*:\s*([^,}]{1,120})', sh_body):
                         hk = m_kv.group(1).strip()
                         hv_raw = m_kv.group(2).strip()
                         if hk.lower() in ("authorization", "content-type", "accept"):
                             continue
-                        # Resolve value if string literal, env property, or window.location
-                        m_str_lit = re.match(r'^["\x27]([^"\x27]+)["\x27]$', hv_raw)
-                        if m_str_lit:
-                            interceptor_headers[hk] = m_str_lit.group(1)
+                        m_lit = re.match(r'^["\x27]([^"\x27]+)["\x27]$', hv_raw)
+                        if m_lit:
+                            interceptor_headers[hk] = m_lit.group(1)
                         elif "origin" in hv_raw.lower():
                             interceptor_headers[hk] = KOSHERPLAY_CRM_BASE_URL
-                        elif "host" in hv_raw.lower() or "domain" in hv_raw.lower() or "location" in hv_raw.lower():
-                            interceptor_headers[hk] = "crm.kosherplay.com"
                         else:
-                            # Check if it references an env_props key
-                            matched_env_val = None
-                            for ek, ev in env_props.items():
-                                if f".{ek}" in hv_raw:
-                                    matched_env_val = ev
-                                    break
-                            interceptor_headers[hk] = matched_env_val or "crm.kosherplay.com"
-
-                for m_hs in re.finditer(r'headers\.(?:set|append)\(\s*["\x27]([a-zA-Z0-9_\-]{2,30})["\x27]\s*,\s*([^)]{1,100})\)', i_slice):
-                    hk = m_hs.group(1).strip()
-                    hv_raw = m_hs.group(2).strip()
-                    if hk.lower() not in ("authorization", "content-type", "accept", "x-xsrf-token"):
-                        m_str_lit = re.match(r'^["\x27]([^"\x27]+)["\x27]$', hv_raw)
-                        interceptor_headers[hk] = m_str_lit.group(1) if m_str_lit else "crm.kosherplay.com"
+                            interceptor_headers[hk] = "crm.kosherplay.com"
 
         if int_snippets:
             KOSHERPLAY_SESSION_CACHE["interceptor_js_snippet"] = " || ".join(int_snippets)[:450]
 
-        # 4. Scan Angular HttpClient calls (.get / .post / .put / .patch / .delete) — fast anchored regex
-        for m_http in re.finditer(r'\.(get|post|put|patch|delete)\s*(?:<[^>]{1,80}>)?\s*\(([^\)]{2,160})\)', js_txt):
+        # 4. Find all `baseUrl` / `apiUrl` string literals across `main.js`
+        env_snippets = []
+        for kw_b in ("baseUrl:", "apiUrl:"):
+            pos = 0
+            while len(env_snippets) < 6:
+                idx_b = js_txt.find(kw_b, pos)
+                if idx_b == -1:
+                    break
+                pos = idx_b + len(kw_b)
+                b_slice = js_txt[max(0, idx_b - 60) : min(len(js_txt), idx_b + 300)]
+                env_snippets.append(" ".join(b_slice.split())[:220])
+                for m_u in re.findall(r'https?://[a-zA-Z0-9._\-]+(?::\d+)?(?:/[a-zA-Z0-9._\-/]*)?', b_slice):
+                    u_c = m_u.rstrip("/")
+                    if not any(ign in u_c.lower() for ign in ignored_domains):
+                        if u_c not in discovered_base_urls:
+                            discovered_base_urls.append(u_c)
+                        discovered_apis.add(u_c)
+        if env_snippets:
+            KOSHERPLAY_SESSION_CACHE["env_config_raw"] = " || ".join(env_snippets)[:420]
+
+        # 5. Extract ONLY real Angular HttpClient calls whose URL argument starts with `/` or `${...}/`
+        #    (Completely ignores Map.get("offset") / Map.get("easing")!)
+        for m_http in re.finditer(
+            r'\.(get|post|put|patch|delete)\s*(?:<[^>]{1,80}>)?\s*\(\s*(?:["\x27\x60](\/[^"\x27\x60]{1,140})["\x27\x60]|\x60\$\{[^\}]+\}(\/[^\x60]{1,140})\x60)',
+            js_txt,
+        ):
             h_method = m_http.group(1).lower()
-            arg_s = m_http.group(2).strip()
-            arg_low = arg_s.lower()
-            clean_arg_s = " ".join(arg_s.split())[:95]
-            snip = f"{h_method.upper()}({clean_arg_s})"
-            if snip not in js_api_snippets and len(js_api_snippets) < 40:
-                js_api_snippets.append(snip)
+            raw_path = (m_http.group(2) or m_http.group(3) or "").strip()
+            if not raw_path or len(raw_path) < 2:
+                continue
+            clean_snip = f'{h_method.upper()}("{raw_path[:90]}")'
+            if clean_snip not in js_api_snippets and len(js_api_snippets) < 40:
+                js_api_snippets.append(clean_snip)
 
-            for m_seg in re.finditer(r'(?:["\x27\x60]|\})\s*(\/?[a-zA-Z0-9._\-\/]{2,80})', arg_s):
-                seg = m_seg.group(1).strip().strip("/")
-                if not seg or seg.lower() in ("application/json", "text/plain", "text/html", "blob", "json", "body", "response", "events"):
-                    continue
-                if "/" not in seg and seg.lower() not in ("login", "token", "authenticate", "signin", "modules", "records", "clients", "users"):
-                    continue
-                clean_rel = "/" + seg
-                discovered_apis.add(clean_rel)
-                seg_low = clean_rel.lower()
-                if h_method == "post" and any(k in seg_low or k in arg_low for k in ["login", "signin", "auth", "token", "session"]):
-                    if clean_rel not in discovered_login_paths:
-                        discovered_login_paths.append(clean_rel)
-                if not any(ak in seg_low for ak in ["login", "auth", "signin", "token", "isadmin", "profile"]) and any(
-                    k in seg_low or k in arg_low for k in ["module", "record", "client", "customer", "entity", "pageindex", "pagesize", "archive", "filter", "table"]
-                ):
-                    if clean_rel not in discovered_module_paths:
-                        discovered_module_paths.append(clean_rel)
-                if h_method in ("put", "post", "patch") and not any(ak in seg_low for ak in ["login", "auth", "signin", "token", "isadmin", "profile"]) and any(
-                    k in seg_low or k in arg_low for k in ["module", "record", "client", "entity", "save", "update", "status", "form", "pause", "level", "grade", "action"]
-                ):
-                    if clean_rel not in discovered_action_paths:
-                        discovered_action_paths.append(clean_rel)
+            path_no_q = raw_path.split("?")[0]
+            discovered_apis.add(path_no_q)
+            p_low = raw_path.lower()
 
-        KOSHERPLAY_SESSION_CACHE["discovered_endpoints"] = sorted(list(discovered_apis))[:45]
+            if h_method == "post" and any(k in p_low for k in ["login", "signin", "authenticate", "token"]):
+                sub_p = _substitute_aysko_template_path(path_no_q)
+                if sub_p not in discovered_login_paths:
+                    discovered_login_paths.append(sub_p)
+            elif not any(ak in p_low for ak in ["login", "auth", "signin", "token", "isadmin", "profile"]):
+                if h_method == "get" and any(k in p_low for k in ["module", "record", "client", "customer", "entity", "pageindex", "pagesize", "filter", "table"]):
+                    sub_p = _substitute_aysko_template_path(path_no_q, module_id="1")
+                    if sub_p not in discovered_module_paths:
+                        discovered_module_paths.append(sub_p)
+                if h_method in ("put", "post", "patch") and any(k in p_low for k in ["module", "record", "client", "entity", "save", "update", "status", "form", "action"]):
+                    if path_no_q not in discovered_action_paths:
+                        discovered_action_paths.append(path_no_q)
+
         if "/auth/login" not in discovered_login_paths:
             discovered_login_paths.append("/auth/login")
+        if "/modules/1" not in discovered_module_paths:
+            discovered_module_paths.append("/modules/1")
+        if "/modules/1" not in discovered_action_paths:
+            discovered_action_paths.append("/modules/1")
+
+        if discovered_base_urls:
+            KOSHERPLAY_SESSION_CACHE["api_base"] = discovered_base_urls[0]
+        KOSHERPLAY_SESSION_CACHE["discovered_base_urls"] = discovered_base_urls[:8]
+        KOSHERPLAY_SESSION_CACHE["discovered_endpoints"] = sorted(list(discovered_apis))[:45]
         KOSHERPLAY_SESSION_CACHE["discovered_login_paths"] = discovered_login_paths[:10]
         KOSHERPLAY_SESSION_CACHE["discovered_module_paths"] = discovered_module_paths[:15]
         KOSHERPLAY_SESSION_CACHE["discovered_action_paths"] = discovered_action_paths[:15]
         KOSHERPLAY_SESSION_CACHE["js_api_snippets"] = js_api_snippets
         KOSHERPLAY_SESSION_CACHE["interceptor_headers"] = interceptor_headers
-        KOSHERPLAY_SESSION_CACHE["env_props"] = env_props
-        KOSHERPLAY_SESSION_CACHE["login_form_fields"] = login_form_fields
     except Exception as e_js:
         print(f"[KosherPlay JS Bundle Discovery Notice]: {e_js}")
         if "name resolution" in str(e_js).lower() or "connecterror" in type(e_js).__name__.lower():
@@ -13026,8 +13058,15 @@ def _discover_aysko_js_metadata_once(headers: dict) -> None:
 
 def authenticate_kosherplay_crm(force: bool = False) -> dict:
     """
-    Fast, targeted authentication against KosherPlay's Aysko CRM backend (`https://aysko.net/api/auth/login`).
-    Completes in < 1.5 seconds (never blocks the webhook for minutes!).
+    Authenticates with KosherPlay CRM (Aysko CRM v6.5.1):
+    - Uses the exact validated DTO payload `{"email": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD}`
+      (NestJS `ValidationPipe` with `forbidNonWhitelisted: true` explicitly rejects `rememberMe` and `username`!).
+    - Tests candidate base URLs in priority order:
+      1. Any base URL discovered in `this.auth.getBaseUrl()` in `main.js`
+      2. `https://crm.kosherplay.com/api` (`window.location.origin + '/api'`)
+      3. `https://kosherplay.aysko.net/api` (tenant subdomain on `aysko.net` -> DB `aysko_kosherplay`)
+      4. `https://crm.aysko.net/api`
+      5. `https://aysko.net/api` with explicit tenant headers (`tenant`, `x-tenant`, `domain`, `subDomain`, `client`, `X-Forwarded-Host`).
     """
     now_ts = int(std_time.time())
     cached_tok = KOSHERPLAY_SESSION_CACHE.get("token")
@@ -13041,25 +13080,25 @@ def authenticate_kosherplay_crm(force: bool = False) -> dict:
             "ok": True,
             "cached": True,
             "token_present": True,
-            "api_base": KOSHERPLAY_SESSION_CACHE.get("api_base") or AYSKO_DEFAULT_API_BASE,
+            "api_base": KOSHERPLAY_SESSION_CACHE.get("api_base") or f"{KOSHERPLAY_CRM_BASE_URL}/api",
             "env_config_raw": KOSHERPLAY_SESSION_CACHE.get("env_config_raw", ""),
+            "get_base_url_js": KOSHERPLAY_SESSION_CACHE.get("get_base_url_js", ""),
             "discovered_endpoints": KOSHERPLAY_SESSION_CACHE.get("discovered_endpoints", []),
             "js_api_snippets": KOSHERPLAY_SESSION_CACHE.get("js_api_snippets", []),
             "auth_diagnostics": KOSHERPLAY_SESSION_CACHE.get("auth_diagnostics", []),
         }
 
-    # Avoid re-running failed login attempts multiple times within the same webhook turn (cooldown 12s unless force=True)
-    if not force and not cached_tok and (now_ts - KOSHERPLAY_SESSION_CACHE.get("last_attempt_at", 0) < 12):
+    if not force and not cached_tok and (now_ts - KOSHERPLAY_SESSION_CACHE.get("last_attempt_at", 0) < 10):
         return {
             "ok": False,
             "cached_attempt": True,
             "token_present": False,
-            "api_base": KOSHERPLAY_SESSION_CACHE.get("api_base") or AYSKO_DEFAULT_API_BASE,
+            "api_base": KOSHERPLAY_SESSION_CACHE.get("api_base") or f"{KOSHERPLAY_CRM_BASE_URL}/api",
             "auth_diagnostics": KOSHERPLAY_SESSION_CACHE.get("auth_diagnostics", []),
         }
     KOSHERPLAY_SESSION_CACHE["last_attempt_at"] = now_ts
 
-    headers = {
+    base_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json",
@@ -13067,121 +13106,86 @@ def authenticate_kosherplay_crm(force: bool = False) -> dict:
         "Origin": KOSHERPLAY_CRM_BASE_URL,
     }
 
-    # Step 1: Parse `main*.js` once (cached in memory so it never runs twice!)
     KOSHERPLAY_SESSION_CACHE.pop("offline_dns_error", None)
-    _discover_aysko_js_metadata_once(headers)
+    _discover_aysko_js_metadata_once(base_headers)
     if KOSHERPLAY_SESSION_CACHE.get("offline_dns_error"):
         return {
             "ok": False,
             "token_present": False,
-            "api_base": KOSHERPLAY_SESSION_CACHE.get("api_base") or AYSKO_DEFAULT_API_BASE,
+            "api_base": KOSHERPLAY_SESSION_CACHE.get("api_base") or f"{KOSHERPLAY_CRM_BASE_URL}/api",
             "error": KOSHERPLAY_SESSION_CACHE["offline_dns_error"],
         }
 
-    # Merge any interceptor headers discovered in `main.js` + standard multi-tenant origin headers
-    int_hdrs = KOSHERPLAY_SESSION_CACHE.get("interceptor_headers") or {}
-    for hk, hv in int_hdrs.items():
-        headers[hk] = hv
+    for hk, hv in (KOSHERPLAY_SESSION_CACHE.get("interceptor_headers") or {}).items():
+        base_headers[hk] = hv
 
-    api_base = (KOSHERPLAY_SESSION_CACHE.get("api_base") or AYSKO_DEFAULT_API_BASE).rstrip("/")
+    disc_bases = KOSHERPLAY_SESSION_CACHE.get("discovered_base_urls") or []
     disc_login_paths = KOSHERPLAY_SESSION_CACHE.get("discovered_login_paths") or ["/auth/login"]
 
-    # Build targeted list of login URLs (at most 3 URLs — primary is https://aysko.net/api/auth/login)
-    candidate_login_urls = []
-    for lp in disc_login_paths[:3]:
-        u_l = _join_aysko_api_url(api_base, lp)
-        if u_l not in candidate_login_urls:
-            candidate_login_urls.append(u_l)
-    std_aysko_login = _join_aysko_api_url(AYSKO_DEFAULT_API_BASE, "/auth/login")
-    if std_aysko_login not in candidate_login_urls:
-        candidate_login_urls.append(std_aysko_login)
+    # Build prioritized candidate (base_url, extra_headers) pairs
+    candidate_targets = []
+    for db_u in disc_bases:
+        if db_u != "https://aysko.net/api":
+            candidate_targets.append((db_u, {}))
 
-    # Build targeted login payloads (including any form fields discovered in LoginComponent)
-    form_fields = KOSHERPLAY_SESSION_CACHE.get("login_form_fields") or []
-    login_payloads = []
-    if form_fields:
-        custom_p = {}
-        for ff in form_fields:
-            ff_low = ff.lower()
-            if any(k in ff_low for k in ["pass", "pwd"]):
-                custom_p[ff] = KOSHERPLAY_PASSWORD
-            elif any(k in ff_low for k in ["remember", "stay"]):
-                custom_p[ff] = True
-            elif any(k in ff_low for k in ["mail", "user", "login", "name", "phone"]):
-                custom_p[ff] = KOSHERPLAY_USERNAME
-        if len(custom_p) >= 2:
-            login_payloads.append(custom_p)
+    for std_b, extra_h in [
+        (f"{KOSHERPLAY_CRM_BASE_URL}/api", {}),
+        ("https://kosherplay.aysko.net/api", {}),
+        ("https://crm.aysko.net/api", {}),
+        ("https://kosherplay.aysko.com/api", {}),
+        (
+            "https://aysko.net/api",
+            {
+                "X-Forwarded-Host": "crm.kosherplay.com",
+                "x-tenant": "kosherplay",
+                "tenant": "kosherplay",
+                "domain": "crm.kosherplay.com",
+                "subDomain": "kosherplay",
+                "subdomain": "kosherplay",
+                "client": "kosherplay",
+            },
+        ),
+    ]:
+        if not any(t[0] == std_b for t in candidate_targets):
+            candidate_targets.append((std_b, extra_h))
 
-    for std_p in (
-        {"email": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD, "rememberMe": True},
-        {"username": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD, "rememberMe": True},
-        {"userName": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD, "rememberMe": True},
-        {"email": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD},
-        {"username": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD},
-    ):
-        if std_p not in login_payloads:
-            login_payloads.append(std_p)
+    # Confirmed exact NestJS DTO payload (`rememberMe` and `username` are rejected by NestJS ValidationPipe!)
+    exact_payload = {"email": KOSHERPLAY_USERNAME, "password": KOSHERPLAY_PASSWORD}
 
     token = None
-    working_api_base = api_base
+    working_api_base = KOSHERPLAY_SESSION_CACHE.get("api_base") or f"{KOSHERPLAY_CRM_BASE_URL}/api"
+    working_extra_headers = {}
     auth_diagnostics = []
     sess_post = http_session.post if hasattr(http_session.post, "_mock_name") else KOSHERPLAY_HTTP_SESSION.post
 
-    for url in candidate_login_urls[:4]:
-        for payload in login_payloads[:5]:
+    for b_url, ex_hdrs in candidate_targets[:6]:
+        req_headers = {**base_headers, **ex_hdrs}
+        for lp in disc_login_paths[:2]:
+            login_url = _join_aysko_api_url(b_url, lp)
             try:
                 cookies_before = set(KOSHERPLAY_HTTP_SESSION.cookies.keys())
-                resp = sess_post(url, json=payload, headers=headers, timeout=3.5)
+                resp = sess_post(login_url, json=exact_payload, headers=req_headers, timeout=3.0)
                 is_html = _is_html_spa_fallback_response(resp)
                 if not is_html and len(auth_diagnostics) < 8:
-                    # Capture up to 220 chars so NestJS "message" array is NEVER truncated!
                     body_preview = " ".join((resp.text or "").split())[:220]
-                    auth_diagnostics.append(f"POST {url} {list(payload.keys())} -> {resp.status_code} ({body_preview})")
+                    auth_diagnostics.append(f"POST {login_url} -> {resp.status_code} ({body_preview})")
                 tok = _extract_valid_auth_token_from_response(resp, cookies_before)
                 if tok:
                     token = str(tok)
-                    if url.startswith(AYSKO_DEFAULT_API_BASE):
-                        working_api_base = AYSKO_DEFAULT_API_BASE
+                    working_api_base = b_url
+                    working_extra_headers = ex_hdrs
                     break
-
-                # If NestJS ValidationPipe returned 400 with a "message" array explaining required fields,
-                # dynamically build a payload matching those exact required fields and retry immediately!
-                if resp.status_code == 400 and not is_html and (resp.text or "").strip().startswith("{"):
-                    try:
-                        err_j = resp.json()
-                        msgs = err_j.get("message")
-                        if isinstance(msgs, list) and msgs:
-                            dyn_payload = dict(payload)
-                            for m_str in msgs:
-                                m_fld = re.match(r"^([a-zA-Z0-9_]+)\s+", str(m_str))
-                                if m_fld:
-                                    fn_req = m_fld.group(1)
-                                    fn_low = fn_req.lower()
-                                    if "pass" in fn_low:
-                                        dyn_payload[fn_req] = KOSHERPLAY_PASSWORD
-                                    elif "remember" in fn_low or "bool" in str(m_str).lower():
-                                        dyn_payload[fn_req] = True
-                                    elif any(w in fn_low for w in ["domain", "host", "tenant", "client", "site"]):
-                                        dyn_payload[fn_req] = "crm.kosherplay.com"
-                                    else:
-                                        dyn_payload[fn_req] = KOSHERPLAY_USERNAME
-                            if dyn_payload != payload:
-                                resp2 = sess_post(url, json=dyn_payload, headers=headers, timeout=3.5)
-                                body_p2 = " ".join((resp2.text or "").split())[:220]
-                                auth_diagnostics.append(f"POST-RETRY {url} {list(dyn_payload.keys())} -> {resp2.status_code} ({body_p2})")
-                                tok2 = _extract_valid_auth_token_from_response(resp2, cookies_before)
-                                if tok2:
-                                    token = str(tok2)
-                                    break
-                    except Exception:
-                        pass
-            except Exception:
+            except Exception as e_req:
+                if len(auth_diagnostics) < 8 and "name resolution" not in str(e_req).lower():
+                    auth_diagnostics.append(f"POST {login_url} -> ERR ({str(e_req)[:60]})")
                 continue
         if token:
             break
 
     KOSHERPLAY_SESSION_CACHE["token"] = token
     KOSHERPLAY_SESSION_CACHE["api_base"] = working_api_base
+    if working_extra_headers:
+        KOSHERPLAY_SESSION_CACHE.setdefault("interceptor_headers", {}).update(working_extra_headers)
     KOSHERPLAY_SESSION_CACHE["auth_diagnostics"] = auth_diagnostics
     if token:
         KOSHERPLAY_SESSION_CACHE["last_login_at"] = now_ts
@@ -13191,6 +13195,7 @@ def authenticate_kosherplay_crm(force: bool = False) -> dict:
         "token_present": bool(token),
         "api_base": working_api_base,
         "env_config_raw": KOSHERPLAY_SESSION_CACHE.get("env_config_raw", ""),
+        "get_base_url_js": KOSHERPLAY_SESSION_CACHE.get("get_base_url_js", ""),
         "login_js_snippet": KOSHERPLAY_SESSION_CACHE.get("login_js_snippet", ""),
         "interceptor_js_snippet": KOSHERPLAY_SESSION_CACHE.get("interceptor_js_snippet", ""),
         "crm_search_url_template": KOSHERPLAY_CRM_MODULES_URL_TEMPLATE,
@@ -13650,7 +13655,8 @@ def execute_kosherplay_action(phone_or_sub, action_type: str, **params) -> dict:
             for p in disc_act_paths + disc_mod_paths:
                 if any(ak in p.lower() for ak in ["login", "auth", "signin", "token", "isadmin", "profile"]):
                     continue
-                ep_c = _join_aysko_api_url(api_base, p).replace("{id}", str(client_id))
+                sub_p = _substitute_aysko_template_path(p, module_id="1", client_id=str(client_id))
+                ep_c = _join_aysko_api_url(api_base, sub_p).replace("{id}", str(client_id))
                 ep_with_id = ep_c if ep_c.endswith(f"/{client_id}") else f"{ep_c}/{client_id}"
                 if ep_with_id not in save_endpoints:
                     save_endpoints.append(ep_with_id)
@@ -15817,15 +15823,18 @@ async def unified_whatsapp_webhook(req: Request):
             crm_truth_line = "🌐 *חיבור לשרת כשר פליי (CRM):* סטטוס המשתמש שונה ל'פעיל' ובוצעה 'שמירה וחזרה' אוטומטית בשרת ✅"
         else:
             _kp_api_b = KOSHERPLAY_SESSION_CACHE.get("api_base") or ""
-            _kp_env = (KOSHERPLAY_SESSION_CACHE.get("env_config_raw") or "")[:200]
-            _kp_ljs = (KOSHERPLAY_SESSION_CACHE.get("login_js_snippet") or "")[:200]
-            _kp_int = (KOSHERPLAY_SESSION_CACHE.get("interceptor_js_snippet") or "")[:200]
+            _kp_gbu = (KOSHERPLAY_SESSION_CACHE.get("get_base_url_js") or "")[:280]
+            _kp_env = (KOSHERPLAY_SESSION_CACHE.get("env_config_raw") or "")[:220]
+            _kp_ljs = (KOSHERPLAY_SESSION_CACHE.get("login_js_snippet") or "")[:220]
+            _kp_int = (KOSHERPLAY_SESSION_CACHE.get("interceptor_js_snippet") or "")[:260]
             _kp_snips = ", ".join((KOSHERPLAY_SESSION_CACHE.get("js_api_snippets") or [])[:8])
             _kp_auth_d = " ; ".join((KOSHERPLAY_SESSION_CACHE.get("auth_diagnostics") or [])[:4])
             _kp_srch_d = " ; ".join((KOSHERPLAY_SESSION_CACHE.get("search_diagnostics") or [])[:4])
             _diag_parts = []
             if _kp_api_b:
                 _diag_parts.append(f"API: `{_kp_api_b}`")
+            if _kp_gbu:
+                _diag_parts.append(f"getBaseUrl: `{_kp_gbu}`")
             if _kp_env:
                 _diag_parts.append(f"Env: `{_kp_env}`")
             if _kp_ljs:
