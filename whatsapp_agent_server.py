@@ -2238,7 +2238,7 @@ def _normalize_antenna_row(item: dict):
         raw_site = ""
 
     tech_str = str(item.get("טכנולוגיית שידור") or item.get("tech") or item.get("TECHNOLOGY") or "")
-    is_5g = bool("5G" in tech_str.upper() or "דור 5" in tech_str or re.search(r"5", tech_str))
+    is_5g = bool("5G" in tech_str.upper() or "דור 5" in tech_str or re.search(r"\b5\b", tech_str))
 
     return {
         "net": net_key,
@@ -12271,7 +12271,7 @@ KOSHERPLAY_PASSWORD = (
 KOSHERPLAY_STATIC_TOKEN = (
     os.getenv("KOSHERPLAY_TOKEN")
     or os.getenv("KOSHERPLAY_JWT")
-    or ""
+    or "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MjgsImZ1bGxOYW1lIjoi16LXqNefINeg16fXqCAxNjU3Iiwic3RhdGUiOjEsInJhbmsiOjIsImVtYWlsIjoibm9hbS5zaWFjaC5jb21AZ21haWwuY29tIiwicmVzZWxsZXJDb2RlIjoxNjU3LCJzdWIiOjI4LCJ0b2tlblZlcnNpb24iOjAsImxvY2F0aW9uIjoiaXNyYWVsIiwiaWF0IjoxNzkyMzM0NDcwLCJleHAiOjE4MDc4ODY0NzB9.0nP25GzmWOUlXUEUf38Xh-ra63yx9kJku3Zd2G5k2Bg"
 ).strip()
 
 # Modular payment mode: "admin_approval" (default today) or "payment_site" (future self-service checkout site)
@@ -12525,6 +12525,15 @@ def infer_customer_kosherplay_action(text: str) -> dict:
 
     # 0. Menu Numbers, Button IDs & Exact Menu Option Selections
     if t_clean in (
+        "תפריט", "אופציות", "אפשרויות", "מה האפשרויות", "תפריט הגנה",
+        "ניהול סינון", "ניהול הגנה", "עזרה בסינון", "כשר פליי", "נטספרק", "אופציה", "אפשרות"
+    ):
+        return {
+            "action_type": "show_options_menu",
+            "title": "תפריט אפשרויות הגנה וסינון",
+            "description": "הצגת תפריט האפשרויות המלא לניהול ההגנה",
+        }
+    if t_clean in (
         "1", "אפשרות 1", "אופציה 1", "מספר 1", "בחר 1", "סעיף 1",
         "btn_restore_protection", "btn_restore", "restore", "btn1",
         "החזרת ההגנה", "החזרת הגנה", "החזרת הסינון", "החזרת סינון",
@@ -12538,8 +12547,9 @@ def infer_customer_kosherplay_action(text: str) -> dict:
         }
 
     if t_clean in (
-        "btn_pause_30", "btn_pause", "pause",
-        "השהיה ל 30 דקות", "השהיה ל 30 דק", "השהיה 30 דקות", "כיבוי זמני 30 דקות", "כיבוי זמני"
+        "2", "אפשרות 2", "אופציה 2", "מספר 2", "בחר 2", "סעיף 2",
+        "btn_pause_30", "btn_pause", "pause", "btn2",
+        "השהיה ל 30 דקות", "השהיה ל 30 דק", "השהיה 30 דקות", "כיבוי זמני 30 דקות", "כיבוי זמני", "השהיה", "השהייה", "כיבוי"
     ):
         return {
             "action_type": "temporary_pause",
@@ -12549,8 +12559,8 @@ def infer_customer_kosherplay_action(text: str) -> dict:
         }
 
     if t_clean in (
-        "2", "אפשרות 2", "אופציה 2", "מספר 2", "בחר 2", "סעיף 2",
-        "btn_change_level", "btn_level", "btn2",
+        "3", "אפשרות 3", "אופציה 3", "מספר 3", "בחר 3", "סעיף 3",
+        "btn_change_level", "btn_level", "btn3",
         "שינוי דרגת חסימה", "שינוי דרגה", "הורדת דרגה", "תפריט דרגה", "דרגה", "שינוי דרגת סינון"
     ):
         return {
@@ -12559,8 +12569,9 @@ def infer_customer_kosherplay_action(text: str) -> dict:
         }
 
     if t_clean in (
-        "3", "אפשרות 3", "אופציה 3", "מספר 3", "בחר 3", "סעיף 3",
-        "בירור פרטי מנוי וכרטיס", "בירור פרטי מנוי", "פרטי מנוי", "פרטי כרטיס"
+        "4", "אפשרות 4", "אופציה 4", "מספר 4", "בחר 4", "סעיף 4",
+        "btn_subscriber_info", "btn_info", "btn4",
+        "בירור פרטי מנוי וכרטיס", "בירור פרטי מנוי", "פרטי מנוי", "פרטי כרטיס", "פרטים"
     ):
         return {
             "action_type": "subscriber_info",
@@ -12568,8 +12579,8 @@ def infer_customer_kosherplay_action(text: str) -> dict:
         }
 
     if t_clean in (
-        "4", "אפשרות 4", "אופציה 4", "מספר 4", "בחר 4", "סעיף 4",
-        "קוד טכנאי זמני", "קוד טכנאי", "קוד הגדרות", "קוד כניסה", "קוד פריצה"
+        "5", "אפשרות 5", "אופציה 5", "מספר 5", "בחר 5", "סעיף 5",
+        "btn_tech_code", "btn5", "קוד טכנאי זמני", "קוד טכנאי", "קוד הגדרות", "קוד כניסה", "קוד פריצה"
     ):
         code = str(random.randint(100000, 999999))
         return {
@@ -13607,7 +13618,7 @@ def _is_schema_definition_row(row_dict: dict) -> bool:
         return True
     # Also check if its ID is already registered in `schema_columns` and it has no phone digits
     rid = str(row_dict.get("id") or row_dict.get("_id") or "")
-    if rid == "0128a1eecf669779" or (rid and rid in (KOSHERPLAY_SESSION_CACHE.get("schema_columns") or {})):
+    if rid != "0128a1eecf669779" and rid and rid in (KOSHERPLAY_SESSION_CACHE.get("schema_columns") or {}):
         raw_digits = re.sub(r"\D", "", json.dumps(row_dict, ensure_ascii=False))
         if not re.search(r"05\d{8}|5\d{8}", raw_digits):
             return True
@@ -14847,6 +14858,9 @@ def detect_filtering_service_request(text: str) -> dict:
 
     # Action verbs for filtering management
     action_patterns = [
+        r"\b(?:תפריט|אופציות|אפשרויות|מה\s+האפשרויות|תפריט\s+הגנה|ניהול\s+סינון|ניהול\s+הגנה|עזרה\s+בסינון)\b",
+        r"\b(?:כשר\s*פליי|נטספרק)\b",
+        r"^(?:תפריט|אופציות|אפשרויות|אופציה|אפשרות|עזרה|1|2|3|4|5)$",
         r"\bתפתח\s+לי\b",
         r"\bתפתחו\s+לי\b",
         r"\bאפשר\s+לפתוח\s+לי\b",
@@ -14868,13 +14882,13 @@ def detect_filtering_service_request(text: str) -> dict:
         r"\b(?:תשהה|להשהות|תשהו)\s+(?:לי\s+)?(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה|חסימה|החסימה)\b",
         r"\b(?:להחזיר|להפעיל|לבטל|להשהות)\s+(?:הגנה|ההגנה|סינון|הסינון)\b",
         r"\b(?:ביטול|השהיית|הפעלת|החזרת)\s+(?:הגנה|ההגנה|סינון|הסינון)\b",
-        r"(?:חידוש|לחדש)\s+(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה)",
-        r"(?:תבטל|לבטל|תבטלו|בטל)\s+(?:לי\s+)?(?:את\s+)?(?:ההשהיה|ההשהייה|השהיה|השהייה)",
-        r"(?:ביטול)\s+(?:ההשהיה|ההשהייה|השהיה|השהייה)",
-        r"(?:להוציא|תוציא|תוציאו)\s+(?:אותי\s+)?(?:מ|מה)(?:השהיה|השהייה)",
-        r"(?:תחזיר|להחזיר|תוציא|להוציא)\s+(?:מ|מה)(?:השהיה|השהייה)",
-        r"(?:חזרה|לחזור)\s+ל(?:חסימה|הגנה|סינון)",
-        r"(?:תפעיל|להפעיל|תפעילו)\s+מחדש",
+        r"\b(?:חידוש|לחדש)\s+(?:את\s+)?(?:הסינון|ההגנה|סינון|הגנה)\b",
+        r"\b(?:תבטל|לבטל|תבטלו|בטל)\s+(?:לי\s+)?(?:את\s+)?(?:ההשהיה|ההשהייה|השהיה|השהייה)\b",
+        r"\b(?:ביטול)\s+(?:ההשהיה|ההשהייה|השהיה|השהייה)\b",
+        r"\b(?:להוציא|תוציא|תוציאו)\s+(?:אותי\s+)?(?:מ|מה)(?:השהיה|השהייה)\b",
+        r"\b(?:תחזיר|להחזיר|תוציא|להוציא)\s+(?:מ|מה)(?:השהיה|השהייה)\b",
+        r"\b(?:חזרה|לחזור)\s+ל(?:חסימה|הגנה|סינון)\b",
+        r"\b(?:תפעיל|להפעיל|תפעילו)\s+מחדש\b",
         r"\bפתיחת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|בנק|יוטיוב|חנות)",
         r"\bחסימת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|יוטיוב|חנות)",
         r"\bסגירת\s+(?:אפליקצי|אתר|דפדפן|וייז|waze|ווצאפ|מייל|יוטיוב|חנות)",
@@ -16541,7 +16555,7 @@ async def _unified_whatsapp_webhook_inner(req: Request):
             cur_crm_id = (
                 live_crm_search.get("display_id")
                 or live_crm_search.get("crm_client_id")
-                or (sub_rec.get("crm_client_id") if sub_rec.get("crm_client_id") not in ("0128a1eecf669779", "0553164770", "0524043644") else "")
+                or (sub_rec.get("crm_client_id") if sub_rec.get("crm_client_id") not in ("0553164770", "0524043644") else "")
                 or _format_local_il_phone(sender_phone).replace("-", "")
             )
             cur_device = (
@@ -16769,7 +16783,36 @@ async def _unified_whatsapp_webhook_inner(req: Request):
                     f"האם הצלחתי לעזור לכם ולתת לכם מענה? 😃"
                 )
                 admin_status_note = f"⚙️ *סטטוס במערכת:* ממתין לשמירה סופית בשרת כשר פליי ({crm_st_exec})"
-        elif act_type == "unknown_request":
+        elif act_type in ("show_options_menu", "unknown_request"):
+            menu_title = f"🛡️ *תפריט ניהול הגנה וסינון — כשר פליי ({cust_nm}):*\n"
+            menu_body = (
+                f"{menu_title}\n"
+                f"1️⃣ *החזרת הגנה / ביטול השהיה* (הגנה פעילה מלאה 🛡️)\n"
+                f"2️⃣ *כיבוי חסימה זמני (השהיה ל-30 דקות ⏸️)*\n"
+                f"3️⃣ *שינוי דרגת סינון* (הורדת רמה / פתיחת אפליקציות ⚙️)\n"
+                f"4️⃣ *בירור פרטי מנוי וכרטיס* (דגם מכשיר, דרגה, מספר מזהה 📋)\n"
+                f"5️⃣ *קוד טכנאי זמני* (לכניסה להגדרות המכשיר 🔑)\n\n"
+                f"💡 *לבחירה:* לחצו על הכפתור במסך, או השיבו עם המספר (1-5) או שם הפעולה הרצויה! 😃"
+            )
+            interactive_buttons = [
+                {"buttonId": "1", "buttonText": "החזרת הגנה 🛡️"},
+                {"buttonId": "2", "buttonText": "השהיה ל-30 דק' ⏸️"},
+                {"buttonId": "3", "buttonText": "שינוי דרגת סינון ⚙️"},
+            ]
+            conn_unk = sqlite3.connect(DB_PATH)
+            conn_unk.execute(
+                "UPDATE customer_requests SET status='handled', system_name=?, request_text=?, action_taken=? WHERE id=?",
+                (sys_nm, req_text_val, "נשלח תפריט אפשרויות מובנה לבחירת הלקוח", req_id_val),
+            )
+            conn_inq.commit() if 'conn_inq' in locals() else None
+            conn_unk.commit()
+            conn_unk.close()
+
+            send_whatsapp_buttons(sender_phone, menu_body, interactive_buttons, raw_chat_id=raw_chat_id)
+            save_chat_message(sender_phone, "customer", message_text)
+            save_chat_message(sender_phone, "agent", menu_body)
+            return {"ok": True, "reply": menu_body, "type": "kosherplay_options_menu_sent"}
+        elif False and act_type == "unknown_request":
             cust_reply = (
                 f"שלום {cust_nm}! 🛡️\n"
                 f"קיבלתי את הודעתך: *\"{req_text_val}\"*\n\n"
